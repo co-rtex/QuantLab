@@ -1,0 +1,180 @@
+import math
+
+import numpy as np
+import pandas as pd
+import pytest
+
+from quantlab.analytics.performance import (
+    compute_performance,
+    drawdown_episodes,
+    trade_statistics,
+)
+from quantlab.analytics.risk import (
+    StressScenario,
+    apply_stress,
+    concentration,
+    gaussian_var,
+    historical_es,
+    historical_var,
+    monte_carlo,
+    worst_periods,
+)
+from quantlab.optimize.allocators import (
+    Bounds,
+    InfeasibleConstraints,
+    OptimizationError,
+    mean_variance,
+    min_variance,
+    risk_contributions,
+    risk_parity,
+)
+
+IDX = pd.bdate_range("2024-01-01", periods=5)
+
+
+def test_golden_returns_and_drawdown():
+    e = pd.Series([100.0, 110.0, 99.0, 108.9, 121.0], index=IDX)
+    m = compute_performance(e)
+    assert m["total_return"] == pytest.approx(0.21)
+    assert m["max_drawdown"] == pytest.approx(99 / 110 - 1)
+    assert m["cagr"] == pytest.approx(1.21 ** (252 / 4) - 1)
+    r = np.array([0.1, -0.1, 0.1, 121 / 108.9 - 1])
+    assert m["volatility"] == pytest.approx(r.std(ddof=1) * math.sqrt(252))
+    assert m["sharpe"] == pytest.approx(r.mean() / r.std(ddof=1) * math.sqrt(252))
+    dd = np.minimum(r, 0)
+    assert m["sortino"] == pytest.approx(r.mean() / np.sqrt(np.mean(dd**2)) * math.sqrt(252))
+    eps = drawdown_episodes(e)
+    assert eps.iloc[0]["peak"] == IDX[1] and eps.iloc[0]["trough"] == IDX[2]
+    assert eps.iloc[0]["recovery"] == IDX[4]
+    assert eps.iloc[0]["recovery_sessions"] == 2
+
+
+def test_risk_free_rate_convention():
+    e = pd.Series(
+        100 * 1.001 ** np.arange(300) * (1 + 0.01 * np.sin(np.arange(300))),
+        index=pd.bdate_range("2020-01-01", periods=300),
+    )
+    m0 = compute_performance(e)
+    m5 = compute_performance(e, risk_free_rate=0.05)
+    assert m5["sharpe"] < m0["sharpe"]
+    r = e.pct_change().dropna()
+    rf = 1.05 ** (1 / 252) - 1
+    assert m5["sharpe"] == pytest.approx((r - rf).mean() / (r - rf).std(ddof=1) * math.sqrt(252))
+
+
+def test_undefined_statistics_are_none_with_reason():
+    flat = pd.Series([100.0] * 10, index=pd.bdate_range("2024-01-01", periods=10))
+    m = compute_performance(flat)
+    assert m["sharpe"] is None and "zero volatility" in m.undefined["sharpe"]
+    assert m["calmar"] is None
+    assert m["sortino"] is None
+    single = compute_performance(flat.iloc[:1])
+    assert single["sharpe"] is None
+    unrec = compute_performance(pd.Series([100, 90, 80.0], index=IDX[:3]))
+    assert unrec["max_drawdown_recovery_sessions"] is None
+
+
+def test_benchmark_relative_golden():
+    rng = np.random.default_rng(0)
+    rb = rng.normal(0.0005, 0.01, 500)
+    rp = 0.0002 + 1.5 * rb + rng.normal(0, 0.002, 500)
+    idx = pd.bdate_range("2020-01-01", periods=501)
+    b = pd.Series(100 * np.r_[1, np.cumprod(1 + rb)], index=idx)
+    p = pd.Series(100 * np.r_[1, np.cumprod(1 + rp)], index=idx)
+    m = compute_performance(p, b)
+    beta_ref = np.cov(rp, rb, ddof=1)[0, 1] / np.var(rb, ddof=1)
+    assert m["beta"] == pytest.approx(beta_ref)
+    assert m["alpha"] == pytest.approx(252 * (rp.mean() - beta_ref * rb.mean()))
+    te = (rp - rb).std(ddof=1) * math.sqrt(252)
+    assert m["tracking_error"] == pytest.approx(te)
+    assert m["information_ratio"] == pytest.approx((rp - rb).mean() * 252 / te)
+    same = compute_performance(b, b)
+    assert same["beta"] == pytest.approx(1.0) and same["information_ratio"] is None
+
+
+def test_trade_statistics_fifo():
+    t = pd.DataFrame(
+        [
+            {"date": IDX[0], "symbol": "A", "quantity": 10, "price": 10.0, "commission": 0.0},
+            {"date": IDX[1], "symbol": "A", "quantity": 10, "price": 20.0, "commission": 0.0},
+            {"date": IDX[2], "symbol": "A", "quantity": -15, "price": 15.0, "commission": 0.0},
+            {"date": IDX[3], "symbol": "A", "quantity": -5, "price": 10.0, "commission": 0.0},
+        ]
+    )
+    m = trade_statistics(t)
+    # round trip 1: 10@10 + 5@20 sold at 15 -> +50 -25 = +25 ; round trip 2: 5@20 sold at 10
+    assert m["round_trips"] == 2
+    assert m["win_rate"] == 0.5
+    assert m["avg_win"] == pytest.approx(25.0)
+    assert m["avg_loss"] == pytest.approx(-50.0)
+    assert m["profit_factor"] == pytest.approx(0.5)
+
+
+def test_var_es_golden_and_ordering():
+    r = np.linspace(-0.05, 0.05, 101)  # uniform grid incl. -0.05..0.05
+    assert historical_var(r, 0.95) == pytest.approx(0.045)
+    assert historical_es(r, 0.95) == pytest.approx(np.mean(np.linspace(-0.05, -0.045, 6)) * -1)
+    rng = np.random.default_rng(1)
+    x = rng.normal(0, 0.01, 100_000)
+    assert gaussian_var(x, 0.99) == pytest.approx(0.02326, rel=0.02)
+    assert historical_var(x, 0.99) == pytest.approx(0.02326, rel=0.03)
+    assert historical_es(x, 0.99) >= historical_var(x, 0.99)
+
+
+def test_risk_contributions_sum_to_vol_and_parity_equalizes():
+    cov = np.array([[0.04, 0.006, 0.0], [0.006, 0.09, 0.01], [0.0, 0.01, 0.01]])
+    w = np.array([0.5, 0.3, 0.2])
+    rc = risk_contributions(w, cov)
+    assert rc["component"].sum() == pytest.approx(math.sqrt(w @ cov @ w))
+    assert rc["pct"].sum() == pytest.approx(1.0)
+    rp = risk_parity(cov)
+    pct = risk_contributions(rp, cov)["pct"].to_numpy()
+    np.testing.assert_allclose(pct, 1 / 3, atol=1e-5)
+
+
+def test_min_variance_diagonal_closed_form():
+    var = np.array([0.04, 0.01, 0.0025])
+    w = min_variance(np.diag(var))
+    expected = (1 / var) / (1 / var).sum()
+    np.testing.assert_allclose(w, expected, atol=1e-6)
+    capped = min_variance(np.diag(var), Bounds(0, 0.5))
+    assert capped.max() <= 0.5 + 1e-9 and capped.sum() == pytest.approx(1)
+
+
+def test_mean_variance_and_infeasibility():
+    cov = np.diag([0.04, 0.04])
+    w = mean_variance(np.array([0.10, 0.02]), cov, risk_aversion=2.0)
+    assert w[0] > w[1]
+    with pytest.raises(InfeasibleConstraints):
+        min_variance(cov, Bounds(0, 0.4))
+    with pytest.raises(OptimizationError):
+        min_variance(np.array([[1.0, 2.0], [2.0, 1.0]]))  # not PSD
+    with pytest.raises(OptimizationError):
+        mean_variance(np.array([np.nan, 0.1]), cov)
+
+
+def test_stress_concentration_and_monte_carlo():
+    w = pd.Series({"A": 0.6, "B": 0.4})
+    s = StressScenario("crash", {"Technology": -0.3}, market_shock=-0.1)
+    out = apply_stress(
+        w,
+        s,
+        betas=pd.Series({"A": 1.5, "B": 0.5}),
+        sectors=pd.Series({"A": "Technology", "B": "Energy"}),
+    )
+    assert out["portfolio_return"] == pytest.approx(0.6 * -0.3 + 0.4 * 0.5 * -0.1)
+    c = concentration(w)
+    assert c["hhi"] == pytest.approx(0.52) and c["effective_n"] == pytest.approx(1 / 0.52)
+    rng = np.random.default_rng(2)
+    r = rng.normal(0.0004, 0.01, 1000)
+    mc1 = monte_carlo(r, horizon=60, n_paths=500, seed=3)
+    mc2 = monte_carlo(r, horizon=60, n_paths=500, seed=3)
+    assert mc1 == mc2
+    q = mc1["terminal_quantiles"]
+    assert q["0.05"] < q["0.5"] < q["0.95"]
+    e = pd.Series(
+        np.r_[np.linspace(100, 120, 50), np.linspace(120, 90, 30), np.linspace(90, 130, 60)],
+        index=pd.bdate_range("2024-01-01", periods=140),
+    )
+    wp = worst_periods(e, window=10, top=2)
+    assert wp.iloc[0]["return"] < 0
