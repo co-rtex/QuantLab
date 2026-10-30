@@ -206,8 +206,7 @@ def submit_job(
         raise ApiError(
             429,
             "too_many_jobs",
-            "Your account has reached its limit of queued or running jobs; "
-            "wait for some to finish",
+            "Your account has reached its limit of queued or running jobs; wait for some to finish",
         )
     active = (
         db.scalar(
