@@ -3,8 +3,8 @@ from __future__ import annotations
 import uuid
 from dataclasses import asdict
 from datetime import date
-from typing import Annotated
 from pathlib import Path
+from typing import Annotated
 
 from fastapi import APIRouter, File, Form, Header, Query, Request, UploadFile
 from sqlalchemy import func, select
@@ -234,10 +234,10 @@ async def upload_csv(
     user: CurrentUser,
     db: DB,
     request: Request,
-    slug: str = Form(pattern=r"^[a-z0-9][a-z0-9_-]{1,62}$"),
-    name: str = Form(min_length=1, max_length=120),
-    source: str = Form(min_length=3, max_length=300),
-    license: str = Form(min_length=3, max_length=300),
+    slug: Annotated[str, Form(pattern=r"^[a-z0-9][a-z0-9_-]{1,62}$")],
+    name: Annotated[str, Form(min_length=1, max_length=120)],
+    source: Annotated[str, Form(min_length=3, max_length=300)],
+    license: Annotated[str, Form(min_length=3, max_length=300)],
     bars: Annotated[UploadFile, File()],
     actions: Annotated[UploadFile | None, File()] = None,
 ) -> JobOut:
