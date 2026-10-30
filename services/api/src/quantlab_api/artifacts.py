@@ -58,3 +58,7 @@ def read_frame(experiment_id: uuid.UUID | str, name: str) -> pd.DataFrame:
 
 def read_analysis(experiment_id: uuid.UUID | str) -> dict[str, Any]:
     return json.loads((experiment_dir(experiment_id) / "analysis.json").read_text())
+
+
+def ml_dir(run_id: uuid.UUID | str) -> Path:
+    return get_settings().artifacts_dir / "ml" / str(uuid.UUID(str(run_id)))

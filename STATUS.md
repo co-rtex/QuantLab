@@ -7,7 +7,9 @@ Phases 0–6 complete; Phase 8 assistant and report export complete. **Next: ben
 harness, ML pipeline, portfolio workspace UI, optimization/stress UI, case study.**
 
 ## Latest verified milestone
-Grounded research assistant (deterministic engine + optional Claude phrasing with
+ML research pipeline (point-in-time features, purged/embargoed
+chronological CV, baselines vs logistic/RF/GBM, IC and quintile spreads; API, UI, E2E),
+benchmark harness with measured results (docs/BENCHMARKS.md), grounded research assistant (deterministic engine + optional Claude phrasing with
 numeric verification; eval suite in docs/AI_EVAL.md) and HTML/Markdown report export.
 Before that: research validation and the Research Integrity Report: walk-forward with in-sample
 parameter selection, parameter and cost sweeps, stationary-bootstrap CIs, PSR/deflated
@@ -26,9 +28,9 @@ run as a background job and rendered in the experiment page. Playwright 10/10 (w
 * Lint: ruff clean; mypy --strict clean.
 
 ## In progress / immediate next steps
-1. Benchmarks harness (`benchmarks/`) with recorded hardware and measurements.
-2. ML pipeline (purged chronological CV, baselines, artifacts).
-3. Case study write-up (docs/CASE_STUDY.md) using the full workflow.
+1. Address findings from the fresh-context review of the financial core (in progress).
+2. Case study write-up (docs/CASE_STUDY.md) using the full workflow.
+3. Observability: OpenTelemetry tracing, Grafana dashboard, runbook; Terraform (validated).
 4. Portfolio workspace (manual ledger + valuation), optimization/stress UI.
 
 ## Known blockers

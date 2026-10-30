@@ -200,6 +200,12 @@ def _mirror_status(db: Session, job: Job | Any, status: JobStatus) -> None:
             .where(Experiment.id == uuid.UUID(payload["experiment_id"]))
             .values(status=status)
         )
+    if "ml_run_id" in payload:
+        from quantlab_api.models import MLRun
+
+        db.execute(
+            update(MLRun).where(MLRun.id == uuid.UUID(payload["ml_run_id"])).values(status=status)
+        )
     if "research_run_id" in payload:
         db.execute(
             update(ResearchRun)

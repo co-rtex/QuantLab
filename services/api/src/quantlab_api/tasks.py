@@ -277,3 +277,53 @@ def validation_task(ctx: JobContext) -> Finalizer:
         }
 
     return finalize
+
+
+@handler("ml.experiment")
+def ml_task(ctx: JobContext) -> Finalizer:
+    from quantlab.analytics.summary import jsonable
+    from quantlab.ml.pipeline import MLConfig, run_ml_experiment
+    from quantlab_api.models import MLRun
+
+    run_id = uuid.UUID(ctx.payload["ml_run_id"])
+    with SessionLocal() as db:
+        run = db.get(MLRun, run_id)
+        if run is None:
+            raise PermanentJobError("ML run not found")
+        dv_row = db.get(DatasetVersion, run.dataset_version_id)
+        ds = db.get(Dataset, dv_row.dataset_id) if dv_row else None
+        if dv_row is None or ds is None:
+            raise PermanentJobError("dataset version not found")
+        cfg = MLConfig(**run.config)
+    ctx.heartbeat(0.02, "building features", force=True)
+    store = dataset_store()
+    dv = store.open(ds.slug, dv_row.version_hash)
+    result = run_ml_experiment(
+        store.load_bars(dv),
+        store.load_actions(dv),
+        cfg,
+        on_progress=lambda f, m: ctx.heartbeat(0.05 + 0.9 * f, m),
+    )
+    preds = result.pop("predictions")
+    staging = artifacts.stage_dir(run_id, ctx.attempt)
+    preds.to_parquet(staging / "predictions.parquet", index=False)
+    doc = jsonable(result)
+
+    def finalize(db: Session) -> dict[str, Any]:
+        row = db.get(MLRun, run_id)
+        if row is None:
+            raise PermanentJobError("ML run was deleted")
+        artifacts.publish(staging, artifacts.ml_dir(run_id))
+        row.result = doc
+        best = max(
+            (s for s in doc["summary"] if s.get("auc") is not None),
+            key=lambda s: s["auc"],
+            default=None,
+        )
+        return {
+            "message": f"best out-of-sample AUC {best['auc']:.3f} ({best['model']})"
+            if best
+            else "completed"
+        }
+
+    return finalize

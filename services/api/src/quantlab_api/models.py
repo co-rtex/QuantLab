@@ -315,3 +315,26 @@ class AuditEvent(Base):
     request_id: Mapped[str | None] = mapped_column(String(64))
     ip: Mapped[str | None] = mapped_column(String(64))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class MLRun(Base):
+    """A machine-learning experiment on one dataset version (results JSON + artifacts)."""
+
+    __tablename__ = "ml_runs"
+    __table_args__ = (Index("ix_ml_runs_ws_created", "workspace_id", "created_at"),)
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=new_id)
+    workspace_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("workspaces.id", ondelete="CASCADE"), index=True
+    )
+    name: Mapped[str] = mapped_column(String(200))
+    dataset_version_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("dataset_versions.id"))
+    config: Mapped[dict[str, Any]] = mapped_column(JSONType)
+    input_hash: Mapped[str] = mapped_column(String(64))
+    status: Mapped[JobStatus] = mapped_column(
+        Enum(JobStatus, name="job_status", create_type=False), default=JobStatus.queued
+    )
+    result: Mapped[dict[str, Any] | None] = mapped_column(JSONType)
+    job_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("jobs.id"))
+    code_version: Mapped[str] = mapped_column(String(64))
+    created_by: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id"))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)

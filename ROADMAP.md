@@ -18,10 +18,10 @@ Dependency-ordered. ✅ done and verified · 🔶 partial · ⬜ not started.
 | 6 | Research Integrity Report (13 checks; API + UI) | ✅ |
 | 7 | Optimizers (domain) | ✅ |
 | 7 | Optimization / stress / Monte Carlo API + UI | ⬜ |
-| 8 | ML pipeline (purged chronological CV, baselines, artifacts) | ⬜ |
+| 8 | ML pipeline (purged chronological CV, baselines, artifacts; API + UI) | ✅ |
 | 8 | Grounded research assistant + deterministic fallback + eval suite | ✅ (hosted-model eval pending credentials) |
 | 8 | Report export (HTML/Markdown) | ✅ |
 | 9 | OpenTelemetry tracing, Grafana dashboards, runbook, Terraform (validated, not applied) | ⬜ |
-| 9 | Benchmarks harness and BENCHMARKS.md measurements | ⬜ |
+| 9 | Benchmarks harness and BENCHMARKS.md measurements | ✅ (load testing and worker scaling pending) |
 | 10 | Case study: momentum vs passive after costs, out of sample | ⬜ |
 | 10 | Fresh-context architecture and security reviews, accessibility audit | ⬜ |

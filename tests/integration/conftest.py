@@ -26,6 +26,7 @@ TABLES = [
     "audit_events",
     "experiment_results",
     "research_runs",
+    "ml_runs",
     "jobs",
     "experiments",
     "portfolio_transactions",

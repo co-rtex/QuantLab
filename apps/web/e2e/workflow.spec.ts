@@ -58,6 +58,19 @@ test("research workflow: data -> backtest -> results -> reproduction", async ({ 
   expect(report.status()).toBe(200);
   expect(await report.text()).toContain("Research integrity");
 
+  // ML research on the same dataset version (small config keeps the run quick).
+  const ws = await page.request.get("/api/v1/workspaces");
+  const wsId = (await ws.json())[0].id;
+  const versions = await (await page.request.get(`/api/v1/workspaces/${wsId}/dataset-versions`)).json();
+  const ml = await page.request.post(`/api/v1/workspaces/${wsId}/ml-runs`, {
+    data: { name: "E2E ML", dataset_version_id: versions[0].id, config: { folds: 2, min_train_dates: 6, sample_every: 10, models: ["majority", "logistic"] } },
+  });
+  expect(ml.status()).toBe(202);
+  const experimentUrl = page.url();
+  await page.goto("/ml");
+  await expect(page.getByText("Out-of-sample AUC")).toBeVisible({ timeout: 60_000 });
+  await page.goto(experimentUrl);
+
   await page.getByRole("button", { name: "Reproduce" }).click();
   await expect(page.getByText("(reproduction)").first()).toBeVisible();
   await expect(page.getByText("outputs match this run exactly")).toBeVisible({ timeout: 60_000 });

@@ -11,6 +11,7 @@ const NAV = [
   { href: "/data", label: "Market data" },
   { href: "/experiments", label: "Experiments" },
   { href: "/compare", label: "Compare" },
+  { href: "/ml", label: "ML research" },
   { href: "/settings", label: "Workspace" },
 ];
 
