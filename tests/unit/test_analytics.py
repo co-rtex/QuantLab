@@ -241,3 +241,28 @@ def test_sector_factors_and_analysis_include_exposures(market):
     doc = analyze_backtest(res, f)["factor_exposures"]
     market_beta = next(x["beta"] for x in doc["loadings"] if x["factor"] == "market")
     assert 0.5 < market_beta < 1.5  # equal weight of beta~1 synthetic names
+
+
+def test_float_noise_is_not_mistaken_for_dispersion():
+    # Compounding at a constant rate: every return is 0.1% up to ~1e-16 of rounding noise.
+    idx = pd.bdate_range("2024-01-01", periods=300)
+    equity = pd.Series(100 * 1.001 ** np.arange(300), index=idx)
+    noise = np.random.default_rng(0).normal(0, 0.01, 300)
+    bench = pd.Series(100 * np.cumprod(1 + noise), index=idx)
+    m = compute_performance(equity, benchmark=bench)
+    for k in ("sharpe", "skewness", "excess_kurtosis", "correlation"):
+        assert m.values[k] is None, k
+        assert m.undefined[k], k
+    assert "variance" in m.undefined["skewness"]
+
+
+def test_single_return_has_no_sortino():
+    m = compute_performance(pd.Series([100.0, 90.0], index=pd.bdate_range("2024-01-01", periods=2)))
+    assert m.values["sortino"] is None
+    assert m.values["sharpe"] is None
+
+
+def test_cornish_fisher_var_of_a_constant_return_is_its_negated_mean():
+    from quantlab.analytics.risk import cornish_fisher_var
+
+    assert cornish_fisher_var(np.full(30, 0.001)) == pytest.approx(-0.001)

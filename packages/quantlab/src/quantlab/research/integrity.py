@@ -342,6 +342,17 @@ def build_integrity_report(ev: dict[str, Any]) -> dict[str, Any]:
                 "No bootstrap confidence intervals were computed.",
             )
         )
+    elif boot["sharpe"].get("lower") is None:
+        reason = boot["sharpe"].get("undefined") or "undefined"
+        checks.append(
+            Check(
+                "statistical_uncertainty",
+                "Statistical uncertainty",
+                "unassessed",
+                f"The Sharpe ratio is undefined ({reason}), so it has no confidence interval.",
+                {"sharpe": boot["sharpe"]},
+            )
+        )
     else:
         sh = boot["sharpe"]
         status = "verified" if sh["lower"] > 0 else "warning"
