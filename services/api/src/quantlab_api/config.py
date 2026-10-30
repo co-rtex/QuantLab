@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import os
 import secrets
+import time
 from functools import lru_cache
 from pathlib import Path
 from typing import Literal
@@ -10,7 +12,31 @@ from typing import Literal
 from pydantic import Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-_DEV_SECRET = secrets.token_urlsafe(48)
+DEV_SECRET_FILE = ".jwt-dev-secret"  # noqa: S105 - a file name, not a secret
+
+
+def _shared_dev_secret(data_dir: Path) -> SecretStr:
+    """A development signing key shared by every process using ``data_dir``.
+
+    A random per-process key breaks as soon as the API runs more than one worker
+    (``uvicorn --workers 4``): a token signed by one worker is rejected by the others, so
+    roughly three requests in four fail. The first process creates the file atomically
+    (O_EXCL, mode 0600); the others, and later restarts, read it.
+    """
+    path = data_dir / DEV_SECRET_FILE
+    path.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    except FileExistsError:
+        for _ in range(50):  # another process may be between create and write
+            value = path.read_text().strip()
+            if value:
+                return SecretStr(value)
+            time.sleep(0.02)
+        raise RuntimeError(f"{path} is empty; delete it and restart") from None
+    with os.fdopen(fd, "w") as f:
+        f.write(secrets.token_urlsafe(48))
+    return SecretStr(path.read_text().strip())
 
 
 class Settings(BaseSettings):
@@ -20,8 +46,9 @@ class Settings(BaseSettings):
     database_url: str = "postgresql+psycopg://quantlab:quantlab@localhost:5433/quantlab"
     redis_url: str = "redis://localhost:6380/0"
     data_dir: Path = Path("var/data")
-    # In development a random per-process secret is used; production must set one.
-    jwt_secret: SecretStr = SecretStr(_DEV_SECRET)
+    # Production must set one. Elsewhere an unset secret is generated once and shared by all
+    # processes through ``data_dir`` (see _shared_dev_secret).
+    jwt_secret: SecretStr | None = None
     jwt_algorithm: str = "HS256"
     access_token_ttl_minutes: int = Field(60, ge=1, le=24 * 60)
     cookie_secure: bool = False
@@ -33,6 +60,9 @@ class Settings(BaseSettings):
     max_backtest_symbols: int = Field(1500, ge=1)
     max_dataset_assets: int = Field(2000, ge=1)
     rate_limit_login_per_minute: int = Field(10, ge=1)
+    # Peers allowed to state the client address in X-Forwarded-For: IPs, CIDRs or hostnames
+    # (e.g. the compose service "web"). Requests from anyone else use the socket address.
+    trusted_proxies: list[str] = []
     anthropic_api_key: SecretStr | None = None
     llm_model: str = "claude-opus-5-5"
     git_sha: str = "unknown"
@@ -41,7 +71,7 @@ class Settings(BaseSettings):
     max_synthetic_rows: int = Field(5_000_000, ge=1000)
     max_active_jobs_per_workspace: int = Field(50, ge=1)
 
-    @field_validator("metrics_token", "anthropic_api_key", mode="before")
+    @field_validator("metrics_token", "anthropic_api_key", "jwt_secret", mode="before")
     @classmethod
     def _blank_is_unset(cls, v: object) -> object:
         """Compose passes unset variables as empty strings; treat those as not configured."""
@@ -53,7 +83,7 @@ class Settings(BaseSettings):
     @model_validator(mode="after")
     def _production_guards(self) -> Settings:
         if self.environment == "production":
-            if self.jwt_secret.get_secret_value() == _DEV_SECRET:
+            if self.jwt_secret is None:
                 raise ValueError("QUANTLAB_JWT_SECRET must be set in production")
             secret = self.jwt_secret.get_secret_value()
             if len(secret) < 32:
@@ -67,6 +97,13 @@ class Settings(BaseSettings):
             if not self.cookie_secure:
                 raise ValueError("QUANTLAB_COOKIE_SECURE must be true in production")
         return self
+
+    @property
+    def signing_key(self) -> str:
+        """The JWT signing key (a shared development key when none is configured)."""
+        if self.jwt_secret is None:
+            self.jwt_secret = _shared_dev_secret(self.data_dir)
+        return self.jwt_secret.get_secret_value()
 
     @property
     def datasets_dir(self) -> Path:

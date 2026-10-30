@@ -66,9 +66,7 @@ def test_unauthenticated_and_tampered_tokens(client):
         == 401
     )
     expired_claims = dict(claims, exp=datetime.now(UTC) - timedelta(seconds=5))
-    expired = jwt.encode(
-        expired_claims, get_settings().jwt_secret.get_secret_value(), algorithm="HS256"
-    )
+    expired = jwt.encode(expired_claims, get_settings().signing_key, algorithm="HS256")
     r = client.get("/api/v1/auth/me", headers={"Authorization": f"Bearer {expired}"})
     assert r.status_code == 401
     assert r.json()["error"]["code"] == "token_expired"
@@ -155,6 +153,83 @@ def test_production_settings_guard():
             cookie_secure=False,
             metrics_token="m" * 20,
         )
+
+
+def _request(peer: str, xff: str | None = None):  # type: ignore[no-untyped-def]
+    from starlette.requests import Request
+
+    headers = [(b"x-forwarded-for", xff.encode())] if xff else []
+    return Request({"type": "http", "client": (peer, 1234), "headers": headers})
+
+
+def test_client_address_is_only_taken_from_trusted_proxies(monkeypatch):
+    from quantlab_api import security
+
+    monkeypatch.setattr(get_settings(), "trusted_proxies", [])
+    assert security.client_ip(_request("10.0.0.5", "1.2.3.4")) == "10.0.0.5"
+    monkeypatch.setattr(get_settings(), "trusted_proxies", ["10.0.0.0/24", "localhost"])
+    # The client prepended a fake hop; only the hop the proxy observed is used.
+    assert security.client_ip(_request("10.0.0.5", "6.6.6.6, 1.2.3.4")) == "1.2.3.4"
+    assert security.client_ip(_request("127.0.0.1", "1.2.3.4, 10.0.0.9")) == "1.2.3.4"
+    assert security.client_ip(_request("9.9.9.9", "1.2.3.4")) == "9.9.9.9"  # untrusted peer
+    assert security.client_ip(_request("10.0.0.5", "not-an-ip")) == "10.0.0.5"
+    assert security.client_ip(_request("10.0.0.5")) == "10.0.0.5"
+
+
+def test_failed_logins_behind_the_proxy_do_not_lock_out_other_users(monkeypatch):
+    """Before the fix the API saw every browser as the web container, so one client's ten
+    failed logins returned 429 to every other user's correct password."""
+    from fastapi.testclient import TestClient
+
+    from quantlab_api.main import app
+
+    monkeypatch.setattr(get_settings(), "trusted_proxies", ["10.0.0.5"])
+    monkeypatch.setattr(get_settings(), "rate_limit_login_per_minute", 3)
+    with TestClient(app, client=("10.0.0.5", 4000)) as web:
+        register(web, "victim@example.com", "Correct-horse-9")
+        attacker = {"X-Forwarded-For": "198.51.100.66"}
+        codes = [
+            web.post(
+                "/api/v1/auth/login",
+                json={"email": f"x{i}@example.com", "password": "wrong-pass-1"},
+                headers=attacker,
+            ).status_code
+            for i in range(5)
+        ]
+        assert codes[-1] == 429
+        r = web.post(
+            "/api/v1/auth/login",
+            json={"email": "victim@example.com", "password": "Correct-horse-9"},
+            headers={"X-Forwarded-For": "203.0.113.10"},
+        )
+        assert r.status_code == 200, r.text
+    from sqlalchemy import select
+
+    from quantlab_api.db import SessionLocal
+    from quantlab_api.models import AuditEvent
+
+    with SessionLocal() as db:
+        ips = set(db.scalars(select(AuditEvent.ip).where(AuditEvent.action == "user.login")))
+    assert ips == {"203.0.113.10"}
+
+
+def _dev_key(data_dir: str) -> str:
+    from quantlab_api.config import Settings
+
+    return Settings(environment="development", data_dir=data_dir).signing_key
+
+
+def test_unset_dev_secret_is_shared_by_every_worker_process(tmp_path):
+    """Without QUANTLAB_JWT_SECRET, `uvicorn --workers 4` used to give each worker its own
+    random key, so ~3 in 4 requests failed with 401. Processes started together must agree
+    on one key, and a restart must keep it (nobody gets signed out)."""
+    import multiprocessing as mp
+
+    with mp.get_context("spawn").Pool(8) as pool:
+        keys = pool.map(_dev_key, [str(tmp_path)] * 16)
+    assert len(set(keys)) == 1 and len(keys[0]) >= 32
+    assert _dev_key(str(tmp_path)) == keys[0]
+    assert (tmp_path / ".jwt-dev-secret").stat().st_mode & 0o077 == 0
 
 
 def test_account_throttle_counts_failures_only_and_spares_real_user(client, monkeypatch):

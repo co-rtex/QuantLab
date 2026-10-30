@@ -22,12 +22,12 @@ async function forward(req: NextRequest, ctx: { params: Promise<{ path: string[]
     const v = req.headers.get(h);
     if (v) headers.set(h, v);
   }
-  // A client can put anything in X-Forwarded-For. Forward it only when this server sits
-  // behind a trusted edge that overwrites the header (TRUST_FORWARDED_FOR=true).
-  if (process.env.TRUST_FORWARDED_FOR === "true") {
-    const forwardedFor = req.headers.get("x-forwarded-for");
-    if (forwardedFor) headers.set("x-forwarded-for", forwardedFor);
-  }
+  // Tell the API who the client is, or every browser shares this server's address and ten
+  // failed logins anywhere lock everyone out (ADR-0008). Next fills X-Forwarded-For with
+  // the socket address when the request has none; an edge in front appends its peer. Only
+  // the rightmost hop is forwarded: entries to its left were written by the client.
+  const hops = (req.headers.get("x-forwarded-for") ?? "").split(",").map((h) => h.trim()).filter(Boolean);
+  if (hops.length) headers.set("x-forwarded-for", hops[hops.length - 1]);
   const hasBody = !["GET", "HEAD"].includes(req.method);
   let res: Response;
   try {

@@ -45,8 +45,10 @@ submit a new experiment; results of failed jobs are never stored.
 
 ### Elevated 429s on login
 Throttling is per client address and per account (failed attempts only), shared through
-Redis. Behind a load balancer, set `TRUST_FORWARDED_FOR=true` on the web tier only if the
-edge overwrites `X-Forwarded-For`; otherwise all users share the web tier's address
+Redis. The client address comes from the web tier's `X-Forwarded-For`, accepted only from
+`QUANTLAB_TRUSTED_PROXIES` (compose: `["web"]`). If `audit_events.ip` shows one address
+for all users, the API is not trusting the proxy: check that setting. Internet-facing
+deployments should put an edge that overwrites `X-Forwarded-For` in front of the web tier
 (ADR-0008). During a Redis outage limits are per process (ADR-0007).
 
 ### Disk usage

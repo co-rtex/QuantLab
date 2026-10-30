@@ -12,6 +12,8 @@ x-app-env: &app-env
   QUANTLAB_GIT_SHA: ${QUANTLAB_GIT_SHA:-unknown}
   QUANTLAB_OTEL_ENDPOINT: ${QUANTLAB_OTEL_ENDPOINT:-}
   QUANTLAB_METRICS_TOKEN: ${QUANTLAB_METRICS_TOKEN:-}
+  # Only the web tier may state the client address (X-Forwarded-For); see ADR-0008.
+  QUANTLAB_TRUSTED_PROXIES: ${QUANTLAB_TRUSTED_PROXIES:-["web"]}
 
 services:
   postgres:

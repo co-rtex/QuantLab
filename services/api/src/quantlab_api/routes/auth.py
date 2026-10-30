@@ -12,6 +12,7 @@ from quantlab_api.security import (
     DB,
     CurrentUser,
     audit,
+    client_ip,
     create_access_token,
     hash_password,
     login_limiter,
@@ -38,7 +39,7 @@ def _issue(response: Response, user: User) -> TokenOut:
 
 @router.post("/register", response_model=TokenOut, status_code=201)
 def register(body: RegisterIn, request: Request, response: Response, db: DB) -> TokenOut:
-    ip = request.client.host if request.client else "unknown"
+    ip = client_ip(request)
     login_limiter.check(f"register:{ip}", get_settings().rate_limit_login_per_minute)
     email = body.email.lower()
     if db.scalar(select(User).where(User.email == email)):
@@ -73,7 +74,7 @@ def register(body: RegisterIn, request: Request, response: Response, db: DB) -> 
 
 @router.post("/login", response_model=TokenOut)
 def login(body: LoginIn, request: Request, response: Response, db: DB) -> TokenOut:
-    ip = request.client.host if request.client else "unknown"
+    ip = client_ip(request)
     limit = get_settings().rate_limit_login_per_minute
     # Every attempt counts against the client address. Only *failed* attempts count against
     # the account, with a higher threshold, so a third party cannot lock out a real user by
