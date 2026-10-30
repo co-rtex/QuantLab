@@ -61,7 +61,8 @@ always trade a bypass (evicting a live counter) against a lockout (shared overfl
 **Decision.** Primary control is a Redis fixed-window counter reserved atomically with
 `INCR` before password verification, keyed per client address (all attempts) and per
 account (failed attempts only, refunded on success, 3x threshold). In degraded mode each
-process uses a fixed table of 4096 hashed counters: constant memory, O(1), never evicted;
+process uses a fixed table of 4096 counters indexed by a keyed hash (random per-process
+secret, so collisions cannot be precomputed): constant memory, O(1), never evicted;
 refunds are ignored because a shard may be shared.
 **Consequences.** During a Redis outage throttling is per-replica and may over-throttle on
 hash collisions, but cannot be reset by flooding. Production deployments should run Redis

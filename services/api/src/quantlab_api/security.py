@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import os
 import time
 import uuid
 from datetime import UTC, datetime, timedelta
@@ -146,8 +147,8 @@ class RateLimiter:
     ``reserve`` increments and compares in one atomic Redis ``INCR``, so concurrent requests
     cannot all pass a check-then-record gap. ``refund`` gives back one attempt.
 
-    Degraded mode (Redis unavailable): counts go to a fixed table of ``SHARDS`` hashed
-    counters per process. Memory is constant, lookups are O(1), and nothing is ever
+    Degraded mode (Redis unavailable): counts go to a fixed table of ``SHARDS`` counters per
+    process, indexed by a keyed hash with a random per-process secret. Memory is constant, lookups are O(1), and nothing is ever
     evicted, so a key flood cannot reset anyone's counter. Hash collisions can only make
     throttling stricter, never looser. Refunds are ignored in degraded mode because a shard
     may be shared by several principals. See DECISIONS.md (ADR-0007).
@@ -158,13 +159,16 @@ class RateLimiter:
     def __init__(self) -> None:
         self._counts = [0] * self.SHARDS
         self._windows = [0] * self.SHARDS
+        # Keyed hash with a per-process secret: shard collisions cannot be precomputed.
+        self._salt = os.urandom(16)
 
     @staticmethod
     def _bucket(key: str, window: int) -> str:
         return f"ql:rl:{key}:{int(time.time() // window)}"
 
     def _shard(self, key: str) -> int:
-        return int.from_bytes(hashlib.blake2b(key.encode(), digest_size=8).digest()) % self.SHARDS
+        digest = hashlib.blake2b(key.encode(), key=self._salt, digest_size=8).digest()
+        return int.from_bytes(digest) % self.SHARDS
 
     def _local_reserve(self, key: str, limit: int, window: int) -> bool:
         i, w = self._shard(key), int(time.time() // window)
