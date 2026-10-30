@@ -202,6 +202,34 @@ def test_user_job_quota_spans_workspaces_and_replays_do_not_consume_it(client, m
     )
 
 
+
+def test_lowering_workspace_cap_also_bounds_account_submissions(client, monkeypatch):
+    """Custom workspace limits must not reopen the original cross-workspace bypass."""
+    from quantlab_api.config import get_settings
+
+    h = register(client)
+    ws1 = workspace_id(client, h)
+    created = client.post("/api/v1/workspaces", headers=h, json={"name": "Second"})
+    assert created.status_code == 201
+    ws2 = created.json()["id"]
+    monkeypatch.setattr(get_settings(), "max_active_jobs_per_workspace", 1)
+    monkeypatch.setattr(get_settings(), "max_active_jobs_per_user", 50)
+
+    a = client.post(
+        f"/api/v1/workspaces/{ws1}/datasets/synthetic",
+        headers=h,
+        json={**SYNTH, "slug": "small-cap-a"},
+    )
+    b = client.post(
+        f"/api/v1/workspaces/{ws2}/datasets/synthetic",
+        headers=h,
+        json={**SYNTH, "slug": "small-cap-b"},
+    )
+    assert a.status_code == 202, a.text
+    assert b.status_code == 429, b.text
+
+
+
 def test_concurrent_user_quota_is_atomic_across_workspaces(client, monkeypatch):
     """Two parallel requests to different workspaces must share one account budget."""
     from quantlab_api.config import get_settings
