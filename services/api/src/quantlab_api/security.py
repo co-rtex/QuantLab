@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import time
 import uuid
-from collections import defaultdict, deque
+from collections import OrderedDict, deque
 from datetime import UTC, datetime, timedelta
 from typing import Annotated, Any
 
@@ -141,63 +141,74 @@ def audit(
 
 
 class RateLimiter:
-    """Fixed-window limiter shared across API replicas through Redis.
+    """Fixed-window counters shared across API replicas through Redis.
 
-    Falls back to an in-process window if Redis is unavailable so credential endpoints
-    stay protected (per replica) during a cache outage.
+    ``reserve`` increments and compares in one atomic Redis ``INCR``, so concurrent requests
+    cannot all pass a check-then-record gap. If Redis is unavailable an in-process window
+    (bounded in size, expired entries trimmed) keeps credential endpoints protected.
     """
 
-    def __init__(self) -> None:
-        self.local: dict[str, deque[float]] = defaultdict(deque)
+    MAX_LOCAL_KEYS = 10_000
 
-    def _local_check(self, key: str, limit: int, window: float) -> bool:
+    def __init__(self) -> None:
+        self.local: OrderedDict[str, deque[float]] = OrderedDict()
+
+    @staticmethod
+    def _bucket(key: str, window: int) -> str:
+        return f"ql:rl:{key}:{int(time.time() // window)}"
+
+    def _local_queue(self, key: str, window: float) -> deque[float]:
         now = time.monotonic()
-        q = self.local[key]
+        q = self.local.get(key)
+        if q is None:
+            q = deque()
+            self.local[key] = q
+            while len(self.local) > self.MAX_LOCAL_KEYS:
+                self.local.popitem(last=False)
+        else:
+            self.local.move_to_end(key)
         while q and now - q[0] > window:
             q.popleft()
-        if len(q) >= limit:
-            return False
-        q.append(now)
-        return True
+        return q
 
-    def check(self, key: str, limit: int, window: int = 60) -> None:
+    def reserve(self, key: str, limit: int, window: int = 60) -> bool:
+        """Atomically count one attempt; False if it exceeds ``limit`` in this window."""
         from quantlab_api.jobs import redis_conn
 
-        bucket = f"ql:rl:{key}:{int(time.time() // window)}"
+        bucket = self._bucket(key, window)
         try:
             r = redis_conn()
             count = int(r.incr(bucket))
             if count == 1:
                 r.expire(bucket, window + 1)
-            allowed = count <= limit
+            return count <= limit
         except Exception:
-            allowed = self._local_check(key, limit, window)
-        if not allowed:
-            raise ApiError(429, "rate_limited", "Too many attempts; try again later")
+            q = self._local_queue(key, window)
+            q.append(time.monotonic())
+            return len(q) <= limit
 
-    def exceeded(self, key: str, limit: int, window: int = 60) -> bool:
-        """Read-only check: has ``key`` already reached ``limit`` in this window?"""
+    def refund(self, key: str, window: int = 60) -> None:
+        """Give back one reserved attempt (e.g. the login succeeded)."""
         from quantlab_api.jobs import redis_conn
 
-        bucket = f"ql:rl:{key}:{int(time.time() // window)}"
         try:
-            return int(redis_conn().get(bucket) or 0) >= limit
+            redis_conn().decr(self._bucket(key, window))
         except Exception:
             q = self.local.get(key)
-            now = time.monotonic()
-            return q is not None and sum(1 for t in q if now - t <= window) >= limit
+            if q:
+                q.pop()
 
-    def record(self, key: str, window: int = 60) -> None:
-        """Count one event against ``key`` without enforcing a limit."""
+    def count(self, key: str, window: int = 60) -> int:
         from quantlab_api.jobs import redis_conn
 
-        bucket = f"ql:rl:{key}:{int(time.time() // window)}"
         try:
-            r = redis_conn()
-            if int(r.incr(bucket)) == 1:
-                r.expire(bucket, window + 1)
+            return int(redis_conn().get(self._bucket(key, window)) or 0)
         except Exception:
-            self.local[key].append(time.monotonic())
+            return len(self._local_queue(key, window))
+
+    def check(self, key: str, limit: int, window: int = 60) -> None:
+        if not self.reserve(key, limit, window):
+            raise ApiError(429, "rate_limited", "Too many attempts; try again later")
 
     def reset(self) -> None:
         self.local.clear()

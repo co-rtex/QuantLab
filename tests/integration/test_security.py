@@ -172,7 +172,7 @@ def test_account_throttle_counts_failures_only_and_spares_real_user(client, monk
     # Six failures from distinct addresses reach the account threshold (3 x limit).
     for i in range(6):
         login_limiter.check(f"login:ip:attacker-{i}", 1000)
-        login_limiter.record("login:fail:victim@example.com")
+        assert login_limiter.reserve("login:fail:victim@example.com", 1000)
     r = client.post(
         "/api/v1/auth/login", json={"email": "victim@example.com", "password": "Correct-horse-9"}
     )
@@ -193,7 +193,7 @@ def test_successful_logins_do_not_lock_account(client, monkeypatch):
         assert r.status_code == 200
     from quantlab_api.security import login_limiter
 
-    assert not login_limiter.exceeded("login:fail:user@example.com", 1)
+    assert login_limiter.count("login:fail:user@example.com") == 0
 
 
 def test_metrics_token_protects_endpoint(client, monkeypatch):
@@ -226,3 +226,20 @@ def test_synthetic_dataset_size_is_bounded(client):
     )
     assert r.status_code == 422
     assert r.json()["error"]["code"] == "dataset_too_large"
+
+
+def test_fallback_limiter_is_bounded_and_atomic_reserve():
+    from quantlab_api.jobs import set_redis
+    from quantlab_api.security import RateLimiter
+
+    class Down:
+        def __getattr__(self, name):
+            raise ConnectionError("down")
+
+    set_redis(Down())  # type: ignore[arg-type]
+    lim = RateLimiter()
+    lim.MAX_LOCAL_KEYS = 50
+    for i in range(500):
+        lim.reserve(f"k{i}", 5)
+    assert len(lim.local) == 50
+    assert [lim.reserve("hot", 2) for _ in range(3)] == [True, True, False]

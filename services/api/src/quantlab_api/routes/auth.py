@@ -80,7 +80,8 @@ def login(body: LoginIn, request: Request, response: Response, db: DB) -> TokenO
     # spending the account's budget, while distributed guessing is still throttled.
     login_limiter.check(f"login:ip:{ip}", limit)
     acct_key = f"login:fail:{body.email.lower()}"
-    if login_limiter.exceeded(acct_key, limit * 3):
+    # Reserve atomically before verifying; refunded below if the login succeeds.
+    if not login_limiter.reserve(acct_key, limit * 3):
         raise ApiError(429, "rate_limited", "Too many failed attempts; try again later")
     user = db.scalar(select(User).where(User.email == body.email.lower()))
     if (
@@ -88,7 +89,6 @@ def login(body: LoginIn, request: Request, response: Response, db: DB) -> TokenO
         or not user
         or not user.is_active
     ):
-        login_limiter.record(acct_key)
         audit(
             db,
             request,
@@ -99,6 +99,7 @@ def login(body: LoginIn, request: Request, response: Response, db: DB) -> TokenO
         )
         db.commit()
         raise ApiError(401, "invalid_credentials", "Invalid email or password")
+    login_limiter.refund(acct_key)
     audit(db, request, "user.login", user=user, target_type="user", target_id=user.id)
     db.commit()
     return _issue(response, user)
