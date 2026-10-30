@@ -18,6 +18,10 @@ class ORM(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
 
+# Deepest page a list endpoint serves; larger offsets overflowed bigint and returned 500.
+MAX_OFFSET = 1_000_000
+
+
 class Page[T](BaseModel):
     items: list[T]
     total: int

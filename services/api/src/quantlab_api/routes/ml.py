@@ -17,7 +17,7 @@ from quantlab_api.errors import ApiError
 from quantlab_api.jobs import enqueue, submit_job
 from quantlab_api.models import Job, MLRun, Role
 from quantlab_api.routes.datasets import load_version
-from quantlab_api.schemas import JobOut
+from quantlab_api.schemas import MAX_OFFSET, JobOut
 from quantlab_api.security import DB, CurrentUser, audit, require_workspace
 
 router = APIRouter(tags=["ml"])
@@ -163,7 +163,7 @@ def ml_predictions(
     db: DB,
     model: str = Query("logistic", max_length=32),
     limit: int = Query(200, ge=1, le=5000),
-    offset: int = Query(0, ge=0),
+    offset: int = Query(0, ge=0, le=MAX_OFFSET),
 ) -> dict[str, Any]:
     run = _load(db, user, run_id)
     path = artifacts.ml_dir(run.id) / "predictions.parquet"

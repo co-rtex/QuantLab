@@ -15,6 +15,7 @@ from quantlab_api.jobs import redis_conn, submit_job
 from quantlab_api.marketdata import bars_payload
 from quantlab_api.models import Dataset, DatasetVersion, Instrument, Role, User, WorkspaceMember
 from quantlab_api.schemas import (
+    MAX_OFFSET,
     BarsOut,
     BoundedDate,
     DatasetOut,
@@ -164,7 +165,7 @@ def instruments(
     q: str | None = Query(None, max_length=32),
     sector: str | None = Query(None, max_length=80),
     limit: int = Query(100, ge=1, le=2000),
-    offset: int = Query(0, ge=0),
+    offset: int = Query(0, ge=0, le=MAX_OFFSET),
 ) -> Page[InstrumentOut]:
     dv, _ = load_version(db, user, version_id)
     stmt = select(Instrument).where(Instrument.dataset_version_id == dv.id)

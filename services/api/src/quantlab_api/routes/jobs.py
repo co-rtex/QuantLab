@@ -8,7 +8,7 @@ from sqlalchemy import func, select
 from quantlab_api.errors import ApiError
 from quantlab_api.jobs import request_cancel
 from quantlab_api.models import Job, JobStatus, Role
-from quantlab_api.schemas import JobOut, Page
+from quantlab_api.schemas import MAX_OFFSET, JobOut, Page
 from quantlab_api.security import DB, CurrentUser, audit, require_workspace
 
 router = APIRouter(tags=["jobs"])
@@ -50,7 +50,7 @@ def list_jobs(
     status: JobStatus | None = None,
     kind: str | None = Query(None, max_length=32),
     limit: int = Query(50, ge=1, le=200),
-    offset: int = Query(0, ge=0),
+    offset: int = Query(0, ge=0, le=MAX_OFFSET),
 ) -> Page[JobOut]:
     require_workspace(db, user, workspace_id)
     q = select(Job).where(Job.workspace_id == workspace_id)
