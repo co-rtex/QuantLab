@@ -147,11 +147,12 @@ class RateLimiter:
     ``reserve`` increments and compares in one atomic Redis ``INCR``, so concurrent requests
     cannot all pass a check-then-record gap. ``refund`` gives back one attempt.
 
-    Degraded mode (Redis unavailable): counts go to a fixed table of ``SHARDS`` counters per
-    process, indexed by a keyed hash with a random per-process secret. Memory is constant, lookups are O(1), and nothing is ever
-    evicted, so a key flood cannot reset anyone's counter. Hash collisions can only make
-    throttling stricter, never looser. Refunds are ignored in degraded mode because a shard
-    may be shared by several principals. See DECISIONS.md (ADR-0007).
+    Degraded mode (Redis unavailable): counts go to a fixed table of ``SHARDS`` counters
+    per process, indexed by a keyed hash with a random per-process secret. Memory is
+    constant, lookups are O(1) and nothing is ever evicted, so a key flood cannot reset
+    anyone's counter. Hash collisions can only make throttling stricter, never looser.
+    Refunds are ignored in degraded mode because a shard may be shared by several
+    principals. See DECISIONS.md (ADR-0007).
     """
 
     SHARDS = 4096
