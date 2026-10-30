@@ -10,12 +10,14 @@ test("proxy refuses paths outside the versioned API", async ({ request }) => {
   }
 });
 
-test("post-login redirect stays on this origin", async ({ page }) => {
-  const email = `redir-${Date.now()}@example.com`;
-  await page.goto(`/register?next=${encodeURIComponent("/\\evil.example.com")}`);
+for (const next of ["/\\evil.example.com", "/.//evil.example.com", "//evil.example.com", "https://evil.example.com"]) {
+test(`post-login redirect stays on this origin: ${next}`, async ({ page }) => {
+  const email = `redir-${Date.now()}-${Math.random().toString(36).slice(2)}@example.com`;
+  await page.goto(`/register?next=${encodeURIComponent(next)}`);
   await page.getByLabel("Name").fill("R");
   await page.getByLabel("Email").fill(email);
   await page.getByLabel("Password").fill("Redirect-test-2026");
   await page.getByRole("button", { name: "Create account" }).click();
   await expect(page).toHaveURL(/^http:\/\/localhost:3000\//);
 });
+}
