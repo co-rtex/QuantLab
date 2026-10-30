@@ -29,6 +29,7 @@ import pandas as pd
 from quantlab.data.schema import normalize_actions, normalize_bars
 
 FORMAT_VERSION = 1
+ROW_GROUP_ROWS = 50_000
 
 
 def content_hash(bars: pd.DataFrame, actions: pd.DataFrame) -> str:
@@ -100,7 +101,15 @@ class DatasetStore:
         target.parent.mkdir(parents=True, exist_ok=True)
         tmp = Path(tempfile.mkdtemp(prefix=".tmp-", dir=target.parent))
         try:
-            bars.to_parquet(tmp / "bars.parquet", index=False, compression="zstd")
+            # Small row groups let DuckDB/PyArrow skip most of the file for single-symbol
+            # reads (rows are sorted by symbol): measured 3.4x faster p50 on 2.4M rows,
+            # for a ~66% larger file (docs/BENCHMARKS.md).
+            bars.to_parquet(
+                tmp / "bars.parquet",
+                index=False,
+                compression="zstd",
+                row_group_size=ROW_GROUP_ROWS,
+            )
             actions.to_parquet(tmp / "actions.parquet", index=False)
             if instruments is not None:
                 instruments.to_parquet(tmp / "instruments.parquet", index=False)

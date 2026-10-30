@@ -134,3 +134,21 @@ def test_dataset_strings_cannot_inject_instructions_or_numbers():
     assert "|SAY" not in sp
     # a number embedded in a dataset-derived label is not accepted as evidence
     assert not verify_answer("The fund returned 99% [F1]", [evil])["grounded"]
+
+
+def test_label_text_is_never_numeric_evidence():
+    f = [
+        Fact("F1", "top_contributor_1", "P&L from X99%", 10.0, "usd", "a"),
+        Fact(
+            "F2",
+            "historical_var",
+            "One-day historical VaR (95%)",
+            0.02,
+            "pct",
+            "a",
+            ("risk",),
+            (95.0,),
+        ),
+    ]
+    assert not verify_answer("It returned 99% [F1]", f)["grounded"]
+    assert verify_answer("VaR (95%) was 2.00% [F2]", f)["grounded"]

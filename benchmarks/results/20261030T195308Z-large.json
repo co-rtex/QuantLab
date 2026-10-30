@@ -1,0 +1,118 @@
+{
+  "profile": "large",
+  "params": {
+    "assets": 1000,
+    "years": 10,
+    "queries": 200,
+    "parallel_runs": 8
+  },
+  "environment": {
+    "timestamp": "2026-10-30T19:51:51.355417+00:00",
+    "platform": "macOS-26.6.2-arm64-arm-64bit",
+    "machine": "arm64",
+    "cpu_count": 8,
+    "python": "3.12.16",
+    "numpy": "2.5.4",
+    "pandas": "3.1.0",
+    "duckdb": "2.0.0",
+    "pyarrow": "26.0.0",
+    "memory_gb": 8.0
+  },
+  "data": {
+    "rows": 2357984,
+    "symbols": 1001,
+    "generate_s": 2.733,
+    "quality_s": 2.555,
+    "quality_status": "pass",
+    "write_parquet_s": 1.101,
+    "parquet_mb": 94.35
+  },
+  "engine": [
+    {
+      "assets": 100,
+      "strategy": "equal_weight",
+      "sessions": 1258,
+      "trades": 5330,
+      "seconds": 0.331
+    },
+    {
+      "assets": 100,
+      "strategy": "momentum",
+      "sessions": 1258,
+      "trades": 770,
+      "seconds": 0.221
+    },
+    {
+      "assets": 1000,
+      "strategy": "equal_weight",
+      "sessions": 1258,
+      "trades": 41520,
+      "seconds": 3.219
+    },
+    {
+      "assets": 1000,
+      "strategy": "momentum",
+      "sessions": 1258,
+      "trades": 842,
+      "seconds": 1.947
+    }
+  ],
+  "engine_peak_rss_mb": 1312.9,
+  "parallel": {
+    "runs": 8,
+    "serial_wall_s": 17.744,
+    "mean_single_run_s": 2.143,
+    "workers_wall_s": {
+      "2": 12.507,
+      "4": 14.873
+    },
+    "speedup_4": 1.19
+  },
+  "retrieval": {
+    "duckdb_parquet": {
+      "n": 200,
+      "p50_ms": 3.417,
+      "p95_ms": 4.431,
+      "p99_ms": 6.503,
+      "mean_ms": 4.062
+    },
+    "pyarrow_filters": {
+      "n": 50,
+      "p50_ms": 3.807,
+      "p95_ms": 12.778,
+      "p99_ms": 28.535,
+      "mean_ms": 5.504
+    },
+    "postgres_unindexed": {
+      "n": 30,
+      "p50_ms": 42.639,
+      "p95_ms": 46.828,
+      "p99_ms": 50.459,
+      "mean_ms": 43.031
+    },
+    "postgres_indexed": {
+      "n": 200,
+      "p50_ms": 2.454,
+      "p95_ms": 6.342,
+      "p99_ms": 8.146,
+      "mean_ms": 2.928
+    },
+    "postgres_copy_load_s": 7.29,
+    "postgres_index_build_s": 1.39,
+    "adjusted_full_history_uncached": {
+      "n": 200,
+      "p50_ms": 25.985,
+      "p95_ms": 30.512,
+      "p99_ms": 39.89,
+      "mean_ms": 23.955
+    },
+    "adjusted_full_history_cached": {
+      "n": 200,
+      "p50_ms": 1.433,
+      "p95_ms": 4.097,
+      "p99_ms": 8.453,
+      "mean_ms": 1.849
+    }
+  },
+  "peak_rss_mb": 1312.9
+}

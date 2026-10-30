@@ -25,6 +25,8 @@ ACTION_KINDS = ("split", "dividend")
 # Daily bars are considered knowable at the regular-session close (16:00 New York).
 SESSION_CLOSE = pd.Timedelta(hours=16)
 EXCHANGE_TZ = "America/New_York"
+# Tickers are short and plain; anything else is rejected at ingestion.
+SYMBOL_PATTERN = r"[A-Z0-9][A-Z0-9._-]{0,19}"
 
 
 class SchemaError(ValueError):
@@ -52,6 +54,9 @@ def normalize_bars(frame: pd.DataFrame) -> pd.DataFrame:
         dates = dates.dt.tz_convert(EXCHANGE_TZ).dt.tz_localize(None)
     out["date"] = dates.dt.normalize().astype("datetime64[ns]")
     out["symbol"] = out["symbol"].astype(str).str.upper().str.strip()
+    bad = ~out["symbol"].str.fullmatch(SYMBOL_PATTERN)
+    if bad.any():
+        raise SchemaError(f"invalid symbols: {sorted(out.loc[bad, 'symbol'].unique())[:5]}")
     for col in ("open", "high", "low", "close", "volume"):
         out[col] = pd.to_numeric(out[col], errors="coerce").astype("float64")
     if "available_at" not in out.columns or out["available_at"].isna().any():
@@ -78,6 +83,8 @@ def normalize_actions(frame: pd.DataFrame | None) -> pd.DataFrame:
         raise SchemaError(f"actions frame missing columns: {sorted(missing)}")
     out = frame.copy()
     out["symbol"] = out["symbol"].astype(str).str.upper().str.strip()
+    if (~out["symbol"].str.fullmatch(SYMBOL_PATTERN)).any():
+        raise SchemaError("invalid symbols in corporate actions")
     out["ex_date"] = pd.to_datetime(out["ex_date"]).dt.normalize().astype("datetime64[ns]")
     out["kind"] = out["kind"].astype(str).str.lower()
     out["value"] = pd.to_numeric(out["value"], errors="coerce").astype("float64")

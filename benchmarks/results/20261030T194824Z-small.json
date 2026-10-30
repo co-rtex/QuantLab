@@ -1,0 +1,134 @@
+{
+  "profile": "small",
+  "params": {
+    "assets": 100,
+    "years": 6,
+    "queries": 100,
+    "parallel_runs": 8
+  },
+  "environment": {
+    "timestamp": "2026-10-30T19:48:13.581444+00:00",
+    "platform": "macOS-26.6.2-arm64-arm-64bit",
+    "machine": "arm64",
+    "cpu_count": 8,
+    "python": "3.12.16",
+    "numpy": "2.5.4",
+    "pandas": "3.1.0",
+    "duckdb": "2.0.0",
+    "pyarrow": "26.0.0",
+    "memory_gb": 8.0
+  },
+  "data": {
+    "rows": 142384,
+    "symbols": 101,
+    "generate_s": 0.214,
+    "quality_s": 0.18,
+    "quality_status": "pass",
+    "write_parquet_s": 0.125,
+    "parquet_mb": 5.6
+  },
+  "engine": [
+    {
+      "assets": 100,
+      "strategy": "equal_weight",
+      "sessions": 1258,
+      "trades": 5454,
+      "seconds": 0.275
+    },
+    {
+      "assets": 100,
+      "strategy": "momentum",
+      "sessions": 1258,
+      "trades": 755,
+      "seconds": 0.17
+    }
+  ],
+  "engine_peak_rss_mb": 275.7,
+  "parallel": {
+    "runs": 8,
+    "serial_wall_s": 1.376,
+    "mean_single_run_s": 0.16,
+    "workers_wall_s": {
+      "2": 1.449,
+      "4": 1.097
+    },
+    "speedup_4": 1.25
+  },
+  "retrieval": {
+    "duckdb_parquet": {
+      "n": 100,
+      "p50_ms": 6.497,
+      "p95_ms": 7.14,
+      "p99_ms": 8.408,
+      "mean_ms": 7.416
+    },
+    "pyarrow_filters": {
+      "n": 25,
+      "p50_ms": 4.613,
+      "p95_ms": 5.479,
+      "p99_ms": 9.56,
+      "mean_ms": 4.882
+    },
+    "postgres_unindexed": {
+      "n": 30,
+      "p50_ms": 6.91,
+      "p95_ms": 14.213,
+      "p99_ms": 16.303,
+      "mean_ms": 7.901
+    },
+    "postgres_indexed": {
+      "n": 100,
+      "p50_ms": 1.478,
+      "p95_ms": 3.091,
+      "p99_ms": 3.722,
+      "mean_ms": 1.65
+    },
+    "postgres_copy_load_s": 0.35,
+    "postgres_index_build_s": 0.04,
+    "adjusted_full_history_uncached": {
+      "n": 100,
+      "p50_ms": 25.285,
+      "p95_ms": 30.342,
+      "p99_ms": 38.798,
+      "mean_ms": 18.093
+    },
+    "adjusted_full_history_cached": {
+      "n": 100,
+      "p50_ms": 1.003,
+      "p95_ms": 4.387,
+      "p99_ms": 9.473,
+      "mean_ms": 1.446
+    }
+  },
+  "api": {
+    "health": {
+      "n": 200,
+      "p50_ms": 0.644,
+      "p95_ms": 0.735,
+      "p99_ms": 0.864,
+      "mean_ms": 0.659
+    },
+    "workspaces": {
+      "n": 200,
+      "p50_ms": 2.422,
+      "p95_ms": 4.332,
+      "p99_ms": 5.824,
+      "mean_ms": 2.673
+    },
+    "experiments_list": {
+      "n": 200,
+      "p50_ms": 4.605,
+      "p95_ms": 7.346,
+      "p99_ms": 8.709,
+      "mean_ms": 4.795
+    },
+    "strategy_catalog": {
+      "n": 200,
+      "p50_ms": 1.67,
+      "p95_ms": 2.199,
+      "p99_ms": 2.935,
+      "mean_ms": 1.749
+    }
+  },
+  "peak_rss_mb": 335.2
+}

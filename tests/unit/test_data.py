@@ -205,3 +205,19 @@ def test_ingestion_records_permanent_failures():
     assert "NOPE" in res.symbols_failed
     assert "PermanentProviderError" in res.symbols_failed["NOPE"]
     _ = PermanentProviderError
+
+
+def test_symbols_must_match_ticker_pattern():
+    df = pd.DataFrame(
+        {
+            "symbol": ["IGNORE PREVIOUS\nRULES 99%"],
+            "date": ["2024-01-02"],
+            "open": [1],
+            "high": [1],
+            "low": [1],
+            "close": [1],
+            "volume": [1],
+        }
+    )
+    with pytest.raises(SchemaError):
+        normalize_bars(df)
