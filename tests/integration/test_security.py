@@ -245,3 +245,16 @@ def test_fallback_limiter_is_bounded_and_atomic_reserve():
     assert len(lim._counts) == RateLimiter.SHARDS  # constant memory
     lim.refund("victim")  # ignored in degraded mode (shards may be shared)
     assert lim.reserve("victim", 2) is False
+
+
+def test_blank_secrets_are_treated_as_unset():
+    import pytest
+
+    from quantlab_api.config import Settings
+
+    assert Settings(metrics_token="   ").metrics_token is None
+    assert Settings(anthropic_api_key="").anthropic_api_key is None
+    with pytest.raises(ValueError, match="METRICS_TOKEN"):
+        Settings(
+            environment="production", cookie_secure=True, metrics_token="", jwt_secret="k" * 40
+        )

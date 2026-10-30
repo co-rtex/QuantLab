@@ -121,8 +121,9 @@ def create_app() -> FastAPI:
     def metrics(request: Request) -> Response:
         token = settings.metrics_token
         if token is not None:
+            expected = token.get_secret_value()
             given = request.headers.get("authorization", "").removeprefix("Bearer ").strip()
-            if not hmac.compare_digest(given, token.get_secret_value()):
+            if not expected or not hmac.compare_digest(given, expected):
                 return Response(status_code=401)
         return Response(generate_latest(), media_type=CONTENT_TYPE_LATEST)
 

@@ -7,7 +7,7 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Literal
 
-from pydantic import Field, SecretStr, model_validator
+from pydantic import Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 _DEV_SECRET = secrets.token_urlsafe(48)
@@ -40,6 +40,15 @@ class Settings(BaseSettings):
     metrics_token: SecretStr | None = None
     max_synthetic_rows: int = Field(5_000_000, ge=1000)
 
+    @field_validator("metrics_token", "anthropic_api_key", mode="before")
+    @classmethod
+    def _blank_is_unset(cls, v: object) -> object:
+        """Compose passes unset variables as empty strings; treat those as not configured."""
+        if v is None:
+            return None
+        raw = v.get_secret_value() if isinstance(v, SecretStr) else str(v)
+        return None if not raw.strip() else v
+
     @model_validator(mode="after")
     def _production_guards(self) -> Settings:
         if self.environment == "production":
@@ -50,8 +59,10 @@ class Settings(BaseSettings):
                 raise ValueError("QUANTLAB_JWT_SECRET must be at least 32 characters")
             if any(m in secret.lower() for m in ("insecure", "change-me", "changeme", "dev-only")):
                 raise ValueError("QUANTLAB_JWT_SECRET is a placeholder; generate a real secret")
-            if self.metrics_token is None:
-                raise ValueError("QUANTLAB_METRICS_TOKEN must be set in production")
+            if self.metrics_token is None or len(self.metrics_token.get_secret_value()) < 16:
+                raise ValueError(
+                    "QUANTLAB_METRICS_TOKEN (16+ characters) must be set in production"
+                )
             if not self.cookie_secure:
                 raise ValueError("QUANTLAB_COOKIE_SECURE must be true in production")
         return self
