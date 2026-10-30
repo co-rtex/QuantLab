@@ -2,16 +2,30 @@
 
 from __future__ import annotations
 
+import hashlib
 import os
 import tempfile
 from collections.abc import Iterator
+from pathlib import Path
 
 import pytest
 
-BASE_URL = os.environ.get(
-    "QUANTLAB_TEST_DATABASE_URL",
-    "postgresql+psycopg://quantlab:quantlab@localhost:5433/quantlab_test",
-)
+
+def _default_test_database() -> str:
+    """One test database per checkout, so git worktrees sharing a PostgreSQL server do not
+    TRUNCATE each other's tables mid-test. The main checkout keeps ``quantlab_test``; a
+    linked worktree (whose ``.git`` is a file) gets a suffix derived from its path."""
+    root = Path(__file__).resolve().parents[2]
+    name = "quantlab_test"
+    if (root / ".git").is_file():
+        name += "_" + hashlib.sha256(str(root).encode()).hexdigest()[:10]
+    port = os.environ.get("QUANTLAB_PG_PORT", "5433")
+    return f"postgresql+psycopg://quantlab:quantlab@localhost:{port}/{name}"
+
+
+BASE_URL = os.environ.get("QUANTLAB_TEST_DATABASE_URL") or _default_test_database()
+# Arbitrary constant: sessions using the same database take this lock and run one at a time.
+SESSION_LOCK_KEY = 0x51AB_7E57
 os.environ["QUANTLAB_DATABASE_URL"] = BASE_URL
 os.environ["QUANTLAB_ENVIRONMENT"] = "test"
 os.environ.setdefault("QUANTLAB_DATA_DIR", tempfile.mkdtemp(prefix="quantlab-it-"))
@@ -21,6 +35,7 @@ os.environ["QUANTLAB_JOB_LEASE_SECONDS"] = "30"
 import fakeredis  # noqa: E402
 from sqlalchemy import create_engine, text  # noqa: E402
 from sqlalchemy.engine import make_url  # noqa: E402
+from sqlalchemy.pool import NullPool  # noqa: E402
 
 TABLES = [
     "audit_events",
@@ -63,10 +78,22 @@ def database() -> Iterator[None]:
     from alembic import command
     from alembic.config import Config
 
-    cfg = Config("services/api/alembic.ini")
-    cfg.set_main_option("sqlalchemy.url", BASE_URL)
-    command.upgrade(cfg, "head")
-    yield
+    # Every test TRUNCATEs all tables, so two sessions on one database (two terminals, or
+    # QUANTLAB_TEST_DATABASE_URL pointed at the same place) would corrupt each other.
+    # A session-level advisory lock serializes them instead.
+    locker = create_engine(BASE_URL, poolclass=NullPool)
+    lock_conn = locker.connect()
+    lock_conn.execute(text("SELECT pg_advisory_lock(:k)"), {"k": SESSION_LOCK_KEY})
+    lock_conn.commit()
+    try:
+        cfg = Config("services/api/alembic.ini")
+        cfg.set_main_option("sqlalchemy.url", BASE_URL)
+        command.upgrade(cfg, "head")
+        yield
+    finally:
+        lock_conn.execute(text("SELECT pg_advisory_unlock(:k)"), {"k": SESSION_LOCK_KEY})
+        lock_conn.close()
+        locker.dispose()
 
 
 @pytest.fixture(autouse=True)

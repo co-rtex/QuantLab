@@ -1,4 +1,6 @@
-name: quantlab
+# Project name and host ports come from scripts/stack-env.sh (via make) so each git
+# worktree gets its own containers, volumes and ports; the defaults are the main checkout.
+name: ${COMPOSE_PROJECT_NAME:-quantlab}
 
 x-app-env: &app-env
   QUANTLAB_DATABASE_URL: postgresql+psycopg://quantlab:quantlab@postgres:5432/quantlab
@@ -18,7 +20,7 @@ services:
       POSTGRES_USER: quantlab
       POSTGRES_PASSWORD: quantlab
       POSTGRES_DB: quantlab
-    ports: ["127.0.0.1:5433:5432"]
+    ports: ["127.0.0.1:${QUANTLAB_PG_PORT:-5433}:5432"]
     volumes: [pgdata:/var/lib/postgresql/data]
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U quantlab"]
@@ -29,7 +31,7 @@ services:
   redis:
     image: redis:7-alpine
     command: ["redis-server", "--appendonly", "yes"]
-    ports: ["127.0.0.1:6380:6379"]
+    ports: ["127.0.0.1:${QUANTLAB_REDIS_PORT:-6380}:6379"]
     volumes: [redisdata:/data]
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
@@ -43,7 +45,7 @@ services:
       <<: *app-env
       PROMETHEUS_MULTIPROC_DIR: /tmp/prometheus
     command: ["sh", "-c", "alembic -c services/api/alembic.ini upgrade head && rm -rf \"$$PROMETHEUS_MULTIPROC_DIR\" && mkdir -p \"$$PROMETHEUS_MULTIPROC_DIR\" && uvicorn quantlab_api.main:app --host 0.0.0.0 --port 8000 --proxy-headers --workers ${QUANTLAB_API_WORKERS:-4}"]
-    ports: ["127.0.0.1:8000:8000"]
+    ports: ["127.0.0.1:${QUANTLAB_API_PORT:-8000}:8000"]
     volumes: [appdata:/data]
     depends_on:
       postgres: { condition: service_healthy }
@@ -80,7 +82,7 @@ services:
     build: { context: apps/web, dockerfile: Dockerfile }
     environment:
       API_INTERNAL_URL: http://api:8000
-    ports: ["127.0.0.1:3000:3000"]
+    ports: ["127.0.0.1:${QUANTLAB_WEB_PORT:-3000}:3000"]
     depends_on:
       api: { condition: service_healthy }
     profiles: ["app"]
@@ -90,7 +92,7 @@ services:
     image: jaegertracing/all-in-one:1.62.0
     environment:
       COLLECTOR_OTLP_ENABLED: "true"
-    ports: ["127.0.0.1:16686:16686", "127.0.0.1:4318:4318"]
+    ports: ["127.0.0.1:${QUANTLAB_JAEGER_PORT:-16686}:16686", "127.0.0.1:${QUANTLAB_OTLP_PORT:-4318}:4318"]
     profiles: ["observability"]
 
   prometheus:
@@ -98,7 +100,7 @@ services:
     volumes:
       - ./infra/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
       - ./infra/prometheus/metrics_token:/etc/prometheus/metrics_token:ro
-    ports: ["127.0.0.1:9090:9090"]
+    ports: ["127.0.0.1:${QUANTLAB_PROMETHEUS_PORT:-9090}:9090"]
     profiles: ["observability"]
 
   grafana:
@@ -109,7 +111,7 @@ services:
     volumes:
       - ./infra/grafana/provisioning:/etc/grafana/provisioning:ro
       - ./infra/grafana/dashboards:/var/lib/grafana/dashboards:ro
-    ports: ["127.0.0.1:3001:3000"]
+    ports: ["127.0.0.1:${QUANTLAB_GRAFANA_PORT:-3001}:3000"]
     profiles: ["observability"]
 
 volumes:

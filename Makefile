@@ -1,4 +1,11 @@
-.PHONY: setup lint format typecheck test test-unit test-integration coverage up down app-up web-dev api-dev worker reaper bench e2e check
+.PHONY: setup lint format typecheck test test-unit test-integration coverage up down app-up web-dev api-dev worker reaper bench e2e check stack-env
+
+# Per-checkout compose project, ports and database URLs (see scripts/stack-env.sh), so
+# several git worktrees can run their stacks and test suites at the same time.
+$(foreach kv,$(shell scripts/stack-env.sh),$(eval export $(kv)))
+
+stack-env:
+	@scripts/stack-env.sh
 
 setup:
 	uv sync
@@ -37,7 +44,7 @@ app-up:
 
 api-dev: up
 	uv run alembic -c services/api/alembic.ini upgrade head
-	uv run uvicorn quantlab_api.main:app --reload --port 8000
+	uv run uvicorn quantlab_api.main:app --reload --port $(QUANTLAB_API_PORT)
 
 worker:
 	OBJC_DISABLE_INITIALIZE_FORK_SAFETY=YES uv run quantlab-worker
