@@ -1,0 +1,87 @@
+name: quantlab
+
+x-app-env: &app-env
+  QUANTLAB_DATABASE_URL: postgresql+psycopg://quantlab:quantlab@postgres:5432/quantlab
+  QUANTLAB_REDIS_URL: redis://redis:6379/0
+  QUANTLAB_DATA_DIR: /data
+  QUANTLAB_ENVIRONMENT: ${QUANTLAB_ENVIRONMENT:-development}
+  QUANTLAB_JWT_SECRET: ${QUANTLAB_JWT_SECRET:-dev-only-insecure-secret-change-me-0123456789}
+  QUANTLAB_ANTHROPIC_API_KEY: ${QUANTLAB_ANTHROPIC_API_KEY:-}
+  QUANTLAB_GIT_SHA: ${QUANTLAB_GIT_SHA:-unknown}
+
+services:
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_USER: quantlab
+      POSTGRES_PASSWORD: quantlab
+      POSTGRES_DB: quantlab
+    ports: ["127.0.0.1:5433:5432"]
+    volumes: [pgdata:/var/lib/postgresql/data]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U quantlab"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--appendonly", "yes"]
+    ports: ["127.0.0.1:6380:6379"]
+    volumes: [redisdata:/data]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+  api:
+    build: { context: ., dockerfile: services/api/Dockerfile }
+    environment: *app-env
+    command: ["sh", "-c", "alembic -c services/api/alembic.ini upgrade head && uvicorn quantlab_api.main:app --host 0.0.0.0 --port 8000 --proxy-headers"]
+    ports: ["127.0.0.1:8000:8000"]
+    volumes: [appdata:/data]
+    depends_on:
+      postgres: { condition: service_healthy }
+      redis: { condition: service_healthy }
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request,sys;sys.exit(0 if urllib.request.urlopen('http://localhost:8000/api/v1/health').status==200 else 1)"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    profiles: ["app"]
+
+  worker:
+    build: { context: ., dockerfile: services/api/Dockerfile }
+    environment: *app-env
+    command: ["quantlab-worker"]
+    volumes: [appdata:/data]
+    depends_on:
+      api: { condition: service_healthy }
+    deploy:
+      replicas: ${QUANTLAB_WORKERS:-2}
+      resources:
+        limits: { cpus: "1.0", memory: 1536M }
+    profiles: ["app"]
+
+  reaper:
+    build: { context: ., dockerfile: services/api/Dockerfile }
+    environment: *app-env
+    command: ["quantlab-cli", "reaper", "--interval", "15"]
+    depends_on:
+      api: { condition: service_healthy }
+    profiles: ["app"]
+
+  web:
+    build: { context: apps/web, dockerfile: Dockerfile }
+    environment:
+      API_INTERNAL_URL: http://api:8000
+    ports: ["127.0.0.1:3000:3000"]
+    depends_on:
+      api: { condition: service_healthy }
+    profiles: ["app"]
+
+volumes:
+  pgdata:
+  redisdata:
+  appdata:

@@ -1,0 +1,227 @@
+"""Request/response models for the v1 API."""
+
+from __future__ import annotations
+
+import uuid
+from datetime import date, datetime
+from typing import Any, Literal
+
+from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator
+
+
+class ORM(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+
+class Page[T](BaseModel):
+    items: list[T]
+    total: int
+    limit: int
+    offset: int
+
+
+# ---------------------------------------------------------------- auth
+class RegisterIn(BaseModel):
+    email: EmailStr
+    password: str = Field(min_length=10, max_length=128)
+    display_name: str = Field(min_length=1, max_length=120)
+
+    @field_validator("password")
+    @classmethod
+    def _strength(cls, v: str) -> str:
+        if v.lower() == v or v.upper() == v or not any(c.isdigit() for c in v):
+            raise ValueError("password needs upper and lower case letters and a digit")
+        return v
+
+
+class LoginIn(BaseModel):
+    email: EmailStr
+    password: str = Field(min_length=1, max_length=128)
+
+
+class UserOut(ORM):
+    id: uuid.UUID
+    email: str
+    display_name: str
+    created_at: datetime
+
+
+class TokenOut(BaseModel):
+    access_token: str
+    token_type: Literal["bearer"] = "bearer"  # noqa: S105
+    expires_at: datetime
+    user: UserOut
+
+
+# ---------------------------------------------------------------- workspaces
+class WorkspaceIn(BaseModel):
+    name: str = Field(min_length=1, max_length=120)
+    description: str = Field("", max_length=2000)
+
+
+class WorkspaceOut(ORM):
+    id: uuid.UUID
+    name: str
+    description: str
+    created_at: datetime
+    role: str | None = None
+
+
+class MemberIn(BaseModel):
+    email: EmailStr
+    role: Literal["viewer", "editor", "owner"] = "viewer"
+
+
+class MemberOut(BaseModel):
+    user_id: uuid.UUID
+    email: str
+    display_name: str
+    role: str
+
+
+# ---------------------------------------------------------------- datasets
+class SyntheticDatasetIn(BaseModel):
+    slug: str = Field(pattern=r"^[a-z0-9][a-z0-9_-]{1,62}$")
+    name: str = Field(min_length=1, max_length=120)
+    description: str = Field("", max_length=2000)
+    n_assets: int = Field(50, ge=2, le=2000)
+    start: date = date(2018, 1, 2)
+    end: date = date(2023, 12, 29)
+    seed: int = Field(7, ge=0, le=2**31 - 1)
+
+
+class DatasetOut(ORM):
+    id: uuid.UUID
+    workspace_id: uuid.UUID
+    slug: str
+    name: str
+    description: str
+    provider: str
+    created_at: datetime
+
+
+class DatasetVersionOut(ORM):
+    id: uuid.UUID
+    dataset_id: uuid.UUID
+    version_hash: str
+    rows: int
+    symbol_count: int
+    start_date: date | None
+    end_date: date | None
+    is_synthetic: bool
+    quality_status: str
+    created_at: datetime
+
+
+class DatasetVersionDetail(DatasetVersionOut):
+    provenance: dict[str, Any]
+    quality: dict[str, Any]
+
+
+class InstrumentOut(ORM):
+    symbol: str
+    name: str
+    sector: str | None
+    asset_class: str
+    first_date: date | None
+    last_date: date | None
+    delisted: bool
+    rows: int
+
+
+class BarsOut(BaseModel):
+    symbol: str
+    adjusted: bool
+    is_synthetic: bool
+    dates: list[str]
+    open: list[float | None]
+    high: list[float | None]
+    low: list[float | None]
+    close: list[float | None]
+    volume: list[float | None]
+    cache: str
+
+
+# ---------------------------------------------------------------- strategies
+class StrategyIn(BaseModel):
+    name: str = Field(min_length=1, max_length=120)
+    strategy_key: str
+    params: dict[str, Any] = Field(default_factory=dict)
+    description: str = Field("", max_length=2000)
+
+
+class StrategyOut(ORM):
+    id: uuid.UUID
+    name: str
+    strategy_key: str
+    params: dict[str, Any]
+    description: str
+    created_at: datetime
+
+
+# ---------------------------------------------------------------- experiments / jobs
+class ExperimentIn(BaseModel):
+    name: str = Field(min_length=1, max_length=200)
+    dataset_version_id: uuid.UUID
+    strategy_key: str | None = None
+    strategy_params: dict[str, Any] = Field(default_factory=dict)
+    strategy_id: uuid.UUID | None = None
+    config: dict[str, Any] = Field(default_factory=dict)
+    notes: str = Field("", max_length=5000)
+
+
+class JobOut(ORM):
+    id: uuid.UUID
+    kind: str
+    status: str
+    progress: float
+    message: str
+    attempts: int
+    max_attempts: int
+    cancel_requested: bool
+    error: dict[str, Any] | None
+    created_at: datetime
+    started_at: datetime | None
+    finished_at: datetime | None
+    payload: dict[str, Any]
+
+
+class ExperimentOut(ORM):
+    id: uuid.UUID
+    workspace_id: uuid.UUID
+    name: str
+    kind: str
+    dataset_version_id: uuid.UUID
+    strategy_key: str
+    strategy_params: dict[str, Any]
+    config: dict[str, Any]
+    input_hash: str
+    code_version: str
+    engine_version: str
+    parent_id: uuid.UUID | None
+    status: str
+    notes: str
+    created_at: datetime
+    summary: dict[str, Any] | None = None
+    fingerprint: str | None = None
+
+
+class ExperimentSubmitted(BaseModel):
+    experiment: ExperimentOut
+    job: JobOut
+    created: bool
+
+
+class CompareIn(BaseModel):
+    experiment_ids: list[uuid.UUID] = Field(min_length=1, max_length=10)
+
+
+class AuditOut(ORM):
+    id: uuid.UUID
+    user_id: uuid.UUID | None
+    action: str
+    target_type: str | None
+    target_id: str | None
+    details: dict[str, Any]
+    request_id: str | None
+    created_at: datetime

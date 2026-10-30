@@ -1,0 +1,201 @@
+from __future__ import annotations
+
+import uuid
+from dataclasses import asdict
+from datetime import date
+
+from fastapi import APIRouter, Header, Query, Request
+from sqlalchemy import func, select
+
+from quantlab.data.synthetic import SyntheticSpec
+from quantlab_api.errors import ApiError
+from quantlab_api.jobs import redis_conn, submit_job
+from quantlab_api.marketdata import bars_payload
+from quantlab_api.models import Dataset, DatasetVersion, Instrument, Role, User, WorkspaceMember
+from quantlab_api.schemas import (
+    BarsOut,
+    DatasetOut,
+    DatasetVersionDetail,
+    DatasetVersionOut,
+    InstrumentOut,
+    JobOut,
+    Page,
+    SyntheticDatasetIn,
+)
+from quantlab_api.security import DB, CurrentUser, audit, require_workspace
+
+router = APIRouter(tags=["datasets"])
+
+
+def load_version(db: DB, user: User, version_id: uuid.UUID) -> tuple[DatasetVersion, Dataset]:
+    """Authorize access to a dataset version through workspace membership."""
+    row = db.execute(
+        select(DatasetVersion, Dataset)
+        .join(Dataset, Dataset.id == DatasetVersion.dataset_id)
+        .join(WorkspaceMember, WorkspaceMember.workspace_id == Dataset.workspace_id)
+        .where(DatasetVersion.id == version_id, WorkspaceMember.user_id == user.id)
+    ).first()
+    if row is None:
+        raise ApiError(404, "not_found", "Dataset version not found")
+    return row[0], row[1]
+
+
+@router.get("/workspaces/{workspace_id}/datasets", response_model=list[DatasetOut])
+def list_datasets(workspace_id: uuid.UUID, user: CurrentUser, db: DB) -> list[Dataset]:
+    require_workspace(db, user, workspace_id)
+    return list(
+        db.scalars(
+            select(Dataset).where(Dataset.workspace_id == workspace_id).order_by(Dataset.created_at)
+        )
+    )
+
+
+@router.post(
+    "/workspaces/{workspace_id}/datasets/synthetic", response_model=JobOut, status_code=202
+)
+def create_synthetic(
+    workspace_id: uuid.UUID,
+    body: SyntheticDatasetIn,
+    user: CurrentUser,
+    db: DB,
+    request: Request,
+    idempotency_key: str | None = Header(None, max_length=128),
+) -> JobOut:
+    require_workspace(db, user, workspace_id, Role.editor)
+    if body.end <= body.start:
+        raise ApiError(422, "validation_error", "end must be after start")
+    ds = db.scalar(
+        select(Dataset).where(Dataset.workspace_id == workspace_id, Dataset.slug == body.slug)
+    )
+    if ds is None:
+        ds = Dataset(
+            workspace_id=workspace_id,
+            slug=body.slug,
+            name=body.name,
+            description=body.description
+            or "Deterministic synthetic market data (not real observations).",
+            provider="synthetic",
+            created_by=user.id,
+        )
+        db.add(ds)
+        db.flush()
+    elif ds.provider != "synthetic":
+        raise ApiError(409, "slug_taken", "A non-synthetic dataset already uses this slug")
+    spec = SyntheticSpec(
+        n_assets=body.n_assets, start=str(body.start), end=str(body.end), seed=body.seed
+    )
+    payload = {
+        "dataset_id": str(ds.id),
+        "spec": {k: (list(v) if isinstance(v, tuple) else v) for k, v in asdict(spec).items()},
+    }
+    audit(
+        db,
+        request,
+        "dataset.ingest_requested",
+        user=user,
+        workspace_id=workspace_id,
+        target_type="dataset",
+        target_id=ds.id,
+        provider="synthetic",
+    )
+    job, _ = submit_job(
+        db,
+        workspace_id=workspace_id,
+        user_id=user.id,
+        kind="dataset.synthetic",
+        payload=payload,
+        idempotency_key=idempotency_key,
+        request_id=getattr(request.state, "request_id", None),
+    )
+    return JobOut.model_validate(job)
+
+
+@router.get("/datasets/{dataset_id}/versions", response_model=list[DatasetVersionOut])
+def list_versions(dataset_id: uuid.UUID, user: CurrentUser, db: DB) -> list[DatasetVersion]:
+    ds = db.get(Dataset, dataset_id)
+    if ds is None:
+        raise ApiError(404, "not_found", "Dataset not found")
+    require_workspace(db, user, ds.workspace_id)
+    return list(
+        db.scalars(
+            select(DatasetVersion)
+            .where(DatasetVersion.dataset_id == ds.id)
+            .order_by(DatasetVersion.created_at)
+        )
+    )
+
+
+@router.get("/workspaces/{workspace_id}/dataset-versions", response_model=list[DatasetVersionOut])
+def workspace_versions(workspace_id: uuid.UUID, user: CurrentUser, db: DB) -> list[DatasetVersion]:
+    require_workspace(db, user, workspace_id)
+    return list(
+        db.scalars(
+            select(DatasetVersion)
+            .join(Dataset, Dataset.id == DatasetVersion.dataset_id)
+            .where(Dataset.workspace_id == workspace_id)
+            .order_by(DatasetVersion.created_at.desc())
+        )
+    )
+
+
+@router.get("/dataset-versions/{version_id}", response_model=DatasetVersionDetail)
+def get_version(version_id: uuid.UUID, user: CurrentUser, db: DB) -> DatasetVersion:
+    return load_version(db, user, version_id)[0]
+
+
+@router.get("/dataset-versions/{version_id}/instruments", response_model=Page[InstrumentOut])
+def instruments(
+    version_id: uuid.UUID,
+    user: CurrentUser,
+    db: DB,
+    q: str | None = Query(None, max_length=32),
+    sector: str | None = Query(None, max_length=80),
+    limit: int = Query(100, ge=1, le=2000),
+    offset: int = Query(0, ge=0),
+) -> Page[InstrumentOut]:
+    dv, _ = load_version(db, user, version_id)
+    stmt = select(Instrument).where(Instrument.dataset_version_id == dv.id)
+    if q:
+        stmt = stmt.where(Instrument.symbol.ilike(f"{q.upper()}%"))
+    if sector:
+        stmt = stmt.where(Instrument.sector == sector)
+    total = db.scalar(select(func.count()).select_from(stmt.subquery())) or 0
+    rows = db.scalars(stmt.order_by(Instrument.symbol).limit(limit).offset(offset)).all()
+    return Page(
+        items=[InstrumentOut.model_validate(r) for r in rows],
+        total=total,
+        limit=limit,
+        offset=offset,
+    )
+
+
+@router.get("/dataset-versions/{version_id}/bars/{symbol}", response_model=BarsOut)
+def bars(
+    version_id: uuid.UUID,
+    symbol: str,
+    user: CurrentUser,
+    db: DB,
+    start: date | None = None,
+    end: date | None = None,
+    adjusted: bool = False,
+) -> BarsOut:
+    dv, _ = load_version(db, user, version_id)
+    if not symbol.replace(".", "").replace("-", "").isalnum() or len(symbol) > 32:
+        raise ApiError(422, "validation_error", "invalid symbol")
+    exists = db.scalar(
+        select(Instrument.id).where(
+            Instrument.dataset_version_id == dv.id, Instrument.symbol == symbol.upper()
+        )
+    )
+    if exists is None:
+        raise ApiError(404, "not_found", f"{symbol.upper()} is not in this dataset version")
+    try:
+        redis = redis_conn()
+    except Exception:
+        redis = None
+    from pathlib import Path
+
+    payload = bars_payload(
+        Path(dv.storage_path), dv.version_hash, symbol, start, end, adjusted, redis
+    )
+    return BarsOut(is_synthetic=dv.is_synthetic, **payload)
