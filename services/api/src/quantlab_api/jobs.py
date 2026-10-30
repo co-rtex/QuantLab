@@ -33,7 +33,7 @@ from typing import Any
 
 from redis import Redis
 from rq import Queue
-from sqlalchemy import or_, select, update
+from sqlalchemy import func, or_, select, update
 from sqlalchemy.orm import Session
 
 from quantlab_api.config import get_settings
@@ -150,6 +150,23 @@ def submit_job(
                     "Idempotency-Key was already used with a different request",
                 )
             return existing, False
+    active = (
+        db.scalar(
+            select(func.count())
+            .select_from(Job)
+            .where(
+                Job.workspace_id == workspace_id,
+                Job.status.in_([JobStatus.queued, JobStatus.running]),
+            )
+        )
+        or 0
+    )
+    if active >= s.max_active_jobs_per_workspace:
+        raise ApiError(
+            429,
+            "too_many_jobs",
+            f"This workspace already has {active} queued or running jobs; wait for some to finish",
+        )
     job = Job(
         workspace_id=workspace_id,
         kind=kind,
@@ -313,7 +330,7 @@ def claim(job_id: uuid.UUID, worker_id: str) -> Job | None:
                 worker_id=worker_id,
                 lease_expires_at=t + timedelta(seconds=lease),
                 heartbeat_at=t,
-                started_at=t,
+                started_at=func.coalesce(Job.started_at, t),
                 error=None,
                 message="running",
             )
@@ -400,7 +417,7 @@ def _run_claimed(job: Job, jid: uuid.UUID, wid: str) -> str:
         fn = HANDLERS.get(job.kind)
         if fn is None:
             raise PermanentJobError(f"no handler for job kind {job.kind!r}")
-        with tracer.start_as_current_span("job.handler"):
+        with tracer.start_as_current_span("job.handler"), _Keepalive(jid, ctx.attempt):
             finalize = fn(ctx)
         ctx.heartbeat(progress=1.0, message="committing", force=True)
         with SessionLocal() as db:
@@ -446,7 +463,11 @@ def _run_claimed(job: Job, jid: uuid.UUID, wid: str) -> str:
             "retryable": not permanent,
             "trace": traceback.format_exc(limit=8)[-4000:],
         }
-        if not permanent and ctx.attempt < job.max_attempts:
+        cancelled = _cancel_requested(jid)
+        if cancelled:
+            outcome = "cancelled"
+            _finish(jid, ctx.attempt, JobStatus.cancelled, message="cancelled by user")
+        elif not permanent and ctx.attempt < job.max_attempts:
             outcome = "retry"
             delay = min(60.0, 2.0**ctx.attempt)
             with SessionLocal() as db:
@@ -462,6 +483,8 @@ def _run_claimed(job: Job, jid: uuid.UUID, wid: str) -> str:
                         message=f"retrying in {delay:.0f}s after {type(exc).__name__}",
                     )
                 )
+                if res.rowcount:  # type: ignore[attr-defined]
+                    _mirror_status(db, job, JobStatus.queued)
                 db.commit()
                 again = db.get(Job, jid)
             if res.rowcount and again is not None:  # type: ignore[attr-defined]
@@ -479,6 +502,52 @@ def _run_claimed(job: Job, jid: uuid.UUID, wid: str) -> str:
     return outcome
 
 
+def _cancel_requested(jid: uuid.UUID) -> bool:
+    with SessionLocal() as db:
+        return bool(db.scalar(select(Job.cancel_requested).where(Job.id == jid)))
+
+
+class _Keepalive:
+    """Extends the lease from a background thread while a handler runs, so long phases
+    without progress callbacks (analytics, artifact writes, model fits) cannot lose the
+    lease to another worker. Fencing still applies: it only touches the current attempt."""
+
+    def __init__(self, jid: uuid.UUID, attempt: int) -> None:
+        import threading
+
+        self.jid, self.attempt = jid, attempt
+        self.stop = threading.Event()
+        self.thread = threading.Thread(target=self._run, daemon=True, name=f"keepalive-{jid}")
+
+    def _run(self) -> None:
+        lease = get_settings().job_lease_seconds
+        while not self.stop.wait(max(1.0, lease / 3)):
+            try:
+                with SessionLocal() as db:
+                    db.execute(
+                        update(Job)
+                        .where(
+                            Job.id == self.jid,
+                            Job.attempts == self.attempt,
+                            Job.status == JobStatus.running,
+                        )
+                        .values(
+                            lease_expires_at=now() + timedelta(seconds=lease), heartbeat_at=now()
+                        )
+                    )
+                    db.commit()
+            except Exception as exc:  # transient DB errors: the next tick retries
+                log.warning("keepalive_failed", job_id=str(self.jid), error=str(exc))
+
+    def __enter__(self) -> _Keepalive:
+        self.thread.start()
+        return self
+
+    def __exit__(self, *exc: object) -> None:
+        self.stop.set()
+        self.thread.join(timeout=5)
+
+
 # --------------------------------------------------------------------------- recovery
 def reap(redeliver_after_seconds: int = 120) -> dict[str, int]:
     """Recover jobs whose worker died and re-deliver queued jobs that were never picked up."""
@@ -492,7 +561,12 @@ def reap(redeliver_after_seconds: int = 120) -> dict[str, int]:
         ).all()
         for job in stale:
             started = job.started_at or job.created_at
-            if (t - started).total_seconds() > job.timeout_seconds:
+            if job.cancel_requested:
+                job.status = JobStatus.cancelled
+                job.message = "cancelled (worker stopped before observing the request)"
+                job.finished_at = t
+                stats["cancelled"] = stats.get("cancelled", 0) + 1
+            elif (t - started).total_seconds() > job.timeout_seconds:
                 job.status = JobStatus.timed_out
                 job.message = "exceeded timeout (worker unresponsive)"
                 job.finished_at = t
@@ -519,13 +593,28 @@ def reap(redeliver_after_seconds: int = 120) -> dict[str, int]:
             if job.status == JobStatus.queued:
                 enqueue(job)
         cutoff = t - timedelta(seconds=redeliver_after_seconds)
+        orphaned = db.scalars(
+            select(Job)
+            .where(Job.status == JobStatus.queued, Job.cancel_requested.is_(True))
+            .with_for_update(skip_locked=True)
+        ).all()
+        for job in orphaned:  # cancel requested but never observed by a worker
+            job.status = JobStatus.cancelled
+            job.message = "cancelled"
+            job.finished_at = t
+            _mirror_status(db, job, JobStatus.cancelled)
+        if orphaned:
+            stats["cancelled"] = stats.get("cancelled", 0) + len(orphaned)
+            db.commit()
         waiting = db.scalars(
             select(Job)
             .where(
                 Job.status == JobStatus.queued,
+                Job.cancel_requested.is_(False),
                 Job.created_at < cutoff,
                 or_(Job.heartbeat_at.is_(None), Job.heartbeat_at < cutoff),
             )
+            .order_by(Job.created_at)
             .limit(500)
         ).all()
         for job in waiting:

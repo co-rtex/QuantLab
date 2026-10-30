@@ -4,9 +4,12 @@ from __future__ import annotations
 
 import uuid
 from datetime import date, datetime
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator
+
+MIN_DATE, MAX_DATE = date(1900, 1, 1), date(2200, 12, 31)
+BoundedDate = Annotated[date, Field(ge=MIN_DATE, le=MAX_DATE)]
 
 
 class ORM(BaseModel):
@@ -85,8 +88,8 @@ class SyntheticDatasetIn(BaseModel):
     name: str = Field(min_length=1, max_length=120)
     description: str = Field("", max_length=2000)
     n_assets: int = Field(50, ge=2, le=2000)
-    start: date = date(2018, 1, 2)
-    end: date = date(2023, 12, 29)
+    start: BoundedDate = date(2018, 1, 2)
+    end: BoundedDate = date(2023, 12, 29)
     seed: int = Field(7, ge=0, le=2**31 - 1)
 
 
@@ -170,6 +173,21 @@ class ExperimentIn(BaseModel):
     notes: str = Field("", max_length=5000)
 
 
+INTERNAL_PAYLOAD_KEYS = {"staged_dir", "files"}
+# Exceptions whose messages are written by QuantLab for users (never raw driver errors).
+SAFE_ERROR_TYPES = {
+    "PermanentJobError",
+    "BacktestError",
+    "ValidationError",
+    "ValueError",
+    "OptimizationError",
+    "InfeasibleConstraints",
+    "JobTimeoutError",
+    "LeaseExpired",
+    "LedgerError",
+}
+
+
 class JobOut(ORM):
     id: uuid.UUID
     kind: str
@@ -184,6 +202,28 @@ class JobOut(ORM):
     started_at: datetime | None
     finished_at: datetime | None
     payload: dict[str, Any]
+
+    @field_validator("error")
+    @classmethod
+    def _public_error(cls, v: dict[str, Any] | None) -> dict[str, Any] | None:
+        """Tracebacks and raw exception detail stay in server logs."""
+        if v is None:
+            return None
+        kind = v.get("type")
+        message = (
+            str(v.get("message", ""))[:300]
+            if kind in SAFE_ERROR_TYPES
+            else (
+                "Internal error while running the job; operators can find details in the "
+                "server logs by job id."
+            )
+        )
+        return {"type": kind, "message": message, "retryable": v.get("retryable")}
+
+    @field_validator("payload")
+    @classmethod
+    def _public_payload(cls, v: dict[str, Any]) -> dict[str, Any]:
+        return {k: val for k, val in v.items() if k not in INTERNAL_PAYLOAD_KEYS}
 
 
 class ExperimentOut(ORM):

@@ -7,6 +7,7 @@ from typing import Any
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
+from sqlalchemy.exc import IntegrityError
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from quantlab_api.observability import log
@@ -57,6 +58,20 @@ def install_error_handlers(app: FastAPI) -> None:
     async def _http(request: Request, exc: StarletteHTTPException) -> JSONResponse:
         code = {404: "not_found", 405: "method_not_allowed"}.get(exc.status_code, "http_error")
         return JSONResponse(_body(request, code, str(exc.detail)), status_code=exc.status_code)
+
+    @app.exception_handler(IntegrityError)
+    async def _integrity(request: Request, exc: IntegrityError) -> JSONResponse:
+        # Unique-constraint races between concurrent requests (same idempotency key, slug
+        # or ledger sequence). The losing request can simply be retried.
+        log.info("integrity_conflict", path=request.url.path)
+        return JSONResponse(
+            _body(
+                request,
+                "conflict",
+                "A concurrent request changed the same resource; retry the request.",
+            ),
+            status_code=409,
+        )
 
     @app.exception_handler(Exception)
     async def _unhandled(request: Request, exc: Exception) -> JSONResponse:

@@ -3,7 +3,6 @@ from __future__ import annotations
 import hashlib
 import json
 import uuid
-from datetime import date
 from typing import Any
 
 import numpy as np
@@ -30,6 +29,7 @@ from quantlab_api.models import (
 from quantlab_api.routes.datasets import load_version
 from quantlab_api.routes.strategies import validate_strategy
 from quantlab_api.schemas import (
+    BoundedDate,
     CompareIn,
     ExperimentIn,
     ExperimentOut,
@@ -337,7 +337,7 @@ def trades(
 
 @router.get("/experiments/{experiment_id}/positions")
 def positions(
-    experiment_id: uuid.UUID, user: CurrentUser, db: DB, on: date | None = None
+    experiment_id: uuid.UUID, user: CurrentUser, db: DB, on: BoundedDate | None = None
 ) -> dict[str, Any]:
     exp = load_experiment(db, user, experiment_id)
     _require_result(db, exp)

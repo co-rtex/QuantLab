@@ -62,6 +62,9 @@ class BacktestConfig(BaseModel):
 
     @model_validator(mode="after")
     def _dates(self) -> BacktestConfig:
+        for d in (self.start, self.end):
+            if d is not None and not date(1900, 1, 1) <= d <= date(2200, 12, 31):
+                raise ValueError("dates must be between 1900-01-01 and 2200-12-31")
         if self.start and self.end and self.start >= self.end:
             raise ValueError("start must be before end")
         return self

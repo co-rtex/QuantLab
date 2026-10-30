@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import uuid
-from datetime import date
 from typing import Any, Literal
 
 import numpy as np
@@ -28,6 +27,7 @@ from quantlab.portfolio.valuation import Entry, summary, time_weighted_returns, 
 from quantlab_api.errors import ApiError
 from quantlab_api.models import Instrument, Portfolio, PortfolioTransaction, Role
 from quantlab_api.routes.datasets import load_version
+from quantlab_api.schemas import BoundedDate
 from quantlab_api.security import DB, CurrentUser, audit, require_workspace
 from quantlab_api.tasks import dataset_store
 
@@ -39,11 +39,11 @@ class PortfolioIn(BaseModel):
     dataset_version_id: uuid.UUID
     benchmark: str | None = Field(None, max_length=32)
     initial_deposit: float = Field(gt=0, le=1e12)
-    start_date: date
+    start_date: BoundedDate
 
 
 class TransactionIn(BaseModel):
-    trade_date: date
+    trade_date: BoundedDate
     kind: Literal["deposit", "withdrawal", "buy", "sell"]
     symbol: str | None = Field(None, max_length=32)
     quantity: float = Field(0.0, ge=0, le=1e12)
@@ -206,6 +206,10 @@ def add_transaction(
     """Append a transaction. The whole ledger is replayed first; rejected entries are not
     stored, so the ledger can never reach an impossible state."""
     p = _load(db, user, portfolio_id, Role.editor)
+    # Serialize appends per portfolio: the replay must see the latest ledger, and the
+    # next sequence number must be unique.
+    db.execute(select(Portfolio.id).where(Portfolio.id == p.id).with_for_update())
+    db.refresh(p, ["transactions"])
     seq = (max((t.seq for t in p.transactions), default=0)) + 1
     t = PortfolioTransaction(
         portfolio_id=p.id,

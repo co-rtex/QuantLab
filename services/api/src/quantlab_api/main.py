@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hmac
+import os
 from typing import Any
 
 from fastapi import APIRouter, FastAPI
@@ -125,6 +126,13 @@ def create_app() -> FastAPI:
             given = request.headers.get("authorization", "").removeprefix("Bearer ").strip()
             if not expected or not hmac.compare_digest(given, expected):
                 return Response(status_code=401)
+        if os.environ.get("PROMETHEUS_MULTIPROC_DIR"):
+            # Several API processes: aggregate every process's samples per scrape.
+            from prometheus_client import CollectorRegistry, multiprocess
+
+            registry = CollectorRegistry()
+            multiprocess.MultiProcessCollector(registry)  # type: ignore[no-untyped-call]
+            return Response(generate_latest(registry), media_type=CONTENT_TYPE_LATEST)
         return Response(generate_latest(), media_type=CONTENT_TYPE_LATEST)
 
     return app

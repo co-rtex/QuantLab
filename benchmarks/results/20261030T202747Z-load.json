@@ -1,0 +1,116 @@
+{
+  "experiments_list": [
+    {
+      "concurrency": 1,
+      "requests": 200,
+      "errors": 0,
+      "throughput_rps": 288.9,
+      "p50_ms": 3.18,
+      "p95_ms": 4.36,
+      "p99_ms": 5.3
+    },
+    {
+      "concurrency": 8,
+      "requests": 200,
+      "errors": 0,
+      "throughput_rps": 429.8,
+      "p50_ms": 17.33,
+      "p95_ms": 26.11,
+      "p99_ms": 34.77
+    },
+    {
+      "concurrency": 32,
+      "requests": 640,
+      "errors": 0,
+      "throughput_rps": 313.4,
+      "p50_ms": 79.13,
+      "p95_ms": 242.01,
+      "p99_ms": 305.42
+    },
+    {
+      "concurrency": 64,
+      "requests": 1280,
+      "errors": 0,
+      "throughput_rps": 193.6,
+      "p50_ms": 208.16,
+      "p95_ms": 1032.38,
+      "p99_ms": 1669.69
+    }
+  ],
+  "bars_cached_adjusted": [
+    {
+      "concurrency": 1,
+      "requests": 200,
+      "errors": 0,
+      "throughput_rps": 196.7,
+      "p50_ms": 4.8,
+      "p95_ms": 6.65,
+      "p99_ms": 8.06
+    },
+    {
+      "concurrency": 8,
+      "requests": 200,
+      "errors": 0,
+      "throughput_rps": 274.3,
+      "p50_ms": 28.34,
+      "p95_ms": 38.44,
+      "p99_ms": 41.62
+    },
+    {
+      "concurrency": 32,
+      "requests": 640,
+      "errors": 0,
+      "throughput_rps": 245.0,
+      "p50_ms": 120.87,
+      "p95_ms": 205.94,
+      "p99_ms": 236.8
+    },
+    {
+      "concurrency": 64,
+      "requests": 1280,
+      "errors": 0,
+      "throughput_rps": 247.9,
+      "p50_ms": 244.82,
+      "p95_ms": 400.87,
+      "p99_ms": 504.44
+    }
+  ],
+  "health": [
+    {
+      "concurrency": 1,
+      "requests": 200,
+      "errors": 0,
+      "throughput_rps": 882.5,
+      "p50_ms": 1.05,
+      "p95_ms": 1.2,
+      "p99_ms": 2.52
+    },
+    {
+      "concurrency": 8,
+      "requests": 200,
+      "errors": 0,
+      "throughput_rps": 1046.4,
+      "p50_ms": 5.83,
+      "p95_ms": 14.59,
+      "p99_ms": 18.31
+    },
+    {
+      "concurrency": 32,
+      "requests": 640,
+      "errors": 0,
+      "throughput_rps": 366.5,
+      "p50_ms": 52.43,
+      "p95_ms": 225.53,
+      "p99_ms": 348.75
+    },
+    {
+      "concurrency": 64,
+      "requests": 1280,
+      "errors": 0,
+      "throughput_rps": 221.0,
+      "p50_ms": 167.55,
+      "p95_ms": 942.22,
+      "p99_ms": 1427.26
+    }
+  ]
+}

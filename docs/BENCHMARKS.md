@@ -85,7 +85,45 @@ versions must be immutable files that DuckDB can also scan for analytics.
 Target: lightweight reads p95 under 300 ms (warm under 100 ms). Measured: under 8 ms.
 These numbers come from sequential requests; concurrent load testing is not yet done.
 
+## Concurrent HTTP load (containerized stack, 4 uvicorn workers)
+
+`benchmarks/load_and_scaling.py load`, run from inside the API container so Docker
+Desktop's port forwarding is not measured. Each level sends max(200, 20 × concurrency)
+requests. There were no errors at any level.
+
+| Endpoint | Concurrency | Throughput | p50 | p95 |
+|---|---|---|---|---|
+| experiments list (auth + DB) | 1 | 329 req/s | 2.4 ms | 5.3 ms |
+| | 8 | 778 req/s | 7.1 ms | 23.5 ms |
+| | 32 | 453 req/s | 46.9 ms | 191 ms |
+| | 64 | 271 req/s | 162 ms | 658 ms |
+| bars, adjusted, Redis hit | 8 | 635 req/s | 6.7 ms | 27.5 ms |
+| | 32 | 459 req/s | 43.9 ms | 163 ms |
+| health | 8 | 1,538 req/s | 4.8 ms | 6.0 ms |
+| | 64 | 319 req/s | 137 ms | 582 ms |
+
+Lightweight reads meet the p95 < 300 ms target up to 32 concurrent clients. Beyond that,
+even `/health`, which does no work, slows down. That is the signature of the single
+Python load-generator process competing with the API for the same 8-CPU Docker VM, so
+these figures understate the API's capacity. A load generator on separate hardware is
+needed to find the true ceiling. Running 4 uvicorn workers required Prometheus
+multiprocess mode, which compose now configures.
+
+## Worker scaling (24 momentum backtests, 200 assets, 2018–2023)
+
+`benchmarks/load_and_scaling.py scaling --workers 1 2 4 --jobs 24` scales the compose
+`worker` service. Wall time runs from the first submission to the last completion.
+
+| Worker containers | Wall time | Throughput | Speedup |
+|---|---|---|---|
+| 1 | 18.4 s | 78 jobs/min | 1.00× |
+| 2 | 14.6 s | 99 jobs/min | 1.26× |
+| 4 | 11.5 s | 126 jobs/min | 1.61× |
+
+All 24 jobs completed in each configuration. Scaling is sublinear because the workers,
+API, PostgreSQL and Redis share one 8-CPU VM, and each job loads the dataset from Parquet
+before simulating (about 0.4 s of the roughly 0.75 s per job).
+
 ## Not yet measured
-Concurrent load (many clients), RQ worker scaling across containers, the 10M-observation
-`xl` profile (2,000 assets × 20 years; the harness supports `--profile xl`), and
-failure-recovery timing.
+The 10M-observation `xl` profile (the harness supports `--profile xl`), load from a
+dedicated generator host, and failure-recovery timing.

@@ -39,6 +39,7 @@ class Settings(BaseSettings):
     # When set, /metrics requires "Authorization: Bearer <token>" (scrapers only).
     metrics_token: SecretStr | None = None
     max_synthetic_rows: int = Field(5_000_000, ge=1000)
+    max_active_jobs_per_workspace: int = Field(50, ge=1)
 
     @field_validator("metrics_token", "anthropic_api_key", mode="before")
     @classmethod

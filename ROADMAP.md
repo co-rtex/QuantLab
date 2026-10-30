@@ -24,8 +24,8 @@ Dependency-ordered. ✅ done and verified · 🔶 partial · ⬜ not started.
 | 8 | Report export (HTML/Markdown) | ✅ |
 | 9 | OpenTelemetry tracing (request → job, verified in Jaeger), Prometheus/Grafana dashboard, runbook | ✅ |
 | 9 | Terraform for a cloud deployment (validated, not applied) | ⬜ |
-| 9 | Benchmarks harness and BENCHMARKS.md measurements | ✅ (load testing and worker scaling pending) |
+| 9 | Benchmarks harness: engine, retrieval, cache, API, concurrent load, worker scaling | ✅ |
 | 10 | Case study: momentum vs passive after costs, out of sample (docs/CASE_STUDY.md) | ✅ |
 | 10 | Fresh-context financial-core review (10 findings, fixed with regression tests) | ✅ |
 | 10 | Accessibility: axe WCAG 2.1 AA audit in E2E, zero violations on 11 pages | ✅ |
-| 10 | Architecture review of the service layer | ⬜ |
+| 10 | Independent service-layer review (9 findings fixed with regression tests) | ✅ |

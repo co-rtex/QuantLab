@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import uuid
 from dataclasses import asdict
-from datetime import date
 from pathlib import Path
 from typing import Annotated
 
@@ -17,6 +16,7 @@ from quantlab_api.marketdata import bars_payload
 from quantlab_api.models import Dataset, DatasetVersion, Instrument, Role, User, WorkspaceMember
 from quantlab_api.schemas import (
     BarsOut,
+    BoundedDate,
     DatasetOut,
     DatasetVersionDetail,
     DatasetVersionOut,
@@ -188,8 +188,8 @@ def bars(
     symbol: str,
     user: CurrentUser,
     db: DB,
-    start: date | None = None,
-    end: date | None = None,
+    start: BoundedDate | None = None,
+    end: BoundedDate | None = None,
     adjusted: bool = False,
 ) -> BarsOut:
     dv, _ = load_version(db, user, version_id)

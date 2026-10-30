@@ -39,8 +39,10 @@ services:
 
   api:
     build: { context: ., dockerfile: services/api/Dockerfile }
-    environment: *app-env
-    command: ["sh", "-c", "alembic -c services/api/alembic.ini upgrade head && uvicorn quantlab_api.main:app --host 0.0.0.0 --port 8000 --proxy-headers"]
+    environment:
+      <<: *app-env
+      PROMETHEUS_MULTIPROC_DIR: /tmp/prometheus
+    command: ["sh", "-c", "alembic -c services/api/alembic.ini upgrade head && rm -rf \"$$PROMETHEUS_MULTIPROC_DIR\" && mkdir -p \"$$PROMETHEUS_MULTIPROC_DIR\" && uvicorn quantlab_api.main:app --host 0.0.0.0 --port 8000 --proxy-headers --workers ${QUANTLAB_API_WORKERS:-4}"]
     ports: ["127.0.0.1:8000:8000"]
     volumes: [appdata:/data]
     depends_on:

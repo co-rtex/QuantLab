@@ -23,7 +23,7 @@ run as a background job and rendered in the experiment page. Playwright 12/12 (i
 `main`, pushed to `origin` (github.com/co-rtex/QuantLab). See `git log`.
 
 ## Tests last executed (2026-10-30)
-* Python: 117 tests (unit, property-based, golden, research, integration, security,
+* Python: 151 tests (unit, property-based, golden, research, integration, security,
   migrations, failure injection) passing.
 * Web: `eslint`, `tsc --noEmit`, `next build` passing; Playwright 12/12 (incl. axe accessibility audit), also verified against the
   containerized stack from `make app-up` against a local
@@ -32,9 +32,9 @@ run as a background job and rendered in the experiment page. Playwright 12/12 (i
 * Lint: ruff clean; mypy --strict clean.
 
 ## In progress / immediate next steps
-1. Terraform (validated, not applied); concurrent load testing; RQ worker scaling benchmark.
+1. Terraform (validated, not applied).
 2. Interactive optimizer UI (domain allocators exist).
-3. Fresh-context review of the service layer (API, jobs, security).
+3. Interactive optimizer UI; `xl` (10M row) benchmark profile.
 4. Portfolio workspace (manual ledger + valuation), optimization/stress UI.
 
 ## Known blockers

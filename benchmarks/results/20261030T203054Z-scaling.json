@@ -1,0 +1,30 @@
+{
+  "assets": 200,
+  "sessions_traded": "2018-2023",
+  "results": [
+    {
+      "workers": 1,
+      "jobs": 24,
+      "completed": 24,
+      "wall_s": 18.44,
+      "jobs_per_min": 78.1,
+      "speedup": 1.0
+    },
+    {
+      "workers": 2,
+      "jobs": 24,
+      "completed": 24,
+      "wall_s": 14.61,
+      "jobs_per_min": 98.5,
+      "speedup": 1.26
+    },
+    {
+      "workers": 4,
+      "jobs": 24,
+      "completed": 24,
+      "wall_s": 11.45,
+      "jobs_per_min": 125.7,
+      "speedup": 1.61
+    }
+  ]
+}

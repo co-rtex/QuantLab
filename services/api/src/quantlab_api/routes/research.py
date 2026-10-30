@@ -65,6 +65,14 @@ def start_validation(
     )
     if run is not None and run.status in (JobStatus.queued, JobStatus.running, JobStatus.completed):
         return _run_out(db, run)
+    if run is not None and idempotency_key:
+        prior = db.scalar(
+            select(Job).where(
+                Job.workspace_id == exp.workspace_id, Job.idempotency_key == idempotency_key
+            )
+        )
+        if prior is not None:  # same request replayed: report what happened, rerun nothing
+            return _run_out(db, run)
     if run is None:
         run = ResearchRun(experiment_id=exp.id, kind=SUITE, params=params, params_hash=phash)
         db.add(run)

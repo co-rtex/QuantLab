@@ -105,6 +105,16 @@ def add_member(
         m = WorkspaceMember(workspace_id=workspace_id, user_id=target.id, role=Role(body.role))
         db.add(m)
     else:
+        if m.role == Role.owner and body.role != "owner":
+            owners = db.scalar(
+                select(func.count())
+                .select_from(WorkspaceMember)
+                .where(
+                    WorkspaceMember.workspace_id == workspace_id, WorkspaceMember.role == Role.owner
+                )
+            )
+            if (owners or 0) <= 1:
+                raise ApiError(409, "last_owner", "A workspace needs at least one owner")
         m.role = Role(body.role)
     audit(
         db,
