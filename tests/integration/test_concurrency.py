@@ -141,6 +141,109 @@ def test_two_owners_demoting_or_removing_each_other_leave_one_owner(client):
             assert _owner_count(ws) == 1, (action, codes)
 
 
+
+def test_user_job_quota_spans_workspaces_and_replays_do_not_consume_it(client, monkeypatch):
+    """One account cannot multiply its job allowance by creating workspaces."""
+    from quantlab_api.config import get_settings
+
+    h = register(client)
+    ws1 = workspace_id(client, h)
+    created = client.post("/api/v1/workspaces", headers=h, json={"name": "Second"})
+    assert created.status_code == 201, created.text
+    ws2 = created.json()["id"]
+    monkeypatch.setattr(get_settings(), "max_active_jobs_per_user", 2)
+
+    first = client.post(
+        f"/api/v1/workspaces/{ws1}/datasets/synthetic",
+        headers={**h, "Idempotency-Key": "user-quota-replay"},
+        json={**SYNTH, "slug": "user-cap-a"},
+    )
+    second = client.post(
+        f"/api/v1/workspaces/{ws2}/datasets/synthetic",
+        headers=h,
+        json={**SYNTH, "slug": "user-cap-b"},
+    )
+    assert first.status_code == second.status_code == 202
+    replay = client.post(
+        f"/api/v1/workspaces/{ws1}/datasets/synthetic",
+        headers={**h, "Idempotency-Key": "user-quota-replay"},
+        json={**SYNTH, "slug": "user-cap-a"},
+    )
+    assert replay.status_code == 202, replay.text
+    assert replay.json()["id"] == first.json()["id"]
+    full = client.post(
+        f"/api/v1/workspaces/{ws2}/datasets/synthetic",
+        headers=h,
+        json={**SYNTH, "slug": "user-cap-c"},
+    )
+    assert full.status_code == 429, full.text
+    assert full.json()["error"]["code"] == "too_many_jobs"
+
+    # Cancellation and other accounts should not remain blocked by the user's quota.
+    assert (
+        client.post(f"/api/v1/jobs/{first.json()['id']}/cancel", headers=h).status_code
+        == 200
+    )
+    resumed = client.post(
+        f"/api/v1/workspaces/{ws2}/datasets/synthetic",
+        headers=h,
+        json={**SYNTH, "slug": "user-cap-c"},
+    )
+    assert resumed.status_code == 202, resumed.text
+    other = register(client, "quota-other@example.com")
+    other_ws = workspace_id(client, other)
+    assert (
+        client.post(
+            f"/api/v1/workspaces/{other_ws}/datasets/synthetic",
+            headers=other,
+            json={**SYNTH, "slug": "user-cap-other"},
+        ).status_code
+        == 202
+    )
+
+
+def test_concurrent_user_quota_is_atomic_across_workspaces(client, monkeypatch):
+    """Two parallel requests to different workspaces must share one account budget."""
+    from quantlab_api.config import get_settings
+
+    h = register(client)
+    ws1 = workspace_id(client, h)
+    created = client.post("/api/v1/workspaces", headers=h, json={"name": "Second"})
+    assert created.status_code == 201
+    ws2 = created.json()["id"]
+    monkeypatch.setattr(get_settings(), "max_active_jobs_per_user", 1)
+
+    responses = _race(
+        2,
+        lambda c, i: c.post(
+            f"/api/v1/workspaces/{(ws1, ws2)[i]}/datasets/synthetic",
+            headers=h,
+            json={**SYNTH, "slug": f"account-race-{i}"},
+        ),
+    )
+    assert Counter(r.status_code for r in responses) == {202: 1, 429: 1}, [
+        r.text for r in responses
+    ]
+
+
+def test_concurrent_workspace_creation_enforces_per_user_quota(client, monkeypatch):
+    from quantlab_api.config import get_settings
+
+    h = register(client)
+    monkeypatch.setattr(get_settings(), "max_workspaces_per_user", 2)
+    responses = _race(
+        2,
+        lambda c, i: c.post(
+            "/api/v1/workspaces", headers=h, json={"name": f"Extra {i}"}
+        ),
+    )
+    assert Counter(r.status_code for r in responses) == {201: 1, 429: 1}, [
+        r.text for r in responses
+    ]
+    assert len(client.get("/api/v1/workspaces", headers=h).json()) == 2
+
+
+
 def test_huge_offsets_are_rejected_not_500(client):
     h = register(client)
     ws = workspace_id(client, h)
