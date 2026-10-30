@@ -151,22 +151,38 @@ def submit_job(
 ) -> tuple[Job, bool]:
     """Create (or return the existing idempotent) job. Commits the session."""
     s = get_settings()
-    if idempotency_key:
+
+    def replay() -> Job | None:
+        if not idempotency_key:
+            return None
         existing = db.scalar(
             select(Job).where(
                 Job.workspace_id == workspace_id, Job.idempotency_key == idempotency_key
             )
         )
-        if existing is not None:
-            if payload_hash(existing.kind, existing.payload) != payload_hash(kind, payload):
-                raise ApiError(
-                    409,
-                    "idempotency_conflict",
-                    "Idempotency-Key was already used with a different request",
-                )
-            return existing, False
+        if existing is not None and payload_hash(existing.kind, existing.payload) != (
+            payload_hash(kind, payload)
+        ):
+            raise ApiError(
+                409,
+                "idempotency_conflict",
+                "Idempotency-Key was already used with a different request",
+            )
+        return existing
+
+    if (existing := replay()) is not None:
+        return existing, False
     # Lock the workspace row so concurrent submissions cannot all pass the cap check.
-    db.execute(select(Workspace.id).where(Workspace.id == workspace_id).with_for_update())
+    # NO KEY UPDATE, not UPDATE: callers have usually inserted rows referencing the
+    # workspace already (audit event, experiment), and each such foreign-key check holds
+    # KEY SHARE on it. FOR UPDATE conflicts with KEY SHARE, so two concurrent submissions
+    # deadlocked and one returned 500; NO KEY UPDATE still serializes submissions.
+    db.execute(
+        select(Workspace.id).where(Workspace.id == workspace_id).with_for_update(key_share=True)
+    )
+    # A concurrent request with the same key may have committed while we waited.
+    if (existing := replay()) is not None:
+        return existing, False
     active = (
         db.scalar(
             select(func.count())
@@ -642,6 +658,10 @@ def reap(redeliver_after_seconds: int = 120) -> dict[str, int]:
         for job in waiting:
             if enqueue(job):
                 stats["redelivered"] += 1
+                # Record the delivery so the next cycle leaves it alone until the cutoff
+                # passes again; without this every 15 s cycle re-enqueued the whole backlog.
+                job.heartbeat_at = t
+        db.commit()
     stats["uploads_swept"] = sweep_uploads()
     if any(stats.values()):
         log.info("reaper_cycle", **stats)

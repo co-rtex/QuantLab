@@ -8,6 +8,7 @@ from quantlab.assistant.evals import (
     FaithfulProvider,
     HallucinatingProvider,
     MalformedProvider,
+    MisattributingProvider,
     evaluate,
 )
 from quantlab.assistant.grounding import Fact, build_facts, deterministic_answer, verify_answer
@@ -54,7 +55,14 @@ def test_deterministic_engine_passes_full_eval(facts):
 
 
 @pytest.mark.parametrize(
-    "provider", [HallucinatingProvider(), AdviceProvider(), MalformedProvider(), FailingProvider()]
+    "provider",
+    [
+        HallucinatingProvider(),
+        MisattributingProvider(),
+        AdviceProvider(),
+        MalformedProvider(),
+        FailingProvider(),
+    ],
 )
 def test_misbehaving_providers_never_reach_the_user(facts, provider):
     out = evaluate(facts, provider)
@@ -103,6 +111,23 @@ def test_verifier_flags_invented_numbers_and_unknown_citations():
     assert bad["unknown_citations"] == ["F9"]
     # dates and ordinal references are not numeric claims
     assert verify_answer("Drawdown #1 began 2021-03-04 [F2] at 28.34% [F2]", f)["grounded"]
+
+
+def test_verifier_binds_numbers_to_cited_facts_and_their_sign():
+    """A number used to be accepted if its magnitude matched *any* fact: an answer turning
+    a 28.3% drawdown into "gained 28.3%", cited to the Sharpe fact, was shown as verified."""
+    f = [
+        Fact("F1", "sharpe", "Sharpe", 0.4567, "ratio", "s"),
+        Fact("F2", "dd", "Max drawdown", -0.2834, "pct", "d"),
+        Fact("F3", "tr", "Total return", 0.1520, "pct", "t"),
+    ]
+    assert not verify_answer("The strategy gained 28.3% in total [F1].", f)["grounded"]
+    assert not verify_answer("The strategy gained 28.3% in total [F2].", f)["grounded"]
+    assert not verify_answer("It returned -15.2% [F3].", f)["grounded"]
+    # Legitimate phrasings still pass.
+    assert verify_answer("It gained 15.2% [F3] with a 28.3% drawdown [F2].", f)["grounded"]
+    assert verify_answer("The worst drawdown was 28.3% [F2]. Sharpe was 0.46 [F1].", f)["grounded"]
+    assert verify_answer("Drawdown of -28.3% [F2]", f)["grounded"]
 
 
 def test_unknown_and_missing_topics(facts):

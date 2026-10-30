@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import hashlib
+import ipaddress
 import os
+import socket
 import time
 import uuid
 from datetime import UTC, datetime, timedelta
@@ -51,7 +53,7 @@ def create_access_token(user: User) -> tuple[str, datetime]:
         "iss": "quantlab",
         "jti": uuid.uuid4().hex,
     }
-    token = jwt.encode(payload, s.jwt_secret.get_secret_value(), algorithm=s.jwt_algorithm)
+    token = jwt.encode(payload, s.signing_key, algorithm=s.jwt_algorithm)
     return token, exp
 
 
@@ -60,7 +62,7 @@ def decode_token(token: str) -> dict[str, Any]:
     try:
         return jwt.decode(
             token,
-            s.jwt_secret.get_secret_value(),
+            s.signing_key,
             algorithms=[s.jwt_algorithm],
             issuer="quantlab",
             options={"require": ["exp", "sub", "iss"]},
@@ -116,6 +118,63 @@ def require_workspace(
     return ws, role
 
 
+_proxy_cache: tuple[float, tuple[str, ...], list[Any]] = (0.0, (), [])
+
+
+def _trusted_networks() -> list[Any]:
+    """Resolve ``trusted_proxies`` (IPs, CIDRs, hostnames) to networks, cached for 30 s
+    because container addresses change when a service is recreated."""
+    global _proxy_cache
+    entries = tuple(get_settings().trusted_proxies)
+    at, cached_for, nets = _proxy_cache
+    if cached_for == entries and time.monotonic() - at < 30:
+        return nets
+    nets = []
+    for entry in entries:
+        try:
+            nets.append(ipaddress.ip_network(entry, strict=False))
+            continue
+        except ValueError:
+            pass
+        try:
+            for info in socket.getaddrinfo(entry, None):
+                nets.append(ipaddress.ip_network(info[4][0]))
+        except OSError:
+            continue  # unresolvable now (e.g. not started yet); retried after the TTL
+    _proxy_cache = (time.monotonic(), entries, nets)
+    return nets
+
+
+def _in(nets: list[Any], host: str) -> bool:
+    try:
+        ip = ipaddress.ip_address(host)
+    except ValueError:
+        return False
+    return any(ip in n for n in nets)
+
+
+def client_ip(request: Request) -> str:
+    """The address used for throttling and audit.
+
+    Only a configured proxy may state the client address. Its ``X-Forwarded-For`` is read
+    from the right, skipping further trusted proxies, so entries a client prepended itself
+    are never used. Without this, every browser behind the web tier shares one address and
+    ten failed logins a minute anywhere lock every user out.
+    """
+    peer = request.client.host if request.client else "unknown"
+    nets = _trusted_networks()
+    if not nets or not _in(nets, peer):
+        return peer
+    hops = [h.strip() for h in request.headers.get("x-forwarded-for", "").split(",")]
+    for hop in reversed([h for h in hops if h]):
+        if not _in(nets, hop):
+            try:
+                return str(ipaddress.ip_address(hop))
+            except ValueError:
+                return peer
+    return peer
+
+
 def audit(
     db: Session,
     request: Request | None,
@@ -136,7 +195,7 @@ def audit(
             target_id=str(target_id) if target_id is not None else None,
             details=details,
             request_id=getattr(request.state, "request_id", None) if request else None,
-            ip=request.client.host if request and request.client else None,
+            ip=client_ip(request) if request else None,
         )
     )
 

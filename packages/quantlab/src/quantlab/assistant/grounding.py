@@ -468,23 +468,58 @@ def _candidates(f: Fact) -> list[tuple[float, float]]:
     return [*label_numbers, (v, 0.0051)]
 
 
+# Sentence boundaries: end punctuation followed by space, or a line break. Decimal points
+# ("0.46") are not followed by whitespace, so they never split a sentence.
+_SENTENCE = re.compile(r"(?<=[.!?;])\s+|\n+")
+# Verbs that assert a gain. A number next to one must not be supported only by a negative
+# fact: that is how a drawdown gets restated as a profit.
+_GAIN = re.compile(r"\b(gain(?:ed|s)?|rose|grew|increased|profit(?:ed|s)?|earned)\b", re.I)
+
+
 def verify_answer(text: str, facts: list[Fact]) -> dict[str, Any]:
-    """Check that every number in ``text`` is supported by some fact."""
-    body = _CITE.sub(" ", _DATE.sub(" ", text))
-    body = re.sub(r"#\d+", " ", body)  # ordinal references such as "Drawdown #1"
-    body = re.sub(r"\b\d+(?:\.\d+)?%? (?:bootstrap|confidence)", " ", body)  # "95% bootstrap"
+    """Check that every number in ``text`` is supported by a fact.
+
+    * A sentence that cites facts must take its numbers from those facts, not from any
+      fact in the pool: "gained 39.4% [F6]" is unsupported when F6 is the Sharpe ratio,
+      even though a -39.4% drawdown exists elsewhere.
+    * Prose may state a negative fact's magnitude ("a 28.3% drawdown"), but an explicitly
+      negative number needs a negative fact, and a gain verb needs a non-negative one.
+    """
+    by_id = {f.id: f for f in facts}
     claims, unsupported = [], []
-    pool = [c for f in facts for c in _candidates(f)]
-    for m in _NUM.finditer(body):
-        raw = m.group(1)
-        try:
-            x = float(raw.replace("$", "").replace(",", ""))
-        except ValueError:
-            continue
-        claims.append(raw + (m.group(2) or ""))
-        ok = any(abs(abs(x) - abs(v)) <= tol for v, tol in pool)
-        if not ok:
-            unsupported.append(raw + (m.group(2) or ""))
+    for sentence in _SENTENCE.split(text):
+        cited_here = [by_id[c] for c in re.findall(r"\[(F\d+)\]", sentence) if c in by_id]
+        scope = cited_here or facts
+        pool = [(v, tol, f) for f in scope for v, tol in _candidates(f)]
+        body = _CITE.sub(" ", _DATE.sub(" ", sentence))
+        body = re.sub(r"#\d+", " ", body)  # ordinal references such as "Drawdown #1"
+        body = re.sub(r"\b\d+(?:\.\d+)?%? (?:bootstrap|confidence)", " ", body)  # "95% ..."
+        gain_ends = [g.end() for g in _GAIN.finditer(body)]
+        prev_end = 0
+        for m in _NUM.finditer(body):
+            # A gain verb governs the first number after it ("gained 15.2% with a 28.3%
+            # drawdown" asserts a gain of 15.2% only).
+            gain = any(prev_end <= e <= m.start() for e in gain_ends)
+            prev_end = m.end()
+            raw = m.group(1)
+            try:
+                x = float(raw.replace("$", "").replace(",", ""))
+            except ValueError:
+                continue
+            claims.append(raw + (m.group(2) or ""))
+            ok = False
+            for v, tol, f in pool:
+                if abs(abs(x) - abs(v)) > tol:
+                    continue
+                signed = f.value if isinstance(f.value, (int, float)) else v
+                if x < 0 and signed > 0:
+                    continue  # "-15.2%" for a +15.2% fact
+                if gain and x > 0 and signed < 0 and v not in f.label_numbers:
+                    continue  # "gained 28.3%" for a -28.3% fact
+                ok = True
+                break
+            if not ok:
+                unsupported.append(raw + (m.group(2) or ""))
     cited = set(re.findall(r"\[(F\d+)\]", text))
     known = {f.id for f in facts}
     return {

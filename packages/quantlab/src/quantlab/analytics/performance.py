@@ -30,6 +30,10 @@ import numpy as np
 import pandas as pd
 
 PERIODS_PER_YEAR = 252
+# A per-period standard deviation at or below this is rounding noise, not risk: compounding
+# at a constant rate yields returns that differ by ~1e-16, and dividing by that noise turns
+# an undefined ratio into an arbitrary number. Real daily return series sit far above it.
+ZERO_DISPERSION = 1e-12
 
 
 @dataclass
@@ -169,12 +173,15 @@ def compute_performance(
         sd = float(r.std(ddof=1))
         m.set("volatility", sd * math.sqrt(P))
         sd_ex = float(ex.std(ddof=1))
-        if sd_ex <= 1e-15:
+        if sd_ex <= ZERO_DISPERSION:
             m.set("sharpe", None, "zero volatility of excess returns")
         else:
             m.set("sharpe", ex.mean() / sd_ex * math.sqrt(P))
     downside = float(np.sqrt(np.mean(np.minimum(ex.to_numpy(), 0.0) ** 2)))
-    if downside <= 1e-15:
+    if n < 2:
+        # One return gives -sqrt(P) for any loss: a constant, not a measurement.
+        m.set("sortino", None, "fewer than two returns")
+    elif downside <= ZERO_DISPERSION:
         m.set("sortino", None, "no returns below the risk-free target")
     else:
         m.set("sortino", ex.mean() / downside * math.sqrt(P))
@@ -206,8 +213,19 @@ def compute_performance(
     m.set("best_day", r.max())
     m.set("worst_day", r.min())
     m.set("hit_rate", float((r > 0).mean()))
-    m.set("skewness", float(r.skew()) if n > 2 else None, "fewer than three returns")
-    m.set("excess_kurtosis", float(r.kurt()) if n > 3 else None, "fewer than four returns")
+    flat = n < 2 or float(r.std(ddof=1)) <= ZERO_DISPERSION
+    if n <= 2:
+        m.set("skewness", None, "fewer than three returns")
+    elif flat:
+        m.set("skewness", None, "zero variance of returns")
+    else:
+        m.set("skewness", float(r.skew()))
+    if n <= 3:
+        m.set("excess_kurtosis", None, "fewer than four returns")
+    elif flat:
+        m.set("excess_kurtosis", None, "zero variance of returns")
+    else:
+        m.set("excess_kurtosis", float(r.kurt()))
 
     if benchmark is not None:
         b = benchmark.reindex(e.index).astype(float)
@@ -239,7 +257,7 @@ def compute_performance(
                 sd_r = float(r.std(ddof=1))
                 m.set(
                     "correlation",
-                    float(np.corrcoef(r, rb)[0, 1]) if sd_r > 0 else None,
+                    float(np.corrcoef(r, rb)[0, 1]) if sd_r > ZERO_DISPERSION else None,
                     "portfolio has zero variance",
                 )
             te = float(active.std(ddof=1)) * math.sqrt(P)

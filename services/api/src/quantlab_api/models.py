@@ -239,7 +239,7 @@ class ExperimentResult(Base):
     experiment_id: Mapped[uuid.UUID] = mapped_column(
         ForeignKey("experiments.id", ondelete="CASCADE"), unique=True
     )
-    job_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("jobs.id"))
+    job_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("jobs.id", ondelete="CASCADE"))
     metrics: Mapped[dict[str, Any]] = mapped_column(JSONType)
     summary: Mapped[dict[str, Any]] = mapped_column(JSONType)
     fingerprint: Mapped[str] = mapped_column(String(64))
@@ -263,7 +263,7 @@ class ResearchRun(Base):
         Enum(JobStatus, name="job_status", create_type=False), default=JobStatus.queued
     )
     result: Mapped[dict[str, Any] | None] = mapped_column(JSONType)
-    job_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("jobs.id"))
+    job_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("jobs.id", ondelete="SET NULL"))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 
@@ -337,7 +337,7 @@ class MLRun(Base):
         Enum(JobStatus, name="job_status", create_type=False), default=JobStatus.queued
     )
     result: Mapped[dict[str, Any] | None] = mapped_column(JSONType)
-    job_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("jobs.id"))
+    job_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("jobs.id", ondelete="SET NULL"))
     code_version: Mapped[str] = mapped_column(String(64))
     created_by: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id"))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)

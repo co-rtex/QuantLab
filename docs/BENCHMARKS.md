@@ -65,6 +65,13 @@ scaling across separate containers.
 Target: p95 under 200 ms for one asset over five years. Measured: under 50 ms uncached and
 under 5 ms cached.
 
+**Caveats (2026-10-30 audit).** The "API path" rows call `bars_payload` in-process (no HTTP
+or authentication) with a warm OS page cache: the Parquet file is written just before the
+queries. The "Redis miss" loop sampled symbols *with* replacement, so a repeated symbol was
+already cached: about 35% of "misses" were hits in small, 15% in medium and 9% in large,
+which flatters the miss figures. `run_all.py` now samples without replacement; the table
+predates that fix and will be updated on the next run.
+
 **Optimization applied.** The default PyArrow row group (1M rows) left the large file with
 three row groups, so DuckDB could barely prune. Writing 50k-row groups (rows are sorted by
 symbol) cut single-symbol p50 from 11.9 ms to 3.5 ms (3.4×) for a 66% larger file
@@ -91,23 +98,35 @@ These numbers come from sequential requests; concurrent load testing is not yet 
 Desktop's port forwarding is not measured. Each level sends max(200, 20 × concurrency)
 requests. There were no errors at any level.
 
-| Endpoint | Concurrency | Throughput | p50 | p95 |
+| Endpoint | Concurrency | Throughput (run A / B) | p50 (A / B) | p95 (A / B) |
 |---|---|---|---|---|
-| experiments list (auth + DB) | 1 | 329 req/s | 2.4 ms | 5.3 ms |
-| | 8 | 778 req/s | 7.1 ms | 23.5 ms |
-| | 32 | 453 req/s | 46.9 ms | 191 ms |
-| | 64 | 271 req/s | 162 ms | 658 ms |
-| bars, adjusted, Redis hit | 8 | 635 req/s | 6.7 ms | 27.5 ms |
-| | 32 | 459 req/s | 43.9 ms | 163 ms |
-| health | 8 | 1,538 req/s | 4.8 ms | 6.0 ms |
-| | 64 | 319 req/s | 137 ms | 582 ms |
+| experiments list (auth + DB, empty list) | 1 | 289 / 246 req/s | 3.2 / 3.5 ms | 4 / 6 ms |
+|  | 8 | 430 / 475 req/s | 17.3 / 12.7 ms | 26 / 25 ms |
+|  | 32 | 313 / 282 req/s | 79.1 / 78.1 ms | 242 / 317 ms |
+|  | 64 | 194 / 209 req/s | 208.2 / 175.0 ms | 1032 / 1006 ms |
+| bars, adjusted, Redis hit (one key) | 1 | 197 / 199 req/s | 4.8 / 4.7 ms | 7 / 7 ms |
+|  | 8 | 274 / 475 req/s | 28.3 / 11.8 ms | 38 / 31 ms |
+|  | 32 | 245 / 510 req/s | 120.9 / 59.7 ms | 206 / 117 ms |
+|  | 64 | 248 / 163 req/s | 244.8 / 248.9 ms | 401 / 1172 ms |
+| health | 1 | 882 / 835 req/s | 1.1 / 1.1 ms | 1 / 1 ms |
+|  | 8 | 1,046 / 914 req/s | 5.8 / 6.9 ms | 15 / 18 ms |
+|  | 32 | 366 / 366 req/s | 52.4 / 55.8 ms | 226 / 228 ms |
+|  | 64 | 221 / 228 req/s | 167.6 / 134.2 ms | 942 / 928 ms |
 
-Lightweight reads meet the p95 < 300 ms target up to 32 concurrent clients. Beyond that,
-even `/health`, which does no work, slows down. That is the signature of the single
-Python load-generator process competing with the API for the same 8-CPU Docker VM, so
-these figures understate the API's capacity. A load generator on separate hardware is
-needed to find the true ceiling. Running 4 uvicorn workers required Prometheus
-multiprocess mode, which compose now configures.
+Runs A and B are `benchmarks/results/20261030T202747Z-load.json` and
+`20261030T202903Z-load.json`, the only committed load results. (An earlier version of this
+table quoted higher figures that no committed result supports; it was regenerated from the
+JSON files during the 2026-10-30 audit.) The two runs differ by up to 2x at the same
+level, so treat single figures as indicative only.
+
+**What this does and does not show.** At 32 concurrent clients the experiments list met
+the p95 < 300 ms target in run A (242 ms) and missed it in run B (317 ms). The
+"experiments list" requests come from a freshly registered user with no experiments, and
+the bars case re-reads a single pre-warmed key, so neither exercises realistic payloads,
+uncached reads, writes or job submission. Beyond 32 clients even `/health`, which does no
+work, slows down. That is the signature of the single Python load-generator process
+competing with the API for the same 8-CPU Docker VM, so these figures say little about the
+API's capacity.
 
 ## Worker scaling (24 momentum backtests, 200 assets, 2018–2023)
 

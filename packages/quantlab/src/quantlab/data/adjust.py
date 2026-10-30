@@ -26,13 +26,22 @@ from quantlab.data.schema import wide
 def event_matrices(
     close_wide: pd.DataFrame, actions: pd.DataFrame
 ) -> tuple[np.ndarray, np.ndarray]:
-    """Return (split_ratio, dividend) matrices aligned with ``close_wide``."""
+    """Return (split_ratio, dividend) matrices aligned with ``close_wide``.
+
+    An action whose ex-date is not a row of ``close_wide`` (a non-session date, or a date
+    outside a filtered universe's sessions) takes effect at the first row on or after its
+    ex-date: nothing trades in between, so the holders and the price discontinuity are the
+    same. Dropping it instead would book a split as a loss. Actions before the first row or
+    after the last one are outside the history and ignored.
+    """
     T, n = close_wide.shape
     splits = np.ones((T, n))
     divs = np.zeros((T, n))
-    if len(actions) == 0:
+    if len(actions) == 0 or T == 0:
         return splits, divs
-    row = close_wide.index.get_indexer(actions["ex_date"])
+    ex = pd.DatetimeIndex(actions["ex_date"])
+    row = close_wide.index.searchsorted(ex, side="left")
+    row = np.where((ex < close_wide.index[0]) | (row >= T), -1, row)
     col = close_wide.columns.get_indexer(actions["symbol"])
     ok = (row >= 0) & (col >= 0)
     for r, c, kind, v in zip(
@@ -55,7 +64,9 @@ class PointInTimeAdjuster:
     def __init__(self, close_wide: pd.DataFrame, actions: pd.DataFrame) -> None:
         self.index = close_wide.index
         self.columns = close_wide.columns
-        close = close_wide.to_numpy(dtype=float)
+        # On an event row where the symbol printed no bar, the last known close stands in for
+        # the ex-date close (still point-in-time); without it the factor would be lost.
+        close = close_wide.ffill().to_numpy(dtype=float)
         self.splits, self.dividends = event_matrices(close_wide, actions)
         with np.errstate(invalid="ignore", divide="ignore"):
             f = close / (self.splits * close + self.dividends)

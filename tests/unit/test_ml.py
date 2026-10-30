@@ -83,3 +83,36 @@ def test_metrics_reference_values():
     flat = _metrics(test, np.full(len(test), 0.5))
     assert flat["auc"] is None  # undefined for a constant score, not 0.5
     assert flat["ic_mean"] is None
+
+
+def test_assets_delisting_within_the_horizon_stay_in_the_panel(market):
+    """Whether an asset is in the panel at t must not depend on whether it survives to t+h:
+    dropping it selects on the future. Its label is the return to its last close, which is
+    what the backtest engine realizes when it liquidates a delisted position."""
+    cfg = MLConfig(horizon=21, sample_every=21)
+    base = build_panel(market.bars, market.actions, cfg)
+    d = pd.Timestamp(sorted(base["date"].unique())[5])
+    dates = pd.DatetimeIndex(sorted(market.bars["date"].unique()))
+    last = dates[dates.get_loc(d) + 10]  # delists 10 sessions into the 21-session horizon
+    sym = sorted(base.loc[base["date"] == d, "symbol"])[0]
+    bars = market.bars[~((market.bars["symbol"] == sym) & (market.bars["date"] > last))]
+    panel = build_panel(bars, market.actions, cfg)
+    row = panel[(panel["date"] == d) & (panel["symbol"] == sym)]
+    assert len(row) == 1
+    _, adj = compute_features(bars, market.actions)
+    expected = adj.at[last, sym] / adj.at[d, sym] - 1
+    assert row["fwd_return"].iloc[0] == pytest.approx(expected)
+    # Nothing after delisting enters the panel as a new decision date.
+    assert not ((panel["symbol"] == sym) & (panel["date"] > last)).any()
+
+
+@pytest.mark.parametrize(("horizon", "every"), [(126, 1), (63, 5), (21, 21)])
+def test_every_fold_trains_on_at_least_min_train_dates_after_purge(market, horizon, every):
+    """With a long horizon the embargo used to eat the first fold's training set (0 dates
+    for horizon=126, sample_every=1), and the run crashed inside scikit-learn."""
+    cfg = MLConfig(horizon=horizon, sample_every=every, min_train_dates=24, folds=3)
+    splits = purged_splits(build_panel(market.bars, market.actions, cfg), cfg)
+    assert splits
+    for s in splits:
+        assert len(s.train_dates) >= cfg.min_train_dates
+        assert s.train_dates.max() < s.test_dates.min()

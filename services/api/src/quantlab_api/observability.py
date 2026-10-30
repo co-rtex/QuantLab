@@ -19,6 +19,7 @@ request_id_var: contextvars.ContextVar[str | None] = contextvars.ContextVar(
     "request_id", default=None
 )
 
+KNOWN_METHODS = frozenset({"GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"})
 HTTP_SECONDS = Histogram(
     "quantlab_http_request_duration_seconds",
     "HTTP request latency",
@@ -119,7 +120,9 @@ async def request_context_middleware(
         elapsed = time.perf_counter() - start
         route = request.scope.get("route")
         template = getattr(route, "path", "unmatched")
-        HTTP_SECONDS.labels(request.method, template, str(status)).observe(elapsed)
+        # The method is client-controlled; an open label set let anyone mint new series.
+        method = request.method if request.method in KNOWN_METHODS else "OTHER"
+        HTTP_SECONDS.labels(method, template, str(status)).observe(elapsed)
         if template != "/metrics":
             log.info(
                 "http_request",

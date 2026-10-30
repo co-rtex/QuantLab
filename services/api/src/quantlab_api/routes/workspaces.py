@@ -4,10 +4,19 @@ import uuid
 
 from fastapi import APIRouter, Query, Request
 from sqlalchemy import func, select
+from sqlalchemy.orm import Session
 
 from quantlab_api.errors import ApiError
 from quantlab_api.models import AuditEvent, Role, User, Workspace, WorkspaceMember
-from quantlab_api.schemas import AuditOut, MemberIn, MemberOut, Page, WorkspaceIn, WorkspaceOut
+from quantlab_api.schemas import (
+    MAX_OFFSET,
+    AuditOut,
+    MemberIn,
+    MemberOut,
+    Page,
+    WorkspaceIn,
+    WorkspaceOut,
+)
 from quantlab_api.security import DB, CurrentUser, audit, require_workspace
 
 router = APIRouter(prefix="/workspaces", tags=["workspaces"])
@@ -92,6 +101,19 @@ def list_members(workspace_id: uuid.UUID, user: CurrentUser, db: DB) -> list[Mem
     ]
 
 
+def _locked_owner_count(db: Session, workspace_id: uuid.UUID) -> int:
+    """Count owners while locking their rows. Without the lock, two owners demoting or
+    removing each other concurrently both saw two owners and left the workspace with none.
+    A request that waits re-reads the rows after the other commits and sees one owner."""
+    return len(
+        db.scalars(
+            select(WorkspaceMember.user_id)
+            .where(WorkspaceMember.workspace_id == workspace_id, WorkspaceMember.role == Role.owner)
+            .with_for_update()
+        ).all()
+    )
+
+
 @router.post("/{workspace_id}/members", response_model=MemberOut, status_code=201)
 def add_member(
     workspace_id: uuid.UUID, body: MemberIn, user: CurrentUser, db: DB, request: Request
@@ -105,16 +127,12 @@ def add_member(
         m = WorkspaceMember(workspace_id=workspace_id, user_id=target.id, role=Role(body.role))
         db.add(m)
     else:
-        if m.role == Role.owner and body.role != "owner":
-            owners = db.scalar(
-                select(func.count())
-                .select_from(WorkspaceMember)
-                .where(
-                    WorkspaceMember.workspace_id == workspace_id, WorkspaceMember.role == Role.owner
-                )
-            )
-            if (owners or 0) <= 1:
-                raise ApiError(409, "last_owner", "A workspace needs at least one owner")
+        if (
+            m.role == Role.owner
+            and body.role != "owner"
+            and _locked_owner_count(db, workspace_id) <= 1
+        ):
+            raise ApiError(409, "last_owner", "A workspace needs at least one owner")
         m.role = Role(body.role)
     audit(
         db,
@@ -140,12 +158,7 @@ def remove_member(
     m = db.get(WorkspaceMember, (workspace_id, user_id))
     if m is None:
         raise ApiError(404, "not_found", "Member not found")
-    owners = db.scalar(
-        select(func.count())
-        .select_from(WorkspaceMember)
-        .where(WorkspaceMember.workspace_id == workspace_id, WorkspaceMember.role == Role.owner)
-    )
-    if m.role == Role.owner and (owners or 0) <= 1:
+    if m.role == Role.owner and _locked_owner_count(db, workspace_id) <= 1:
         raise ApiError(409, "last_owner", "Cannot remove the last owner")
     db.delete(m)
     audit(
@@ -166,7 +179,7 @@ def audit_log(
     user: CurrentUser,
     db: DB,
     limit: int = Query(50, ge=1, le=200),
-    offset: int = Query(0, ge=0),
+    offset: int = Query(0, ge=0, le=MAX_OFFSET),
 ) -> Page[AuditOut]:
     require_workspace(db, user, workspace_id, Role.owner)
     q = select(AuditEvent).where(AuditEvent.workspace_id == workspace_id)

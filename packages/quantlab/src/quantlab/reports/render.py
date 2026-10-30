@@ -132,7 +132,10 @@ def report_context(
             f"{_num(wf.get('mean_oos_sharpe'))} out-of-sample across {len(wf['folds'])} folds."
         )
     boot = (validation or {}).get("bootstrap") or {}
-    if boot.get("sharpe"):
+    if boot.get("sharpe") and boot["sharpe"].get("lower") is None:
+        reason = boot["sharpe"].get("undefined") or "undefined"
+        conclusions.append(f"The Sharpe ratio is undefined ({reason}); no interval is reported.")
+    elif boot.get("sharpe"):
         s = boot["sharpe"]
         conclusions.append(
             f"The 95% bootstrap interval for the Sharpe ratio is {_num(s['lower'])} to "

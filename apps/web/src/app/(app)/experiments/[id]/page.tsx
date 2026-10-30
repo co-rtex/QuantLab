@@ -9,7 +9,7 @@ import { ErrorNote, JobProgress, Panel, Skeleton, StatusPill, SyntheticTag } fro
 import { AssistantPanel } from "@/components/Assistant";
 import { IntegrityReport, ValidationPanel } from "@/components/Validation";
 import { api, ApiError, newIdempotencyKey, type DatasetVersion, type Experiment, type Job, type Series } from "@/lib/api";
-import { DASH, money, num, pct, shortHash, signClass, strategyLabel } from "@/lib/format";
+import { DASH, money, multiple, num, pct, shortHash, signClass, strategyLabel } from "@/lib/format";
 import { useApi } from "@/lib/useApi";
 
 type MetricBlock = { values: Record<string, number | null>; undefined: Record<string, string> };
@@ -373,7 +373,7 @@ export default function ExperimentPage() {
                     ["Alpha (annualized)", pct(a.performance.values.alpha, 2)],
                     ["Tracking error", pct(a.performance.values.tracking_error, 1)],
                     ["Information ratio", num(a.performance.values.information_ratio)],
-                    ["Annual turnover", `${num(a.costs.values.annual_turnover, 2)}×`],
+                    ["Annual turnover", multiple(a.costs.values.annual_turnover, 2)],
                     ["Cost drag on CAGR", pct(a.costs.values.cost_drag_cagr, 2)],
                     ["Total costs", money(a.costs.values.total_costs)],
                     ["Dividends received", money(a.costs.values.total_dividends)],

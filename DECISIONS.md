@@ -73,10 +73,17 @@ with persistence and monitoring (see docs/RUNBOOK.md).
 **Context.** The Next.js `/api/*` proxy sits between browsers and the API. Forwarding a
 client-supplied `X-Forwarded-For` would let anyone choose the address used for login
 throttling.
-**Decision.** The proxy forwards `X-Forwarded-For` only when `TRUST_FORWARDED_FOR=true`,
-i.e. when deployed behind an edge (load balancer, Caddy, nginx) that overwrites the header.
-Uvicorn trusts forwarded headers only from configured proxy addresses.
-**Consequences.** Without a trusted edge, the API sees the web tier's address, so the
-per-address login limit applies to web traffic as a whole; the per-account failure limit
-still isolates accounts. Production deployments should terminate TLS at a trusted edge
-and enable the flag (docs/RUNBOOK.md).
+**Decision (revised 2026-10-30).** The proxy always forwards exactly one address: the
+rightmost `X-Forwarded-For` hop, which Next fills with the socket address when the request
+carries none and which an edge in front appends. The API accepts that header only from
+peers listed in `QUANTLAB_TRUSTED_PROXIES` (IPs, CIDRs or hostnames; compose sets `web`)
+and reads it right to left, skipping trusted hops (`security.client_ip`).
+**Why revised.** The original rule (forward only with `TRUST_FORWARDED_FOR=true`) made
+the API see every browser as the web container, so the 10-per-minute address limit was a
+limit for all users together: an independent audit showed one client's failed logins
+returning 429 to another user's correct password. The flag also never worked, because
+uvicorn was not configured to trust the web tier.
+**Consequences.** When the web tier is exposed directly, a client that sends its own
+`X-Forwarded-For` chooses its address bucket; that evades the per-address limit but cannot
+lock anyone else out, and the per-account failure limit still bounds guessing. Internet
+deployments should put an edge that overwrites the header in front (docs/RUNBOOK.md).

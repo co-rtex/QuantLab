@@ -274,3 +274,7 @@ def test_redis_outage_does_not_lose_jobs(client, seeded, monkeypatch):
         db.commit()
     assert J.reap()["redelivered"] == 1
     assert len(J.get_queue()) == 1
+    # Later cycles must not pile duplicates onto the queue while the job is still waiting.
+    for _ in range(3):
+        assert J.reap()["redelivered"] == 0
+    assert len(J.get_queue()) == 1

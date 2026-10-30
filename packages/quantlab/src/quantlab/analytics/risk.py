@@ -21,6 +21,7 @@ import numpy as np
 import pandas as pd
 from scipy import stats
 
+from quantlab.analytics.performance import ZERO_DISPERSION
 from quantlab.optimize.allocators import risk_contributions
 
 
@@ -64,6 +65,9 @@ def gaussian_es(returns: pd.Series | np.ndarray, confidence: float = 0.95) -> fl
 
 def cornish_fisher_var(returns: pd.Series | np.ndarray, confidence: float = 0.95) -> float:
     r = _clean(returns)
+    if r.std(ddof=1) <= ZERO_DISPERSION:
+        # Skew and kurtosis are undefined, but the expansion's limit is the certain outcome.
+        return float(-r.mean())
     z = stats.norm.ppf(1 - confidence)
     s = stats.skew(r)
     k = stats.kurtosis(r)  # excess

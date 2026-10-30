@@ -294,3 +294,30 @@ def test_bootstrap_sharpe_matches_reported_sharpe_with_risk_free_rate():
     boot = bootstrap_ci(r, n_samples=200, risk_free_rate=0.04)
     rep = compute_performance(e, risk_free_rate=0.04)["sharpe"]
     assert boot["sharpe"]["estimate"] == pytest.approx(rep)
+
+
+def test_zero_variance_strategy_gets_undefined_sharpe_not_a_crash():
+    from quantlab.analytics.summary import jsonable
+
+    boot = bootstrap_ci(pd.Series(np.zeros(300)))
+    assert boot["sharpe"]["estimate"] is None
+    assert boot["sharpe"]["lower"] is None
+    assert "variance" in boot["sharpe"]["undefined"]
+    assert probabilistic_sharpe(pd.Series(np.full(100, 0.001))) is None
+    report = build_integrity_report(
+        {"experiment": {"config": {}}, "dataset": {}, "validation": {"bootstrap": jsonable(boot)}}
+    )
+    check = next(c for c in report["checks"] if c["key"] == "statistical_uncertainty")
+    assert check["status"] == "unassessed"
+
+    from quantlab.reports.render import report_context
+
+    ctx = report_context(
+        {},
+        {},
+        {"performance": {"values": {}}, "meta": {}},
+        {},
+        report,
+        {"bootstrap": jsonable(boot)},
+    )
+    assert any("Sharpe ratio is undefined" in c for c in ctx["conclusions"])

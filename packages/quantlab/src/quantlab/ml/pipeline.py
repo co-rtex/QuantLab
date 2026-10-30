@@ -113,7 +113,11 @@ def build_panel(bars: pd.DataFrame, actions: pd.DataFrame, cfg: MLConfig) -> pd.
     feats, adj = compute_features(bars, actions, cfg.exclude)
     close = adj
     h = cfg.horizon
-    fwd = adj.shift(-h) / adj - 1
+    # The label runs to the last close at or before t+h. For an asset that stops trading
+    # inside the horizon that is the return to delisting (the engine liquidates at the last
+    # close). Using adj.shift(-h) alone made the label NaN and the row was dropped, so the
+    # panel only contained assets that survived to t+h: selection on future information.
+    fwd = adj.ffill().shift(-h) / adj - 1
     dates = close.index[252 :: cfg.sample_every]
     dates = dates[dates <= close.index[-1 - h]] if len(close) > h else dates[:0]
     frames = []
@@ -157,21 +161,29 @@ def purged_splits(panel: pd.DataFrame, cfg: MLConfig) -> list[Split]:
     test date minus an embargo of ``horizon`` sessions (approximated in sample dates).
     """
     dates = pd.DatetimeIndex(sorted(panel["date"].unique()))
-    usable = len(dates) - cfg.min_train_dates
+    embargo_steps = max(1, math.ceil(cfg.horizon / cfg.sample_every))
+    # The first test window starts after min_train_dates *plus* the embargo, so the first
+    # fold still trains on min_train_dates once the embargo is removed.
+    first = cfg.min_train_dates + embargo_steps
+    usable = len(dates) - first
     if usable < cfg.folds:
         return []
     size = usable // cfg.folds
     avail = panel.groupby("date")["label_available_at"].max()
-    embargo_steps = max(1, math.ceil(cfg.horizon / cfg.sample_every))
     out = []
     for i in range(cfg.folds):
-        t0 = cfg.min_train_dates + i * size
+        t0 = first + i * size
         t1 = len(dates) if i == cfg.folds - 1 else t0 + size
         test = dates[t0:t1]
         cutoff_idx = max(0, t0 - embargo_steps)
         train = dates[:cutoff_idx]
         train = train[avail.reindex(train).to_numpy() < test[0]]
         out.append(Split(i + 1, pd.DatetimeIndex(train), test))
+    # min_train_dates is a floor on what the model actually trains on, i.e. after purge and
+    # embargo. A long horizon could otherwise leave a fold with no training rows at all and
+    # the run failed deep inside scikit-learn ("Input contains NaN").
+    if any(len(s.train_dates) < cfg.min_train_dates for s in out):
+        return []
     return out
 
 
@@ -237,7 +249,12 @@ def run_ml_experiment(
     panel = build_panel(bars, actions, cfg)
     splits = purged_splits(panel, cfg)
     if not splits:
-        raise ValueError("not enough sample dates for the requested folds")
+        raise ValueError(
+            "not enough sample dates for the requested folds: each fold needs "
+            f"min_train_dates={cfg.min_train_dates} training dates after a purge and embargo of "
+            f"horizon={cfg.horizon} sessions; use fewer folds, a shorter horizon or more "
+            "history"
+        )
     preds = []
     fold_rows = []
     importances: dict[str, list[np.ndarray]] = {}

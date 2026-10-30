@@ -1,3 +1,5 @@
+import dataclasses
+
 import pandas as pd
 import pytest
 from hypothesis import given, settings
@@ -8,6 +10,7 @@ from quantlab.portfolio.ledger import (
     InsufficientPosition,
     InvalidOrder,
     Ledger,
+    LedgerError,
     replay,
 )
 
@@ -90,3 +93,44 @@ def test_property_replay_and_no_negative_balances(initial, ops):
     r = replay(led.transactions)
     assert r.cash == pytest.approx(led.cash)
     assert sum(t.cash_delta for t in led.transactions) == pytest.approx(led.cash)
+
+
+def _tampered(index: int, **changes: float) -> Ledger:
+    """A ledger whose log has one transaction edited and whose live state matches the log,
+    so only the economics of that transaction are wrong."""
+    led = Ledger()
+    led.deposit(D, 1000)
+    led.trade(D, "A", 5, 100.0, commission=1.0)
+    led.dividend(D, "A", 2.0)
+    led.split(D, "A", 2.0)
+    led.transactions[index] = dataclasses.replace(led.transactions[index], **changes)
+    r = replay(led.transactions, verify=False)
+    led.cash, led.positions = r.cash, dict(r.positions)
+    return led
+
+
+@pytest.mark.parametrize(
+    ("index", "changes"),
+    [
+        (1, {"cash_delta": -400.0}),  # a buy of 5 @ 100 + 1 commission must cost 501
+        (1, {"price": 90.0}),  # the fill price no longer explains the cash moved
+        (1, {"commission": -1.0, "cash_delta": -499.0}),  # negative fee disguised as income
+        (2, {"quantity": 7.0, "cash_delta": 14.0}),  # dividend on shares that were not held
+        (3, {"quantity": 1.0}),  # the split did not double the 5 shares held
+        (3, {"cash_delta": 5.0}),  # a split never moves cash
+    ],
+)
+def test_invariants_detect_transactions_whose_cash_is_not_explained(index, changes):
+    with pytest.raises(LedgerError):
+        _tampered(index, **changes).check_invariants()
+
+
+def test_invariants_reject_a_log_that_overdraws_cash_midway():
+    led = Ledger()
+    led.deposit(D, 100)
+    led.allow_negative_cash = True
+    led.trade(D, "A", 2, 100.0)  # cash is -100 at this point
+    led.trade(D, "A", -2, 100.0)  # and back to 100 at the end
+    led.allow_negative_cash = False
+    with pytest.raises(LedgerError, match="negative cash"):
+        led.check_invariants()

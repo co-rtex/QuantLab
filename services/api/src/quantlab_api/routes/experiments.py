@@ -29,6 +29,7 @@ from quantlab_api.models import (
 from quantlab_api.routes.datasets import load_version
 from quantlab_api.routes.strategies import validate_strategy
 from quantlab_api.schemas import (
+    MAX_OFFSET,
     BoundedDate,
     CompareIn,
     ExperimentIn,
@@ -213,7 +214,7 @@ def list_experiments(
     strategy_key: str | None = Query(None, max_length=64),
     q: str | None = Query(None, max_length=100),
     limit: int = Query(50, ge=1, le=200),
-    offset: int = Query(0, ge=0),
+    offset: int = Query(0, ge=0, le=MAX_OFFSET),
 ) -> Page[ExperimentOut]:
     require_workspace(db, user, workspace_id)
     stmt = select(Experiment).where(Experiment.workspace_id == workspace_id)
@@ -317,7 +318,7 @@ def trades(
     symbol: str | None = Query(None, max_length=32),
     side: str | None = None,
     limit: int = Query(100, ge=1, le=1000),
-    offset: int = Query(0, ge=0),
+    offset: int = Query(0, ge=0, le=MAX_OFFSET),
 ) -> dict[str, Any]:
     exp = load_experiment(db, user, experiment_id)
     _require_result(db, exp)

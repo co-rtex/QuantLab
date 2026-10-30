@@ -11,6 +11,12 @@ export function num(v: number | null | undefined, digits = 2): string {
   return v.toLocaleString("en-US", { minimumFractionDigits: digits, maximumFractionDigits: digits });
 }
 
+/** A multiple such as turnover ("3.2×"); undefined renders as a bare dash, not "—×". */
+export function multiple(v: number | null | undefined, digits = 2): string {
+  const s = num(v, digits);
+  return s === DASH ? DASH : `${s}×`;
+}
+
 export function money(v: number | null | undefined, digits = 0): string {
   if (v === null || v === undefined || !Number.isFinite(v)) return DASH;
   return v.toLocaleString("en-US", { style: "currency", currency: "USD", maximumFractionDigits: digits, minimumFractionDigits: digits });

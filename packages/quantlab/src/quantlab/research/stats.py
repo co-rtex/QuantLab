@@ -17,6 +17,8 @@ import numpy as np
 import pandas as pd
 from scipy import stats
 
+from quantlab.analytics.performance import ZERO_DISPERSION
+
 EULER_GAMMA = 0.5772156649015329
 
 
@@ -37,7 +39,7 @@ def _ann_sharpe(r: np.ndarray, periods: int, rf_p: float = 0.0) -> np.ndarray:
     sd = r.std(axis=-1, ddof=1)
     with np.errstate(divide="ignore", invalid="ignore"):
         s = (r.mean(axis=-1) - rf_p) / sd * math.sqrt(periods)
-    return np.where(sd > 0, s, np.nan)
+    return np.where(sd > ZERO_DISPERSION, s, np.nan)
 
 
 def bootstrap_ci(
@@ -68,6 +70,22 @@ def bootstrap_ci(
     finite = sharpe[np.isfinite(sharpe)]
     growth = np.prod(1 + sample, axis=1)
     cagr = np.where(growth > 0, growth ** (periods / len(r)) - 1, -1.0)
+    estimate = float(_ann_sharpe(r, periods, rf_p))
+    if math.isfinite(estimate) and len(finite):
+        sharpe_ci: dict[str, Any] = {
+            "estimate": estimate,
+            "lower": float(np.quantile(finite, lo)),
+            "upper": float(np.quantile(finite, hi)),
+            "p_le_zero": float(np.mean(finite <= 0)),
+        }
+    else:
+        sharpe_ci = {
+            "estimate": None,
+            "lower": None,
+            "upper": None,
+            "p_le_zero": None,
+            "undefined": "zero variance of returns",
+        }
     out: dict[str, Any] = {
         "method": "stationary_bootstrap",
         "samples": n_samples,
@@ -75,12 +93,7 @@ def bootstrap_ci(
         "confidence": confidence,
         "seed": seed,
         "observations": len(r),
-        "sharpe": {
-            "estimate": float(_ann_sharpe(r, periods, rf_p)),
-            "lower": float(np.nanquantile(sharpe, lo)),
-            "upper": float(np.nanquantile(sharpe, hi)),
-            "p_le_zero": float(np.mean(finite <= 0)) if len(finite) else None,
-        },
+        "sharpe": sharpe_ci,
         "cagr": {"lower": float(np.quantile(cagr, lo)), "upper": float(np.quantile(cagr, hi))},
     }
     if benchmark is not None:
@@ -100,7 +113,7 @@ def probabilistic_sharpe(returns: pd.Series, benchmark_sr: float = 0.0) -> float
     """P(true per-period Sharpe > ``benchmark_sr``) given sample length, skew and kurtosis."""
     r = returns.dropna().to_numpy(dtype=float)
     n = len(r)
-    if n < 10 or r.std(ddof=1) == 0:
+    if n < 10 or r.std(ddof=1) <= ZERO_DISPERSION:
         return None
     sr = r.mean() / r.std(ddof=1)
     skew = float(stats.skew(r))
@@ -145,7 +158,12 @@ def regime_analysis(
     trend_window: int = 126,
     periods: int = 252,
 ) -> list[dict[str, Any]]:
-    """Performance by market regime, regimes defined from trailing benchmark data only."""
+    """Performance by market regime (ex-post diagnostics).
+
+    Each day's volatility and trend come from trailing benchmark data, but the volatility
+    tercile cut-offs are computed over the whole sample, so the labels are not something a
+    strategy could have known in advance; never feed them back into a strategy.
+    """
     b = benchmark_returns.reindex(returns.index)
     vol = b.rolling(vol_window).std(ddof=1)
     trend = (1 + b).rolling(trend_window).apply(np.prod, raw=True) - 1

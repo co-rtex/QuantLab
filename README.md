@@ -64,6 +64,15 @@ Or run everything in containers: `make app-up` (web on :3000, API on :8000, two 
 Open http://localhost:3000, create an account, generate a synthetic dataset under
 **Market data**, then create an experiment. API docs: http://localhost:8000/api/v1/docs.
 
+### Several git worktrees at once
+
+The ports above are the main checkout's. In a linked worktree, `make` gives the checkout
+its own Compose project, volumes and port block (`make stack-env` prints them; override
+with `QUANTLAB_SLOT=<1-89>`), so `make up`, `make app-up`, `make api-dev`, `make web-dev`
+and `make e2e` never touch another checkout's containers. Integration tests use a
+per-worktree database (`quantlab_test_<hash>`) and a session advisory lock, so concurrent
+runs that do share a database wait for each other instead of truncating each other's tables.
+
 ## Testing
 
 ```bash

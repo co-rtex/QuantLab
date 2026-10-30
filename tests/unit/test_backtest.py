@@ -55,6 +55,74 @@ def test_every_strategy_reconciles_and_respects_constraints(market, key):
     res.ledger.check_invariants()
 
 
+@pytest.mark.parametrize("key", sorted(REGISTRY))
+def test_equity_curve_rebuilt_independently_from_the_transaction_log(market, key):
+    """Re-derive cash, holdings and equity from the ledger log and raw closes only.
+
+    This does not reuse anything the engine computed while simulating (its marks, its
+    position snapshots or its cash column), so a mark-to-market or accounting slip inside
+    the engine loop shows up as a mismatch here.
+    """
+    cfg = BacktestConfig(benchmark="SYNIDX", rebalance="weekly", commission_min=1.0)
+    res = run_backtest(market.bars, market.actions, create_strategy(key), cfg)
+    close = market.bars.pivot(index="date", columns="symbol", values="close").ffill()
+    by_date: dict[pd.Timestamp, list] = {}
+    for tx in res.ledger.transactions:
+        by_date.setdefault(pd.Timestamp(tx.date), []).append(tx)
+    cash, qty, rebuilt = 0.0, {}, []
+    for d in res.equity.index:
+        for tx in by_date.get(d, []):
+            if tx.kind in ("deposit", "withdrawal"):
+                cash += tx.cash_delta
+            elif tx.kind in ("buy", "sell"):
+                cash -= tx.quantity * tx.price + tx.commission
+                qty[tx.symbol] = qty.get(tx.symbol, 0.0) + tx.quantity
+            elif tx.kind == "dividend":
+                cash += qty.get(tx.symbol, 0.0) * tx.price
+            elif tx.kind == "split":
+                qty[tx.symbol] = qty.get(tx.symbol, 0.0) * tx.price
+        rebuilt.append(cash + sum(q * close.at[d, s] for s, q in qty.items() if abs(q) > 1e-9))
+    np.testing.assert_allclose(res.equity["equity"].to_numpy(), rebuilt, rtol=1e-9)
+    # Costs recorded on trades explain the gap between gross and net equity exactly.
+    if len(res.trades):
+        assert res.trades["commission"].sum() == pytest.approx(
+            res.equity["cum_commission"].iloc[-1]
+        )
+        assert (res.trades["commission"][res.trades["note"] != "delisting"] >= 1.0 - 1e-12).all()
+
+
+@pytest.mark.parametrize("key", sorted(REGISTRY))
+def test_decisions_and_fills_ignore_perturbed_future_data(market, key):
+    """Rewrite every bar after a cut-off (new prices and an extra split) and require every
+    decision and fill up to the cut-off to be bit-for-bit unchanged.
+
+    The cut-off is itself a decision date, so the very next bar (the one a one-bar leak
+    would expose) is among the rewritten ones.
+    """
+    cfg = BacktestConfig(rebalance="weekly", benchmark="SYNIDX")
+    a = run_backtest(market.bars, market.actions, create_strategy(key), cfg)
+    decided = a.weights_target["date"].unique()
+    cut = pd.Timestamp(decided[len(decided) // 2]) if len(decided) else pd.Timestamp("2021-03-26")
+    rng = np.random.default_rng(3)
+    bars = market.bars.copy()
+    future = bars["date"] > cut
+    shock = pd.Series(rng.uniform(0.5, 2.0, bars["symbol"].nunique()), bars["symbol"].unique())
+    for c in ("open", "high", "low", "close"):
+        bars.loc[future, c] = bars.loc[future, c] * bars.loc[future, "symbol"].map(shock)
+    sym = sorted(bars["symbol"].unique())[0]
+    split_day = bars.loc[future & (bars["symbol"] == sym), "date"].iloc[20]
+    after = (bars["symbol"] == sym) & (bars["date"] >= split_day)
+    bars.loc[after, ["open", "high", "low", "close"]] /= 3.0
+    extra = pd.DataFrame([{"symbol": sym, "ex_date": split_day, "kind": "split", "value": 3.0}])
+    acts = normalize_actions(pd.concat([market.actions, extra], ignore_index=True))
+    b = run_backtest(bars, acts, create_strategy(key), cfg)
+    wa, wb = (r.weights_target[r.weights_target["date"] <= cut] for r in (a, b))
+    pd.testing.assert_frame_equal(wa.reset_index(drop=True), wb.reset_index(drop=True))
+    ta, tb = (r.trades[r.trades["date"] <= cut] for r in (a, b))
+    pd.testing.assert_frame_equal(ta.reset_index(drop=True), tb.reset_index(drop=True))
+    assert (a.equity["equity"][:cut] == b.equity["equity"][:cut]).all()
+
+
 def test_costs_reduce_wealth(market):
     s = create_strategy("equal_weight")
     free = run_backtest(market.bars, market.actions, s, BacktestConfig(**FREE))
@@ -96,15 +164,23 @@ def test_strategy_never_sees_future_bars(market):
 
 @pytest.mark.parametrize("key", ["momentum", "sma_crossover", "low_volatility", "min_variance"])
 def test_signals_invariant_to_future_data(market, key):
-    """Truncating the dataset after a decision date must not change that decision."""
+    """Truncating the dataset after a decision date must not change that decision.
+
+    The decision at ``cut`` needs a next session to execute in, so the truncated data keeps
+    exactly one more session; its prices are then overwritten so that a strategy reading
+    that bar (a one-bar look-ahead) decides differently.
+    """
     cut = pd.Timestamp("2021-06-30")
     cfg = BacktestConfig(rebalance="monthly")
     full = run_backtest(market.bars, market.actions, create_strategy(key), cfg)
+    nxt = market.bars.loc[market.bars.date > cut, "date"].min()
+    bars = market.bars[market.bars.date <= nxt].copy()
+    last = bars["date"] == nxt
+    bars.loc[last, ["open", "high", "low", "close"]] *= np.linspace(0.5, 1.5, int(last.sum()))[
+        :, None
+    ]
     trunc = run_backtest(
-        market.bars[market.bars.date <= cut + pd.Timedelta(days=1)],
-        market.actions[market.actions.ex_date <= cut + pd.Timedelta(days=1)],
-        create_strategy(key),
-        cfg,
+        bars, market.actions[market.actions.ex_date <= cut], create_strategy(key), cfg
     )
     a = full.weights_target[full.weights_target.date <= cut].reset_index(drop=True)
     b = trunc.weights_target[trunc.weights_target.date <= cut].reset_index(drop=True)
@@ -144,6 +220,65 @@ def test_split_between_decision_and_fill_restates_order():
     cfg = BacktestConfig(universe=["A"], initial_capital=1000, **FREE)
     res = run_backtest(bars, acts, create_strategy("buy_and_hold"), cfg)
     assert res.trades.iloc[0]["quantity"] == pytest.approx(20)  # 10 pre-split -> 20 post
+    assert res.equity["equity"].iloc[-1] == pytest.approx(1000)
+
+
+@pytest.mark.parametrize("gap", ["non_session_date", "symbol_has_no_bar"])
+def test_corporate_action_without_a_bar_on_its_ex_date_is_applied_next_session(gap):
+    # A splits 2-for-1. Its ex-date is either a date with no session in the data at all
+    # (e.g. a weekend in a vendor file) or a session on which A itself printed no bar.
+    # Dropping the action would show a fabricated 50% loss on a flat position.
+    bars = make_bars({"A": [100.0] * 4 + [50.0] * 4, "B": [10.0] * 8})
+    d = pd.DatetimeIndex(bars["date"].unique())
+    if gap == "non_session_date":
+        bars = bars[bars["date"] != d[4]]
+    else:
+        bars = bars[~((bars["symbol"] == "A") & (bars["date"] == d[4]))]
+    acts = normalize_actions(
+        pd.DataFrame([{"symbol": "A", "ex_date": d[4], "kind": "split", "value": 2.0}])
+    )
+    seen: list[pd.Series] = []
+
+    class Spy(Strategy):
+        key, name, description, Params = "spy", "Spy", "", StrategyParams
+
+        def target_weights(self, view: MarketView) -> pd.Series | None:
+            seen.append(view.close["A"].dropna())
+            return pd.Series({"A": 0.5, "B": 0.5}) if len(seen) == 1 else None
+
+    cfg = BacktestConfig(universe=["A", "B"], initial_capital=1000, **FREE)
+    res = run_backtest(bars, acts, Spy(), cfg)
+    assert res.equity["equity"].iloc[-1] == pytest.approx(1000)
+    res.ledger.check_invariants()
+    # The as-of adjusted history a strategy sees must not show the split as a price drop.
+    assert (seen[-1].pct_change().dropna().abs() < 1e-12).all()
+    tr = total_returns(bars[bars["symbol"] == "A"], acts)["A"].dropna()
+    assert (tr.abs() < 1e-12).all()
+
+
+def test_actions_outside_the_price_history_are_ignored():
+    bars = make_bars({"A": [100.0] * 4})
+    d = pd.DatetimeIndex(bars["date"].unique())
+    acts = normalize_actions(
+        pd.DataFrame(
+            [
+                {
+                    "symbol": "A",
+                    "ex_date": d[0] - pd.Timedelta(days=30),
+                    "kind": "split",
+                    "value": 2.0,
+                },
+                {
+                    "symbol": "A",
+                    "ex_date": d[-1] + pd.Timedelta(days=30),
+                    "kind": "split",
+                    "value": 2.0,
+                },
+            ]
+        )
+    )
+    cfg = BacktestConfig(universe=["A"], initial_capital=1000, **FREE)
+    res = run_backtest(bars, acts, create_strategy("buy_and_hold"), cfg)
     assert res.equity["equity"].iloc[-1] == pytest.approx(1000)
 
 
