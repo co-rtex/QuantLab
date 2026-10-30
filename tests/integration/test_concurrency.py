@@ -141,7 +141,6 @@ def test_two_owners_demoting_or_removing_each_other_leave_one_owner(client):
             assert _owner_count(ws) == 1, (action, codes)
 
 
-
 def test_user_job_quota_spans_workspaces_and_replays_do_not_consume_it(client, monkeypatch):
     """One account cannot multiply its job allowance by creating workspaces."""
     from quantlab_api.config import get_settings
@@ -180,10 +179,7 @@ def test_user_job_quota_spans_workspaces_and_replays_do_not_consume_it(client, m
     assert full.json()["error"]["code"] == "too_many_jobs"
 
     # Cancellation and other accounts should not remain blocked by the user's quota.
-    assert (
-        client.post(f"/api/v1/jobs/{first.json()['id']}/cancel", headers=h).status_code
-        == 200
-    )
+    assert client.post(f"/api/v1/jobs/{first.json()['id']}/cancel", headers=h).status_code == 200
     resumed = client.post(
         f"/api/v1/workspaces/{ws2}/datasets/synthetic",
         headers=h,
@@ -200,7 +196,6 @@ def test_user_job_quota_spans_workspaces_and_replays_do_not_consume_it(client, m
         ).status_code
         == 202
     )
-
 
 
 def test_lowering_workspace_cap_also_bounds_account_submissions(client, monkeypatch):
@@ -227,7 +222,6 @@ def test_lowering_workspace_cap_also_bounds_account_submissions(client, monkeypa
     )
     assert a.status_code == 202, a.text
     assert b.status_code == 429, b.text
-
 
 
 def test_concurrent_user_quota_is_atomic_across_workspaces(client, monkeypatch):
@@ -261,15 +255,12 @@ def test_concurrent_workspace_creation_enforces_per_user_quota(client, monkeypat
     monkeypatch.setattr(get_settings(), "max_workspaces_per_user", 2)
     responses = _race(
         2,
-        lambda c, i: c.post(
-            "/api/v1/workspaces", headers=h, json={"name": f"Extra {i}"}
-        ),
+        lambda c, i: c.post("/api/v1/workspaces", headers=h, json={"name": f"Extra {i}"}),
     )
     assert Counter(r.status_code for r in responses) == {201: 1, 429: 1}, [
         r.text for r in responses
     ]
     assert len(client.get("/api/v1/workspaces", headers=h).json()) == 2
-
 
 
 def test_huge_offsets_are_rejected_not_500(client):
