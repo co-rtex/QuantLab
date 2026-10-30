@@ -1,0 +1,119 @@
+import pytest
+
+from quantlab.analytics.summary import analyze_backtest
+from quantlab.assistant.evals import (
+    CASES,
+    AdviceProvider,
+    FailingProvider,
+    FaithfulProvider,
+    HallucinatingProvider,
+    MalformedProvider,
+    evaluate,
+)
+from quantlab.assistant.grounding import Fact, build_facts, deterministic_answer, verify_answer
+from quantlab.assistant.service import answer_question, system_prompt
+from quantlab.backtest.engine import BacktestConfig, run_backtest
+from quantlab.research.integrity import build_integrity_report
+from quantlab.strategies.library import create_strategy
+
+
+@pytest.fixture(scope="module")
+def facts(market):
+    cfg = BacktestConfig(start="2020-01-02", benchmark="SYNIDX")
+    res = run_backtest(market.bars, market.actions, create_strategy("equal_weight"), cfg)
+    analysis = analyze_backtest(res)
+    integrity = build_integrity_report(
+        {
+            "experiment": {"config": cfg.model_dump(mode="json"), "engine_version": "1"},
+            "dataset": {
+                "version_hash": "v",
+                "provenance": market.provenance,
+                "is_synthetic": True,
+                "quality_status": "pass",
+            },
+            "analysis": analysis,
+        }
+    )
+    return build_facts(analysis, integrity)
+
+
+def test_facts_have_stable_ids_and_sources(facts):
+    ids = [f.id for f in facts]
+    assert ids == [f"F{i}" for i in range(1, len(facts) + 1)]
+    keys = {f.key for f in facts}
+    assert {"total_return", "sharpe", "max_drawdown", "excess_total_return"} <= keys
+    assert all(f.source for f in facts)
+
+
+def test_deterministic_engine_passes_full_eval(facts):
+    out = evaluate(facts)
+    assert out["passed"] == out["cases"] == len(CASES)
+    assert out["numerical_consistency"] == 1.0
+    assert out["unsupported_claims_shown"] == 0
+    assert out["advice_declined"] == 1.0
+
+
+@pytest.mark.parametrize(
+    "provider", [HallucinatingProvider(), AdviceProvider(), MalformedProvider(), FailingProvider()]
+)
+def test_misbehaving_providers_never_reach_the_user(facts, provider):
+    out = evaluate(facts, provider)
+    assert out["unsupported_claims_shown"] == 0
+    assert out["advice_declined"] == 1.0
+    assert out["passed"] == out["cases"]
+    in_scope = [
+        r for r, c in zip(out["rows"], CASES, strict=True) if not c.advice and not c.out_of_scope
+    ]
+    assert all(r["provider_used"] == "deterministic" for r in in_scope)
+    assert all(r["notes"] for r in in_scope)  # the fallback is disclosed
+
+
+def test_faithful_provider_answers_are_used_and_grounded(facts):
+    out = evaluate(facts, FaithfulProvider())
+    assert out["unsupported_claims_shown"] == 0
+    used = [r for r in out["rows"] if r["provider_used"] == "fake:faithful"]
+    assert used
+
+
+def test_advice_questions_never_reach_the_model(facts):
+    calls = []
+
+    class Spy:
+        name = "spy"
+
+        def complete(self, system, question):
+            calls.append(question)
+            return "irrelevant"
+
+    ans = answer_question("Should I invest my savings in this?", facts, Spy())
+    assert ans.declined
+    assert calls == []
+
+
+def test_verifier_flags_invented_numbers_and_unknown_citations():
+    f = [
+        Fact("F1", "sharpe", "Sharpe", 0.4567, "ratio", "s"),
+        Fact("F2", "dd", "Max drawdown", -0.2834, "pct", "d"),
+    ]
+    assert verify_answer("Sharpe 0.46 [F1], drawdown 28.34% [F2].", f)["grounded"]
+    assert verify_answer("Drawdown of -28.3% [F2]", f)["grounded"]
+    bad = verify_answer("Sharpe 1.9 [F1] and return 12% [F9]", f)
+    assert not bad["grounded"]
+    assert set(bad["unsupported"]) == {"1.9", "12%"}
+    assert bad["unknown_citations"] == ["F9"]
+    # dates and ordinal references are not numeric claims
+    assert verify_answer("Drawdown #1 began 2021-03-04 [F2] at 28.34% [F2]", f)["grounded"]
+
+
+def test_unknown_and_missing_topics(facts):
+    a = deterministic_answer("Tell me a joke about cats", facts)
+    assert a.intents == ["unknown"]
+    assert not a.citations
+    b = deterministic_answer("Was it robust out-of-sample?", facts)  # no validation facts
+    assert "validation suite" in b.text
+
+
+def test_system_prompt_lists_every_fact(facts):
+    sp = system_prompt(facts)
+    assert all(f"{f.id} | " in sp for f in facts)
+    assert "Never recommend" in sp

@@ -94,3 +94,31 @@ def test_report_escapes_user_content(client, seeded):
     body = client.get(f"/api/v1/experiments/{exp_id}/report", headers=h).text
     assert "<script>alert(1)</script>" not in body
     assert "&lt;script&gt;" in body
+
+
+def test_assistant_answers_from_evidence_and_declines_advice(client, seeded):
+    h = seeded["headers"]
+    exp_id = _completed_experiment(client, seeded)
+    r = client.post(
+        f"/api/v1/experiments/{exp_id}/assistant",
+        headers=h,
+        json={"question": "What was the max drawdown and Sharpe ratio?"},
+    )
+    assert r.status_code == 200, r.text
+    a = r.json()
+    assert a["provider"] == "deterministic"  # no LLM key configured in tests
+    assert a["verification"]["grounded"] is True
+    assert a["facts"]
+    assert {f["id"] for f in a["facts"]} == set(a["citations"])
+    exp = client.get(f"/api/v1/experiments/{exp_id}", headers=h).json()
+    sharpe = next(f for f in a["facts"] if f["label"] == "Sharpe ratio")
+    assert abs(sharpe["value"] - exp["summary"]["sharpe"]) < 1e-12  # same number as analytics
+    adv = client.post(
+        f"/api/v1/experiments/{exp_id}/assistant",
+        headers=h,
+        json={"question": "Should I invest in this strategy?"},
+    ).json()
+    assert adv["declined"] is True
+    assert adv["citations"] == []
+    bad = client.post(f"/api/v1/experiments/{exp_id}/assistant", headers=h, json={"question": ""})
+    assert bad.status_code == 422

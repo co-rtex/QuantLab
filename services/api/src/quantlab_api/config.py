@@ -34,7 +34,7 @@ class Settings(BaseSettings):
     max_dataset_assets: int = Field(2000, ge=1)
     rate_limit_login_per_minute: int = Field(10, ge=1)
     anthropic_api_key: SecretStr | None = None
-    llm_model: str = "claude-sonnet-5-5"
+    llm_model: str = "claude-opus-5-5"
     git_sha: str = "unknown"
     # When set, /metrics requires "Authorization: Bearer <token>" (scrapers only).
     metrics_token: SecretStr | None = None

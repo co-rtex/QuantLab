@@ -4,6 +4,7 @@ import uuid
 from typing import Any, Literal
 
 from fastapi import APIRouter, Header, Request, Response
+from pydantic import BaseModel, Field
 from sqlalchemy import func, select
 
 from quantlab.research.integrity import build_integrity_report
@@ -229,3 +230,42 @@ def report(
         ext = "html" if format == "html" else "md"
         headers["Content-Disposition"] = f'attachment; filename="quantlab-report-{exp.id}.{ext}"'
     return Response(body, media_type=media, headers=headers)
+
+
+class AssistantIn(BaseModel):
+    question: str = Field(min_length=2, max_length=1000)
+
+
+def _provider() -> Any:
+    from quantlab.assistant.service import AnthropicProvider, ProviderError
+    from quantlab_api.config import get_settings
+
+    s = get_settings()
+    if s.anthropic_api_key is None or not s.anthropic_api_key.get_secret_value():
+        return None
+    try:
+        return AnthropicProvider(s.anthropic_api_key.get_secret_value(), s.llm_model)
+    except ProviderError:
+        return None
+
+
+@router.post("/experiments/{experiment_id}/assistant")
+def assistant(
+    experiment_id: uuid.UUID, body: AssistantIn, user: CurrentUser, db: DB
+) -> dict[str, Any]:
+    """Answer a question using only this experiment's computed evidence."""
+    from quantlab.assistant.grounding import build_facts
+    from quantlab.assistant.service import answer_question, facts_payload
+    from quantlab_api.security import login_limiter
+
+    exp = load_experiment(db, user, experiment_id)
+    if exp.status != JobStatus.completed:
+        raise ApiError(409, "not_ready", "The assistant needs a completed backtest")
+    login_limiter.check(f"assistant:{user.id}", 30)
+    ev = integrity_evidence(db, user, exp)
+    facts = build_facts(
+        ev["analysis"], build_integrity_report(ev), ev["validation"], exp.config.get("benchmark")
+    )
+    ans = answer_question(body.question, facts, _provider())
+    cited = [f for f in facts_payload(facts) if f["id"] in set(ans.citations)]
+    return {**ans.to_dict(), "facts": cited, "available_facts": len(facts)}

@@ -48,6 +48,16 @@ test("research workflow: data -> backtest -> results -> reproduction", async ({ 
   await expect(page.getByText("Performance by market regime")).toBeVisible({ timeout: 60_000 });
   await expect(page.getByText("Signals on 8 sampled dates were identical")).toBeVisible();
 
+  await page.getByRole("button", { name: "What was the worst drawdown?" }).click();
+  await expect(page.getByText("Assembled from computed facts")).toBeVisible();
+  await page.getByPlaceholder("What drove the largest drawdown?").fill("Should I invest in this strategy?");
+  await page.getByRole("button", { name: "Ask", exact: true }).click();
+  await expect(page.getByText("I can't tell you whether to buy")).toBeVisible();
+
+  const report = await page.request.get(page.url().replace("/experiments/", "/api/v1/experiments/") + "/report");
+  expect(report.status()).toBe(200);
+  expect(await report.text()).toContain("Research integrity");
+
   await page.getByRole("button", { name: "Reproduce" }).click();
   await expect(page.getByText("(reproduction)").first()).toBeVisible();
   await expect(page.getByText("outputs match this run exactly")).toBeVisible({ timeout: 60_000 });

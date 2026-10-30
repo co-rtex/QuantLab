@@ -6,6 +6,7 @@ import { useState } from "react";
 import { EquityChart, MonthlyReturns } from "@/components/charts";
 import { PageHeader } from "@/components/Shell";
 import { ErrorNote, JobProgress, Panel, Skeleton, StatusPill, SyntheticTag } from "@/components/ui";
+import { AssistantPanel } from "@/components/Assistant";
 import { IntegrityReport, ValidationPanel } from "@/components/Validation";
 import { api, ApiError, newIdempotencyKey, type DatasetVersion, type Experiment, type Job, type Series } from "@/lib/api";
 import { DASH, money, num, pct, shortHash, signClass, strategyLabel } from "@/lib/format";
@@ -449,6 +450,7 @@ export default function ExperimentPage() {
 
           <IntegrityReport experimentId={id} refreshKey={`${validationRun}-${repro.data?.comparisons.length ?? 0}`} />
           <ValidationPanel experimentId={id} onComplete={setValidationRun} />
+          <AssistantPanel experimentId={id} />
 
           {a && (
             <Panel title="Monthly returns" aside="Net of costs; cells shaded by sign and size">

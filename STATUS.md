@@ -3,20 +3,22 @@
 _Last updated: 2026-10-30_
 
 ## Current phase
-Phases 0–6 complete. **Next: benchmarks harness, portfolio workspace UI, then Phase 7–8
-(optimization/stress UI, ML pipeline, grounded assistant, report export).**
+Phases 0–6 complete; Phase 8 assistant and report export complete. **Next: benchmarks
+harness, ML pipeline, portfolio workspace UI, optimization/stress UI, case study.**
 
 ## Latest verified milestone
-Research validation and the Research Integrity Report: walk-forward with in-sample
+Grounded research assistant (deterministic engine + optional Claude phrasing with
+numeric verification; eval suite in docs/AI_EVAL.md) and HTML/Markdown report export.
+Before that: research validation and the Research Integrity Report: walk-forward with in-sample
 parameter selection, parameter and cost sweeps, stationary-bootstrap CIs, PSR/deflated
 Sharpe, regime breakdown and an empirical look-ahead check (proven to catch a planted bug),
-run as a background job and rendered in the experiment page. Playwright 10/10.
+run as a background job and rendered in the experiment page. Playwright 10/10 (workflow now includes validation, assistant and report export).
 
 ## Branch / commits
 `main`, pushed to `origin` (github.com/co-rtex/QuantLab). See `git log`.
 
 ## Tests last executed (2026-10-30)
-* Python: 103 tests (unit, property-based, golden, research, integration, security,
+* Python: 117 tests (unit, property-based, golden, research, integration, security,
   migrations, failure injection) passing.
 * Web: `eslint`, `tsc --noEmit`, `next build` passing; Playwright 10/10 against a local
   stack (workflow incl. validation and reproduction, auth, proxy and redirect security).
@@ -25,11 +27,9 @@ run as a background job and rendered in the experiment page. Playwright 10/10.
 
 ## In progress / immediate next steps
 1. Benchmarks harness (`benchmarks/`) with recorded hardware and measurements.
-2. Report export (HTML/Markdown) from persisted results + integrity report.
-3. Grounded research assistant with deterministic fallback and evaluation suite.
-4. ML pipeline (purged chronological CV, baselines, artifacts).
-5. Portfolio workspace (manual ledger + valuation), optimization/stress UI.
-6. Case study: momentum vs passive after costs, out of sample.
+2. ML pipeline (purged chronological CV, baselines, artifacts).
+3. Case study write-up (docs/CASE_STUDY.md) using the full workflow.
+4. Portfolio workspace (manual ledger + valuation), optimization/stress UI.
 
 ## Known blockers
 No LLM API key, no market-data API key, no cloud credentials (docs/BLOCKERS.md).

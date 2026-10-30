@@ -19,8 +19,8 @@ Dependency-ordered. ✅ done and verified · 🔶 partial · ⬜ not started.
 | 7 | Optimizers (domain) | ✅ |
 | 7 | Optimization / stress / Monte Carlo API + UI | ⬜ |
 | 8 | ML pipeline (purged chronological CV, baselines, artifacts) | ⬜ |
-| 8 | Grounded research assistant + deterministic fallback + eval suite | ⬜ |
-| 8 | Report export (HTML/Markdown) | ⬜ |
+| 8 | Grounded research assistant + deterministic fallback + eval suite | ✅ (hosted-model eval pending credentials) |
+| 8 | Report export (HTML/Markdown) | ✅ |
 | 9 | OpenTelemetry tracing, Grafana dashboards, runbook, Terraform (validated, not applied) | ⬜ |
 | 9 | Benchmarks harness and BENCHMARKS.md measurements | ⬜ |
 | 10 | Case study: momentum vs passive after costs, out of sample | ⬜ |
