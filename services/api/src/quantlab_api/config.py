@@ -70,6 +70,10 @@ class Settings(BaseSettings):
     metrics_token: SecretStr | None = None
     max_synthetic_rows: int = Field(5_000_000, ge=1000)
     max_active_jobs_per_workspace: int = Field(50, ge=1)
+    # Account-wide limits prevent multiplying the workspace job cap by making new
+    # workspaces. Both caps are enforced transactionally under row locks.
+    max_active_jobs_per_user: int = Field(50, ge=1)
+    max_workspaces_per_user: int = Field(5, ge=1)
 
     @field_validator("metrics_token", "anthropic_api_key", "jwt_secret", mode="before")
     @classmethod
