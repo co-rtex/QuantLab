@@ -24,6 +24,7 @@ from quantlab_api.routes import (
     experiments,
     jobs,
     ml,
+    portfolios,
     research,
     strategies,
     workspaces,
@@ -104,6 +105,7 @@ def create_app() -> FastAPI:
         jobs.router,
         research.router,
         ml.router,
+        portfolios.router,
     ):
         api.include_router(r)
     app.include_router(api)

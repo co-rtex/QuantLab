@@ -31,7 +31,7 @@ run as a background job and rendered in the experiment page. Playwright 10/10 (w
 
 ## In progress / immediate next steps
 1. Observability: OpenTelemetry tracing, Grafana dashboard, runbook; Terraform (validated).
-2. Portfolio workspace (manual ledger + valuation) and optimization/stress UI.
+2. Interactive optimizer UI (domain allocators exist).
 3. CSV dataset import endpoint; accessibility audit; load testing.
 4. Portfolio workspace (manual ledger + valuation), optimization/stress UI.
 

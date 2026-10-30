@@ -9,6 +9,7 @@ import { useWorkspace } from "@/lib/workspace";
 const NAV = [
   { href: "/", label: "Overview" },
   { href: "/data", label: "Market data" },
+  { href: "/portfolios", label: "Portfolios" },
   { href: "/experiments", label: "Experiments" },
   { href: "/compare", label: "Compare" },
   { href: "/ml", label: "ML research" },

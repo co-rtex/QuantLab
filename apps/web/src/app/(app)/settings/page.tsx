@@ -36,11 +36,12 @@ export default function SettingsPage() {
 
   async function invite(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();
-    const f = new FormData(e.currentTarget);
+    const form = e.currentTarget; // capture before await: React clears currentTarget
+    const f = new FormData(form);
     setErr(undefined);
     try {
       await api(`/workspaces/${ws}/members`, { method: "POST", json: { email: f.get("email"), role: f.get("role") } });
-      e.currentTarget.reset();
+      form.reset();
       members.reload();
       setMsg("Member added.");
     } catch (x) {
