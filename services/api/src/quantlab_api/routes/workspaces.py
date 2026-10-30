@@ -6,6 +6,7 @@ from fastapi import APIRouter, Query, Request
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
+from quantlab_api.config import get_settings
 from quantlab_api.errors import ApiError
 from quantlab_api.models import AuditEvent, Role, User, Workspace, WorkspaceMember
 from quantlab_api.schemas import (
@@ -37,6 +38,17 @@ def list_workspaces(user: CurrentUser, db: DB) -> list[WorkspaceOut]:
 def create_workspace(
     body: WorkspaceIn, user: CurrentUser, db: DB, request: Request
 ) -> WorkspaceOut:
+    # Concurrent creations from the same account must not each pass the quota.
+    # NO KEY UPDATE is compatible with FK KEY SHARE locks on the creator's user row.
+    db.execute(select(User.id).where(User.id == user.id).with_for_update(key_share=True))
+    owned = (
+        db.scalar(
+            select(func.count()).select_from(Workspace).where(Workspace.created_by == user.id)
+        )
+        or 0
+    )
+    if owned >= get_settings().max_workspaces_per_user:
+        raise ApiError(429, "workspace_limit", "Your account has reached its workspace limit")
     ws = Workspace(name=body.name, description=body.description, created_by=user.id)
     db.add(ws)
     db.flush()
