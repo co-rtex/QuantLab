@@ -184,7 +184,9 @@ def bench(
 
     # --- historical retrieval: one symbol, last five years ------------------------------
     rng = np.random.default_rng(0)
-    syms = rng.choice(sorted(m.bars["symbol"].unique()), size=p["queries"])
+    # Without replacement: a repeated symbol would be a cache hit inside the "miss" loop.
+    universe = sorted(m.bars["symbol"].unique())
+    syms = rng.choice(universe, size=min(p["queries"], len(universe)), replace=False)
     since = pd.Timestamp(trade_start)
     from quantlab_api import marketdata
 
