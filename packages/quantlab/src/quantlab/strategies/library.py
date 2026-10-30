@@ -199,7 +199,10 @@ def _cov_universe(view: MarketView, lookback: int, max_assets: int) -> tuple[lis
         return [], np.empty((0, 0))
     # Keep the cross-section manageable: most liquid names by trailing dollar volume.
     if len(ok) > max_assets:
-        dv = (view.volume.iloc[-lookback:][ok] * view.close.iloc[-lookback:][ok]).mean()
+        # Dollar volume needs raw (as traded) prices: volume is in shares as traded, so
+        # pairing it with split-adjusted closes would understate pre-split liquidity.
+        px = view.raw_close if view.raw_close is not None else view.close
+        dv = (view.volume.iloc[-lookback:][ok] * px.iloc[-lookback:][ok]).mean()
         ok = top_n(dv, max_assets)
         ok.sort()
     cov = r[ok].cov(ddof=1).to_numpy() * 252

@@ -55,7 +55,7 @@ def run_validation_suite(
     r = simple_returns(base.equity["equity"])
     b = simple_returns(base.benchmark) if base.benchmark is not None else None
     out: dict[str, Any] = {
-        "bootstrap": bootstrap_ci(r, b, seed=seed),
+        "bootstrap": bootstrap_ci(r, b, seed=seed, risk_free_rate=config.risk_free_rate),
         "regimes": regime_analysis(r, b) if b is not None else [],
     }
     stage(1)(0.0, "look-ahead check")

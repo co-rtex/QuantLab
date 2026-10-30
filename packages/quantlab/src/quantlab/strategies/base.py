@@ -37,6 +37,7 @@ class MarketView:
     volume: pd.DataFrame
     tradable: pd.Series
     holdings: pd.Series
+    raw_close: pd.DataFrame | None = None  # as traded; for dollar volume and liquidity
 
     @property
     def universe(self) -> list[str]:

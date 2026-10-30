@@ -252,11 +252,13 @@ def compute_performance(
     return m
 
 
-def trade_statistics(trades: pd.DataFrame) -> MetricSet:
+def trade_statistics(trades: pd.DataFrame, splits: pd.DataFrame | None = None) -> MetricSet:
     """Round-trip statistics using FIFO lot matching on executed trades.
 
     A round trip is a sell matched against earlier buy lots; realized P&L includes
-    commissions allocated pro rata to the matched quantity.
+    commissions allocated pro rata to the matched quantity. ``splits`` (columns ``date``,
+    ``symbol``, ``ratio``) restate open lots in post-split shares on the ex-date, before
+    that day's fills, so positions held across a split are matched correctly.
     """
     m = MetricSet()
     if trades is None or len(trades) == 0:
@@ -264,9 +266,23 @@ def trade_statistics(trades: pd.DataFrame) -> MetricSet:
         for k in ("win_rate", "avg_win", "avg_loss", "profit_factor"):
             m.set(k, None, "no closed round trips")
         return m
+    events = trades.assign(event_kind=1)[
+        ["date", "symbol", "quantity", "price", "commission", "event_kind"]
+    ]
+    if splits is not None and len(splits):
+        sp = splits.rename(columns={"ratio": "price"}).assign(
+            quantity=0.0, commission=0.0, event_kind=0
+        )
+        events = pd.concat([sp[events.columns], events], ignore_index=True)
+    events = events.sort_values(["date", "event_kind"], kind="stable")
     lots: dict[str, list[list[float]]] = {}
     pnls: list[float] = []
-    for t in trades.sort_values(["date"], kind="stable").itertuples():
+    for t in events.itertuples():
+        if t.event_kind == 0:  # split: more shares, proportionally lower cost per share
+            for lot in lots.get(t.symbol, []):
+                lot[0] *= float(t.price)
+                lot[1] /= float(t.price)
+            continue
         q, px = float(t.quantity), float(t.price)
         fee_ps = float(t.commission) / abs(q) if q else 0.0
         if q > 0:
@@ -274,16 +290,18 @@ def trade_statistics(trades: pd.DataFrame) -> MetricSet:
             continue
         remaining = -q
         book = lots.get(t.symbol, [])
-        pnl = 0.0
+        pnl, matched = 0.0, 0.0
         while remaining > 1e-12 and book:
             lot = book[0]
             take = min(lot[0], remaining)
             pnl += take * ((px - fee_ps) - lot[1])
             lot[0] -= take
             remaining -= take
+            matched += take
             if lot[0] <= 1e-12:
                 book.pop(0)
-        pnls.append(pnl)
+        if matched > 1e-12:  # a sell that matched nothing is not a round trip
+            pnls.append(pnl)
     arr = np.array(pnls)
     m.set("round_trips", len(arr))
     if len(arr) == 0:

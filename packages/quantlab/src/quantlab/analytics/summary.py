@@ -67,7 +67,12 @@ def analyze_backtest(res: BacktestResult) -> dict[str, Any]:
     bench_perf = (
         compute_performance(res.benchmark, risk_free_rate=rf) if res.benchmark is not None else None
     )
-    trades = trade_statistics(res.trades)
+    split_rows = [
+        {"date": tx.date, "symbol": tx.symbol, "ratio": tx.price}
+        for tx in res.ledger.transactions
+        if tx.kind == "split"
+    ]
+    trades = trade_statistics(res.trades, pd.DataFrame(split_rows) if split_rows else None)
     costs = cost_and_turnover(eq)
     daily = simple_returns(eq["equity"])
     final_date = eq.index[-1]

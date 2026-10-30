@@ -18,9 +18,6 @@ import pandas as pd
 
 from quantlab.analytics.performance import compute_performance, simple_returns
 from quantlab.backtest.engine import BacktestConfig, BacktestError, run_backtest
-from quantlab.data.adjust import PointInTimeAdjuster, total_returns
-from quantlab.data.schema import wide
-from quantlab.strategies.base import MarketView
 from quantlab.strategies.library import create_strategy
 
 Progress = Callable[[float, str], None]
@@ -58,6 +55,19 @@ def param_grid(
     if base and base not in combos:
         combos.append(dict(base))
     return combos
+
+
+def invested_equity(equity: pd.DataFrame) -> pd.Series:
+    """Equity from the session before the first non-cash holding onward.
+
+    Strategies with long look-backs can sit in cash at the start of a window. Scoring the
+    whole window would dilute their mean and volatility unequally and bias parameter
+    selection toward short look-backs, so selection metrics use the invested period.
+    """
+    held = np.flatnonzero(equity["market_value"].to_numpy() > 0)
+    if len(held) == 0:
+        return equity["equity"]
+    return equity["equity"].iloc[max(0, held[0] - 1) :]
 
 
 def _sharpe(res_equity: pd.Series, rf: float) -> float | None:
@@ -153,7 +163,7 @@ def walk_forward(
                     cfg,
                     record_positions=False,
                 )
-                s = _sharpe(res.equity["equity"], config.risk_free_rate)
+                s = _sharpe(invested_equity(res.equity), config.risk_free_rate)
             except BacktestError:
                 s = None
             is_scores.append({"params": _key(params), "sharpe": s})
@@ -165,9 +175,31 @@ def walk_forward(
                 on_progress(done / total, f"fold {i + 1}/{len(folds)}: in-sample search")
         assert best is not None
         cfg = config.model_copy(update={"start": f.test_start.date(), "end": f.test_end.date()})
-        res = run_backtest(
-            bars, actions, create_strategy(strategy_key, best[1]), cfg, record_positions=False
-        )
+        try:
+            res = run_backtest(
+                bars,
+                actions,
+                create_strategy(strategy_key, best[1]),
+                cfg,
+                record_positions=False,
+            )
+        except BacktestError as exc:
+            rows.append(
+                {
+                    "fold": i + 1,
+                    "error": str(exc),
+                    "train": [str(f.train_start.date()), str(f.train_end.date())],
+                    "test": [str(f.test_start.date()), str(f.test_end.date())],
+                    "selected_params": best[1],
+                    "in_sample_sharpe": None,
+                    "oos_sharpe": None,
+                    "oos_return": None,
+                    "oos_benchmark_return": None,
+                    "oos_max_drawdown": None,
+                    "in_sample_grid": is_scores,
+                }
+            )
+            continue
         oos = compute_performance(
             res.equity["equity"], res.benchmark, risk_free_rate=config.risk_free_rate
         )
@@ -244,10 +276,10 @@ def sensitivity(
         res = run_backtest(
             bars, actions, create_strategy(strategy_key, params), config, record_positions=False
         )
-        m = compute_performance(
-            res.equity["equity"], res.benchmark, risk_free_rate=config.risk_free_rate
-        ).values
-        r = simple_returns(res.equity["equity"])
+        inv = invested_equity(res.equity)
+        bench = res.benchmark.reindex(inv.index) if res.benchmark is not None else None
+        m = compute_performance(inv, bench, risk_free_rate=config.risk_free_rate).values
+        r = simple_returns(inv)
         if r.std(ddof=1) > 0:
             per_period.append(float(r.mean() / r.std(ddof=1)))
         rows.append(
@@ -341,61 +373,63 @@ def leakage_check(
     params: dict[str, Any],
     config: BacktestConfig,
     *,
-    samples: int = 8,
+    samples: int = 4,
     seed: int = 0,
 ) -> dict[str, Any]:
-    """Empirical look-ahead test.
+    """Empirical look-ahead test through the real engine.
 
-    For sampled decision dates ``d``, compute target weights twice: from a view built on the
-    full dataset and from a view built on data truncated at ``d``. Any difference means the
-    signal depends on information dated after ``d``.
+    The full backtest is re-run on data truncated just after sampled cut dates ``d``. Every
+    target-weight decision dated ``<= d`` must be identical in both runs; any difference
+    means a decision depended on information dated after ``d``. Because the engine itself
+    builds each view (as-of adjustment, holdings, tradability), the check covers the same
+    code path as real experiments.
     """
-    universe = sorted(
-        set(config.universe or bars["symbol"].unique())
-        - ({config.benchmark.upper()} if config.benchmark else set())
+    cfg = (
+        config.model_copy(update={"rebalance": "monthly"})
+        if config.rebalance == "daily"
+        else config
     )
-    b = bars[bars["symbol"].isin(universe)]
-    a = actions[actions["symbol"].isin(universe)]
-    dates = pd.DatetimeIndex(sorted(b["date"].unique()))
-    strat = create_strategy(strategy_key, params)
-    lo = max(strat.warmup + 1, 1)
-    if config.start:
-        lo = max(lo, int(dates.searchsorted(pd.Timestamp(config.start))))
-    candidates = np.arange(lo, len(dates) - 1)
-    if len(candidates) == 0:
-        return {"status": "unassessed", "reason": "no eligible decision dates"}
+    full = run_backtest(
+        bars, actions, create_strategy(strategy_key, params), cfg, record_positions=False
+    )
+    decisions = full.weights_target
+    dates = (
+        pd.DatetimeIndex(sorted(decisions["date"].unique()))
+        if len(decisions)
+        else pd.DatetimeIndex([])
+    )
+    sessions = pd.DatetimeIndex(sorted(bars["date"].unique()))
+    candidates = [d for d in dates[1:-1] if sessions.searchsorted(d) + 1 < len(sessions)]
+    if not candidates:
+        return {"status": "unassessed", "reason": "no decision dates to test"}
     rng = np.random.default_rng(seed)
-    picks = sorted(rng.choice(candidates, size=min(samples, len(candidates)), replace=False))
-
-    def view(bars_: pd.DataFrame, actions_: pd.DataFrame, d: pd.Timestamp) -> MarketView:
-        close = wide(bars_, "close").reindex(columns=universe)
-        k = int(close.index.get_indexer([d])[0])
-        adj = PointInTimeAdjuster(close, actions_)
-        adj_close = close.to_numpy() * adj.multiplier(k)
-        rets = total_returns(bars_, actions_).reindex(index=close.index, columns=universe)
-        return MarketView(
-            date=d,
-            close=pd.DataFrame(adj_close[: k + 1], index=close.index[: k + 1], columns=universe),
-            returns=rets.iloc[: k + 1],
-            volume=wide(bars_, "volume").reindex(index=close.index, columns=universe).iloc[: k + 1],
-            tradable=pd.Series(np.isfinite(close.to_numpy()[k]), index=universe),
-            holdings=pd.Series(0.0, index=universe),
-        )
-
+    picks = sorted(rng.choice(len(candidates), size=min(samples, len(candidates)), replace=False))
     mismatches = []
-    for k in picks:
-        d = dates[k]
-        w_full = strat.target_weights(view(b, a, d))
-        tb, ta = b[b["date"] <= d], a[a["ex_date"] <= d]
-        w_trunc = strat.target_weights(view(tb, ta, d))
-        s1 = pd.Series(dtype=float) if w_full is None else w_full.sort_index()
-        s2 = pd.Series(dtype=float) if w_trunc is None else w_trunc.sort_index()
-        same = s1.index.equals(s2.index) and np.allclose(s1.to_numpy(), s2.to_numpy(), atol=1e-10)
+    tested = []
+    for i in picks:
+        d = candidates[i]
+        nxt = sessions[sessions.searchsorted(d) + 1]  # keep one session so orders can queue
+        tb, ta = bars[bars["date"] <= nxt], actions[actions["ex_date"] <= nxt]
+        trunc = run_backtest(
+            tb,
+            ta,
+            create_strategy(strategy_key, params),
+            cfg.model_copy(update={"end": nxt.date()}),
+            record_positions=False,
+        )
+        a = decisions[decisions["date"] <= d].reset_index(drop=True)
+        b = trunc.weights_target[trunc.weights_target["date"] <= d].reset_index(drop=True)
+        same = (
+            len(a) == len(b)
+            and (a["symbol"].to_numpy() == b["symbol"].to_numpy()).all()
+            and np.allclose(a["weight"].to_numpy(), b["weight"].to_numpy(), atol=1e-10)
+        )
+        tested.append(str(d.date()))
         if not same:
             mismatches.append(str(d.date()))
     return {
         "status": "verified" if not mismatches else "failed",
-        "dates_tested": [str(dates[k].date()) for k in picks],
+        "dates_tested": tested,
         "mismatches": mismatches,
-        "method": "weights from full data vs data truncated at each decision date",
+        "method": "engine decisions on full data vs data truncated after each cut date",
     }

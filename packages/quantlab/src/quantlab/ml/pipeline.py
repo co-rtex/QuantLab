@@ -20,11 +20,11 @@ import hashlib
 import math
 from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Literal
 
 import numpy as np
 import pandas as pd
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 from scipy import stats
 from sklearn.ensemble import HistGradientBoostingClassifier, RandomForestClassifier
 from sklearn.linear_model import LogisticRegression
@@ -46,7 +46,14 @@ FEATURES = [
     "dist_high_252",
     "volume_z_21",
 ]
-MODELS = ("majority", "momentum_rule", "logistic", "random_forest", "gradient_boosting")
+ModelName = Literal["majority", "momentum_rule", "logistic", "random_forest", "gradient_boosting"]
+MODELS: tuple[ModelName, ...] = (
+    "majority",
+    "momentum_rule",
+    "logistic",
+    "random_forest",
+    "gradient_boosting",
+)
 
 
 class MLConfig(BaseModel):
@@ -55,10 +62,17 @@ class MLConfig(BaseModel):
     horizon: int = Field(21, ge=5, le=126)
     sample_every: int = Field(21, ge=1, le=63)
     folds: int = Field(4, ge=2, le=10)
-    min_train_dates: int = Field(24, ge=6)
-    models: tuple[str, ...] = MODELS
-    seed: int = 0
-    exclude: tuple[str, ...] = ("SYNIDX",)
+    min_train_dates: int = Field(24, ge=6, le=500)
+    models: tuple[ModelName, ...] = Field(MODELS, min_length=1, max_length=len(MODELS))
+    seed: int = Field(0, ge=0, le=2**31 - 1)
+    exclude: tuple[str, ...] = Field(("SYNIDX",), max_length=50)
+
+    @field_validator("models")
+    @classmethod
+    def _unique(cls, v: tuple[str, ...]) -> tuple[str, ...]:
+        if len(set(v)) != len(v):
+            raise ValueError("models must not repeat")
+        return v
 
 
 def compute_features(

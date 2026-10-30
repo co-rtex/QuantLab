@@ -33,10 +33,10 @@ def stationary_bootstrap_indices(
     return idx
 
 
-def _ann_sharpe(r: np.ndarray, periods: int) -> np.ndarray:
+def _ann_sharpe(r: np.ndarray, periods: int, rf_p: float = 0.0) -> np.ndarray:
     sd = r.std(axis=-1, ddof=1)
     with np.errstate(divide="ignore", invalid="ignore"):
-        s = r.mean(axis=-1) / sd * math.sqrt(periods)
+        s = (r.mean(axis=-1) - rf_p) / sd * math.sqrt(periods)
     return np.where(sd > 0, s, np.nan)
 
 
@@ -49,6 +49,7 @@ def bootstrap_ci(
     confidence: float = 0.95,
     seed: int = 0,
     periods: int = 252,
+    risk_free_rate: float = 0.0,
 ) -> dict[str, Any]:
     """Bootstrap CIs for annualized Sharpe, CAGR and (if given) annualized excess return.
 
@@ -62,7 +63,9 @@ def bootstrap_ci(
     idx = stationary_bootstrap_indices(len(r), n_samples, block, rng)
     sample = r[idx]
     lo, hi = (1 - confidence) / 2, 1 - (1 - confidence) / 2
-    sharpe = _ann_sharpe(sample, periods)
+    rf_p = (1 + risk_free_rate) ** (1 / periods) - 1  # same convention as compute_performance
+    sharpe = _ann_sharpe(sample, periods, rf_p)
+    finite = sharpe[np.isfinite(sharpe)]
     growth = np.prod(1 + sample, axis=1)
     cagr = np.where(growth > 0, growth ** (periods / len(r)) - 1, -1.0)
     out: dict[str, Any] = {
@@ -73,10 +76,10 @@ def bootstrap_ci(
         "seed": seed,
         "observations": len(r),
         "sharpe": {
-            "estimate": float(_ann_sharpe(r, periods)),
+            "estimate": float(_ann_sharpe(r, periods, rf_p)),
             "lower": float(np.nanquantile(sharpe, lo)),
             "upper": float(np.nanquantile(sharpe, hi)),
-            "p_le_zero": float(np.nanmean(sharpe <= 0)),
+            "p_le_zero": float(np.mean(finite <= 0)) if len(finite) else None,
         },
         "cagr": {"lower": float(np.quantile(cagr, lo)), "upper": float(np.quantile(cagr, hi))},
     }

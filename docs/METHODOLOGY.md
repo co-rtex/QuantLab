@@ -28,19 +28,26 @@ Per session `k`:
 
 1. Corporate actions at the open: dividend on pre-split shares, then split. Pending orders
    decided before a split are restated in post-split shares.
-2. Holdings in symbols with no remaining bars are liquidated at their last close
-   (delisting proceeds assumption; real recovery values may be lower).
+2. A held symbol that has printed no bar for `delist_after_missing` consecutive sessions
+   (default 5) is treated as delisted and liquidated at its last close. The rule uses only
+   past data; recovery values in real delistings may be lower.
 3. Orders decided at the previous rebalance close fill at `open[k]` (default) or
    `close[k]`, adjusted by slippage (`price * (1 ± slippage_bps/1e4)`). Commission is
    `max(commission_min, notional * commission_bps/1e4)`.
-4. Sells execute before buys. Buys that exceed available cash are reduced to the
-   affordable quantity (whole shares unless fractional shares are enabled) and flagged
-   `partial`. Orders without a price on the fill date are rejected (`no_price`).
+4. Sells execute before buys. If the cash left after sells cannot fund all buys at the
+   fill prices, every buy is scaled by the same factor (then rounded to whole shares
+   unless fractional shares are enabled) and flagged `partial`, so no symbol is favoured
+   by sort order. Orders without a price on the fill date are rejected (`no_price`).
 5. Mark-to-market at `close[k]` (last known close for symbols with a gap).
 6. On rebalance dates (last session of the period, plus the first session) the strategy
    sees bars dated `<= k` only and returns target weights. Weights are clipped to
    `max_weight`, scaled to `max_gross_exposure`, and converted to share targets using
    `close[k]` and equity at `close[k]`.
+
+Symbols that only list after the backtest window are excluded (recorded in
+`meta.not_listed_in_window`). Corporate actions whose ex-date matches no bar are counted in
+`meta.unmatched_corporate_actions`; they are not applied, and the data quality report flags
+them.
 
 No leverage or shorting is modelled. Cash earns nothing (the risk-free rate is used only in
 risk-adjusted ratios).
@@ -73,7 +80,19 @@ data after a decision date leaves that decision unchanged (no look-ahead).
 Undefined statistics (zero variance, fewer than two observations, no drawdown, no losing
 trades) are reported as `null` with a reason, never as `0`.
 
-Trade statistics use FIFO lot matching with commissions allocated per share.
+Trade statistics use FIFO lot matching with commissions allocated per share; open lots
+are restated at each split (shares times ratio, cost divided by ratio). Sells that match
+no open lot are not counted as round trips.
+
+Parameter selection (walk-forward in-sample scoring) and the sensitivity grid score each
+run from the session before its first holding, so strategies with long look-backs are not
+penalised for warm-up time spent in cash. Reported experiment statistics still cover the
+whole requested window, as that is what the account experienced.
+
+Regime analysis classifies each day using trailing benchmark volatility and trend, with
+volatility cut points taken from expanding quantiles, so no day's regime depends on later
+data. Bootstrap Sharpe intervals use the same risk-free convention as the reported
+Sharpe.
 
 ## Risk (`quantlab.analytics.risk`)
 

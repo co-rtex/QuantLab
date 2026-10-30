@@ -178,3 +178,26 @@ def test_stress_concentration_and_monte_carlo():
     )
     wp = worst_periods(e, window=10, top=2)
     assert wp.iloc[0]["return"] < 0
+
+
+def test_trade_statistics_handle_splits_and_unmatched_sells():
+    d = pd.bdate_range("2024-01-01", periods=4)
+    t = pd.DataFrame(
+        [
+            {"date": d[0], "symbol": "A", "quantity": 100, "price": 50.0, "commission": 0.0},
+            {"date": d[2], "symbol": "A", "quantity": -200, "price": 30.0, "commission": 0.0},
+            {"date": d[3], "symbol": "B", "quantity": -5, "price": 10.0, "commission": 0.0},
+        ]
+    )
+    splits = pd.DataFrame([{"date": d[1], "symbol": "A", "ratio": 2.0}])
+    m = trade_statistics(t, splits)
+    assert m["round_trips"] == 1  # the unmatched B sell is not a round trip
+    assert m["avg_win"] == pytest.approx(200 * (30 - 25))  # +1000, not -2000
+    rev = pd.DataFrame(
+        [
+            {"date": d[0], "symbol": "C", "quantity": 100, "price": 10.0, "commission": 0.0},
+            {"date": d[2], "symbol": "C", "quantity": -10, "price": 110.0, "commission": 0.0},
+        ]
+    )
+    m2 = trade_statistics(rev, pd.DataFrame([{"date": d[1], "symbol": "C", "ratio": 0.1}]))
+    assert m2["avg_win"] == pytest.approx(10 * (110 - 100))

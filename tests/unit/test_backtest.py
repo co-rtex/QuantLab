@@ -159,17 +159,45 @@ def test_dividends_credited_and_value_preserved():
     assert res.equity["equity"].iloc[-1] == pytest.approx(1000)
 
 
-def test_missing_bar_rejects_order_and_delisting_liquidates():
-    bars = make_bars({"A": [10.0, 10.0, None, 12.0, 12.0], "B": [10.0, 10.0, 10.0, 11.0, None]})
-    cfg = BacktestConfig(universe=["A", "B"], rebalance="daily", initial_capital=1000, **FREE)
+def test_missing_bar_rejects_order_and_delisting_is_point_in_time():
+    # B stops trading after session 4; A misses one session (index 2).
+    a = [10.0, 10.0, None, 12.0, 12.0, 12.0, 12.0, 12.0, 12.0, 12.0]
+    b = [10.0, 10.0, 10.0, 11.0, 11.0, None, None, None, None, None]
+    bars = make_bars({"A": a, "B": b})
+    cfg = BacktestConfig(
+        universe=["A", "B"],
+        rebalance="quarterly",
+        initial_capital=1000,
+        delist_after_missing=3,
+        **FREE,
+    )
     res = run_backtest(bars, normalize_actions(None), create_strategy("equal_weight"), cfg)
-    assert "delisting" in set(res.trades.get("note", pd.Series(dtype=str)).dropna())
-    final = res.equity.iloc[-1]
-    assert final["positions"] == 1  # only A remains
+    eq = res.equity
+    # B is still held for the first missing sessions (nobody knows yet that it delisted)...
+    assert (eq["positions"].iloc[5:7] == 2).all()
+    # ...and is liquidated at its last close once it has missed 3 sessions in a row.
+    liq = res.trades[res.trades["note"] == "delisting"]
+    assert list(liq["symbol"]) == ["B"]
+    assert liq.iloc[0]["date"] == eq.index[7]
+    assert liq.iloc[0]["price"] == 11.0
+    assert eq["positions"].iloc[-1] == 1
+    # A's single missing session never triggers liquidation.
+    assert "A" not in set(liq["symbol"])
     res.ledger.check_invariants()
-    # A had no bar on session 3 so an order executing then is rejected
-    if len(res.rejections):
-        assert set(res.rejections["reason"]) <= {"no_price"}
+
+
+def test_cash_constrained_buys_are_prorated_not_alphabetical():
+    # Gap up at the open of session 2 makes every buy 20% more expensive than sized.
+    closes = {s: [10.0, 10.0, 10.0] for s in ("A", "B", "C", "D")}
+    opens = {s: [10.0, 12.0, 10.0] for s in ("A", "B", "C", "D")}
+    bars = make_bars(closes, opens=opens)
+    cfg = BacktestConfig(universe=list(closes), initial_capital=10_000, **FREE)
+    res = run_backtest(bars, normalize_actions(None), create_strategy("buy_and_hold"), cfg)
+    q = res.trades.set_index("symbol")["quantity"]
+    assert set(q.index) == {"A", "B", "C", "D"}  # nobody is shut out
+    assert q.max() - q.min() <= 1  # equal targets stay (nearly) equal
+    assert res.trades["partial"].all()
+    assert res.equity["cash"].iloc[-1] >= 0
 
 
 def test_rebalance_mask_month_end():

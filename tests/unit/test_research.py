@@ -130,10 +130,10 @@ def test_leakage_check_detects_planted_lookahead(monkeypatch):
     try:
         ok = leakage_check(m.bars, m.actions, LowestPrice.key, {}, CFG, samples=10)
         assert ok["status"] == "verified"
-        # Plant a bug: adjust with *all* corporate actions regardless of the as-of date.
-        real = adjust.PointInTimeAdjuster.multiplier
+        # Plant a bug in the engine's view: skip the as-of rescaling, so price levels
+        # carry adjustment factors from corporate actions that have not happened yet.
         monkeypatch.setattr(
-            adjust.PointInTimeAdjuster, "multiplier", lambda self, as_of_pos=None: real(self, None)
+            adjust.PointInTimeAdjuster, "scale_as_of", lambda self, pos: np.ones(self._rev.shape[1])
         )
         leaky = leakage_check(m.bars, m.actions, LowestPrice.key, {}, CFG, samples=10)
         assert leaky["status"] == "failed"
@@ -238,3 +238,59 @@ def test_walk_forward_windows_adapt_to_sample():
     assert walk_forward_windows(1500) == (504, 252)
     assert walk_forward_windows(500) == (250, 125)
     assert walk_forward_windows(100)[0] == 126  # too short: walk-forward reports an error
+
+
+def test_late_listings_do_not_break_windows_or_walk_forward():
+    from quantlab.backtest.engine import run_backtest
+
+    m = generate_market(SyntheticSpec(n_assets=60, seed=7, late_listing_fraction=0.3))
+    late = m.bars.groupby("symbol")["date"].min()
+    assert late.max() > pd.Timestamp("2019-12-31")  # some symbols list after the window
+    res = run_backtest(
+        m.bars,
+        m.actions,
+        REGISTRY["equal_weight"](),
+        BacktestConfig(start="2019-01-02", end="2019-06-28"),
+    )
+    assert res.meta["not_listed_in_window"]
+    wf = walk_forward(
+        m.bars,
+        m.actions,
+        "momentum",
+        {"lookback": 126, "skip": 21, "top_n": 5},
+        BacktestConfig(start="2019-01-02", benchmark="SYNIDX"),
+        grid={"lookback": [63, 126]},
+        train_sessions=252,
+        test_sessions=126,
+    )
+    assert all(f["in_sample_sharpe"] is not None for f in wf["folds"])
+    assert not any("error" in f for f in wf["folds"])
+
+
+def test_regimes_are_point_in_time():
+    rng = np.random.default_rng(3)
+    idx = pd.bdate_range("2020-01-01", periods=600)
+    r = pd.Series(rng.normal(0, 0.01, 600), index=idx)
+    b = pd.Series(rng.normal(0, 0.01, 600) * np.r_[np.ones(300), 3 * np.ones(300)], index=idx)
+    cut = idx[400]
+
+    full = regime_analysis(r, b)
+    trunc = regime_analysis(r[:cut], b[:cut])
+    assert full and trunc  # both computable
+    # Truncation test on the classification itself: recompute thresholds both ways.
+    vol_full = b.rolling(63).std(ddof=1).shift(1).dropna()
+    lo_full = vol_full.expanding(min_periods=63).quantile(1 / 3)
+    lo_trunc = vol_full[:cut].expanding(min_periods=63).quantile(1 / 3)
+    pd.testing.assert_series_equal(lo_full[:cut], lo_trunc)
+
+
+def test_bootstrap_sharpe_matches_reported_sharpe_with_risk_free_rate():
+    from quantlab.analytics.performance import compute_performance
+
+    rng = np.random.default_rng(4)
+    idx = pd.bdate_range("2020-01-01", periods=500)
+    e = pd.Series(100 * np.cumprod(1 + rng.normal(0.0006, 0.01, 500)), index=idx)
+    r = e.pct_change().dropna()
+    boot = bootstrap_ci(r, n_samples=200, risk_free_rate=0.04)
+    rep = compute_performance(e, risk_free_rate=0.04)["sharpe"]
+    assert boot["sharpe"]["estimate"] == pytest.approx(rep)

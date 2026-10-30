@@ -37,7 +37,7 @@ from quantlab.data.schema import wide
 from quantlab.portfolio.ledger import Ledger, LedgerError
 from quantlab.strategies.base import MarketView, Strategy
 
-ENGINE_VERSION = "1.0.0"
+ENGINE_VERSION = "1.1.0"
 
 
 class BacktestConfig(BaseModel):
@@ -58,6 +58,7 @@ class BacktestConfig(BaseModel):
     universe: list[str] | None = None
     benchmark: str | None = None
     risk_free_rate: float = Field(0.0, ge=-0.05, le=0.25)
+    delist_after_missing: int = Field(5, ge=1, le=63)
 
     @model_validator(mode="after")
     def _dates(self) -> BacktestConfig:
@@ -89,6 +90,7 @@ class Order:
     symbol: str
     quantity: float
     reference_price: float
+    scaled: bool = False
 
 
 @dataclass
@@ -146,17 +148,25 @@ def run_backtest(
 ) -> BacktestResult:
     universe = sorted({s.upper() for s in config.universe}) if config.universe else None
     bench = config.benchmark.upper() if config.benchmark else None
+    known = set(bars["symbol"].unique())
     if universe is None:
-        universe = sorted(set(bars["symbol"].unique()) - ({bench} if bench else set()))
+        universe = sorted(known - ({bench} if bench else set()))
+    unknown = set(universe) - known
+    if unknown:
+        raise BacktestError(f"no data for symbols: {sorted(unknown)[:10]}")
     keep = set(universe) | ({bench} if bench else set())
     bars = bars[bars["symbol"].isin(keep)]
     if config.end:
         bars = bars[bars["date"] <= pd.Timestamp(config.end)]
     if len(bars) == 0:
         raise BacktestError("no market data for the requested universe and dates")
-    missing = set(universe) - set(bars["symbol"].unique())
-    if missing:
-        raise BacktestError(f"no data for symbols: {sorted(missing)[:10]}")
+    # Symbols that only list after the window cannot be traded in it. Excluding them uses
+    # nothing a researcher at the window's end would not know.
+    present = set(bars["symbol"].unique())
+    not_listed = sorted(set(universe) - present)
+    universe = [s for s in universe if s in present]
+    if not universe:
+        raise BacktestError("no symbol in the universe has data in the backtest window")
     acts = actions[actions["symbol"].isin(keep)]
     if config.end:
         acts = acts[acts["ex_date"] <= pd.Timestamp(config.end)]
@@ -175,8 +185,13 @@ def run_backtest(
     C = close_raw.to_numpy()
     O = open_raw.to_numpy()
     has_bar = np.isfinite(C)
-    last_bar = np.where(has_bar.any(axis=0), len(dates) - 1 - np.argmax(has_bar[::-1], axis=0), -1)
+    missing_run = np.zeros(len(universe), dtype=np.int64)
     col = {s: j for j, s in enumerate(universe)}
+    u_acts = acts[acts["symbol"].isin(universe)]
+    matched = pd.MultiIndex.from_arrays([u_acts["symbol"], u_acts["ex_date"]]).isin(
+        pd.MultiIndex.from_arrays([bars["symbol"], bars["date"]])
+    )
+    unmatched_actions = int((~matched).sum())
 
     start_pos = 0 if config.start is None else int(dates.searchsorted(pd.Timestamp(config.start)))
     if start_pos >= len(dates) - 1:
@@ -198,9 +213,30 @@ def run_backtest(
     slip = config.slippage_bps / 1e4
     comm = config.commission_bps / 1e4
 
+    def prorate_buys(k: int, px_row: np.ndarray, orders: list[Order]) -> None:
+        """Scale all buys by the same factor when the cash left after sells cannot fund
+        them, instead of filling whichever symbols sort first."""
+        cash = ledger.cash
+        for o in orders:
+            if o.quantity < 0 and math.isfinite(px_row[col[o.symbol]]):
+                q = min(-o.quantity, ledger.quantity(o.symbol))
+                cash += q * px_row[col[o.symbol]] * (1 - slip) * (1 - comm)
+        need = sum(
+            o.quantity * px_row[col[o.symbol]] * (1 + slip) * (1 + comm) + config.commission_min
+            for o in orders
+            if o.quantity > 0 and math.isfinite(px_row[col[o.symbol]])
+        )
+        if need > cash > 0:
+            scale = cash / need
+            for o in orders:
+                if o.quantity > 0:
+                    o.quantity *= scale
+                    o.scaled = True
+
     def fill(k: int, px_row: np.ndarray, orders: list[Order]) -> float:
         d = dates[k]
         traded = 0.0
+        prorate_buys(k, px_row, orders)
         for o in sorted(orders, key=lambda o: (o.quantity > 0, o.symbol)):
             j = col[o.symbol]
             ref = px_row[j]
@@ -225,7 +261,7 @@ def run_backtest(
                 if qty == 0:
                     continue
             px = ref * (1 + slip) if qty > 0 else ref * (1 - slip)
-            partial = False
+            partial = o.scaled
             if qty > 0:
                 # Shrink buys to what the cash balance can fund, including commission.
                 affordable = ledger.cash / (px * (1 + comm)) if px > 0 else 0.0
@@ -304,10 +340,13 @@ def run_backtest(
             if ratio != 1.0:
                 o.quantity *= ratio
                 o.reference_price /= ratio
-        # delisting: liquidate holdings in symbols with no remaining bars
+        # delisting: a held symbol that has printed no bar for `delist_after_missing`
+        # consecutive sessions is liquidated at its last close. The rule only looks at the
+        # past, so it cannot know in advance that a series has ended.
+        missing_run = np.where(has_bar[k], 0, missing_run + 1)
         for sym in list(ledger.positions):
             j = col[sym]
-            if last_bar[j] < k and math.isfinite(last_px[j]):
+            if missing_run[j] >= config.delist_after_missing and math.isfinite(last_px[j]):
                 q = ledger.quantity(sym)
                 ledger.trade(d, sym, -q, last_px[j], note="delisted: liquidated at last close")
                 trades.append(
@@ -373,6 +412,7 @@ def run_backtest(
                 volume=volume.iloc[: k + 1],
                 tradable=pd.Series(has_bar[k], index=universe),
                 holdings=holdings,
+                raw_close=close_raw.iloc[: k + 1],
             )
             target = strategy.target_weights(view)
             if target is not None:
@@ -419,6 +459,8 @@ def run_backtest(
             "universe": universe,
             "benchmark": bench,
             "sessions": n_steps,
+            "not_listed_in_window": not_listed,
+            "unmatched_corporate_actions": unmatched_actions,
             "first_session": str(trade_dates[0].date()),
             "last_session": str(trade_dates[-1].date()),
         },
