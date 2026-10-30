@@ -175,9 +175,29 @@ class RateLimiter:
         if not allowed:
             raise ApiError(429, "rate_limited", "Too many attempts; try again later")
 
-    def check_all(self, keys: list[str], limit: int, window: int = 60) -> None:
-        for k in keys:
-            self.check(k, limit, window)
+    def exceeded(self, key: str, limit: int, window: int = 60) -> bool:
+        """Read-only check: has ``key`` already reached ``limit`` in this window?"""
+        from quantlab_api.jobs import redis_conn
+
+        bucket = f"ql:rl:{key}:{int(time.time() // window)}"
+        try:
+            return int(redis_conn().get(bucket) or 0) >= limit
+        except Exception:
+            q = self.local.get(key)
+            now = time.monotonic()
+            return q is not None and sum(1 for t in q if now - t <= window) >= limit
+
+    def record(self, key: str, window: int = 60) -> None:
+        """Count one event against ``key`` without enforcing a limit."""
+        from quantlab_api.jobs import redis_conn
+
+        bucket = f"ql:rl:{key}:{int(time.time() // window)}"
+        try:
+            r = redis_conn()
+            if int(r.incr(bucket)) == 1:
+                r.expire(bucket, window + 1)
+        except Exception:
+            self.local[key].append(time.monotonic())
 
     def reset(self) -> None:
         self.local.clear()

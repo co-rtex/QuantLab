@@ -157,22 +157,43 @@ def test_production_settings_guard():
         )
 
 
-def test_login_rate_limit_per_account_across_addresses(client, monkeypatch):
-    """Guessing one account from many IPs is still throttled (shared Redis counter)."""
+def test_account_throttle_counts_failures_only_and_spares_real_user(client, monkeypatch):
+    """Failed guesses from many addresses throttle the account without touching others."""
     monkeypatch.setattr(get_settings(), "rate_limit_login_per_minute", 2)
     from quantlab_api.security import login_limiter
 
-    codes = []
-    for i in range(4):
-        login_limiter.check(f"login:ip:10.0.0.{i}", 1000)  # distinct IP buckets
-        codes.append(
-            client.post(
-                "/api/v1/auth/login",
-                headers={"X-Forwarded-For": f"10.0.0.{i}"},
-                json={"email": "victim@example.com", "password": "Whatever-1"},
-            ).status_code
+    register(client, "victim@example.com", "Correct-horse-9")
+    login_limiter.reset()
+    import fakeredis
+
+    from quantlab_api.jobs import set_redis
+
+    set_redis(fakeredis.FakeRedis())
+    # Six failures from distinct addresses reach the account threshold (3 x limit).
+    for i in range(6):
+        login_limiter.check(f"login:ip:attacker-{i}", 1000)
+        login_limiter.record("login:fail:victim@example.com")
+    r = client.post(
+        "/api/v1/auth/login", json={"email": "victim@example.com", "password": "Correct-horse-9"}
+    )
+    assert r.status_code == 429
+    other = client.post(
+        "/api/v1/auth/login", json={"email": "someone@example.com", "password": "Whatever-1"}
+    )
+    assert other.status_code == 401  # other accounts unaffected
+
+
+def test_successful_logins_do_not_lock_account(client, monkeypatch):
+    register(client, "user@example.com", "Correct-horse-9")
+    monkeypatch.setattr(get_settings(), "rate_limit_login_per_minute", 1000)
+    for _ in range(10):
+        r = client.post(
+            "/api/v1/auth/login", json={"email": "user@example.com", "password": "Correct-horse-9"}
         )
-    assert codes[-1] == 429
+        assert r.status_code == 200
+    from quantlab_api.security import login_limiter
+
+    assert not login_limiter.exceeded("login:fail:user@example.com", 1)
 
 
 def test_metrics_token_protects_endpoint(client, monkeypatch):

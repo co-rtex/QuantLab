@@ -74,18 +74,21 @@ def register(body: RegisterIn, request: Request, response: Response, db: DB) -> 
 @router.post("/login", response_model=TokenOut)
 def login(body: LoginIn, request: Request, response: Response, db: DB) -> TokenOut:
     ip = request.client.host if request.client else "unknown"
-    # Keyed by client and by account so distributed guessing against one account is
-    # throttled even when it arrives from many addresses.
-    login_limiter.check_all(
-        [f"login:ip:{ip}", f"login:acct:{body.email.lower()}"],
-        get_settings().rate_limit_login_per_minute,
-    )
+    limit = get_settings().rate_limit_login_per_minute
+    # Every attempt counts against the client address. Only *failed* attempts count against
+    # the account, with a higher threshold, so a third party cannot lock out a real user by
+    # spending the account's budget, while distributed guessing is still throttled.
+    login_limiter.check(f"login:ip:{ip}", limit)
+    acct_key = f"login:fail:{body.email.lower()}"
+    if login_limiter.exceeded(acct_key, limit * 3):
+        raise ApiError(429, "rate_limited", "Too many failed attempts; try again later")
     user = db.scalar(select(User).where(User.email == body.email.lower()))
     if (
         not verify_password(body.password, user.password_hash if user else None)
         or not user
         or not user.is_active
     ):
+        login_limiter.record(acct_key)
         audit(
             db,
             request,
