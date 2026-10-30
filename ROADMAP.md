@@ -30,5 +30,36 @@ Dependency-ordered. ✅ done and verified · 🔶 partial · ⬜ not started.
 | 10 | Accessibility: axe WCAG 2.1 AA audit in E2E, zero violations on 11 pages | ✅ |
 | 10 | Independent service-layer review (9 findings fixed with regression tests) | ✅ |
 | 10 | Independent audit (docs/AUDIT_2026-10-30.md): 18 defects fixed with regression tests; per-worktree stacks and test databases | ✅ |
-| 11 | Audit backlog P0: per-user job quota, auth before multipart parsing, invitations, licensed real-data adapter | ⬜ |
-| 11 | Audit backlog P1: hosted-LLM eval with independent judge, Terraform, external load test, idempotency phantom rows, CSV retry, storage cleanup, frontend error surfacing, DSR inputs | ⬜ |
+| 11 | Account-wide job and workspace quotas (#2) | ✅ |
+| 11 | Post-audit backlog: tracked as GitHub issues, below | 🔶 |
+
+## Post-audit backlog (dependency order)
+
+Owners, file ownership and migration slots: [docs/COORDINATION.md](docs/COORDINATION.md).
+`→` means "must merge before". Live status: `gh issue list --label <owner>`.
+
+| P | Issue | Owner | Depends on |
+|---|---|---|---|
+| P0 | #3 Trusted TLS edge overwriting X-Forwarded-For (**security gate: no public exposure until closed**) | Agent 2 | — → #8, #19 |
+| P0 | #4 Authenticate before parsing multipart uploads | Agent 2 | — → #7 |
+| P0 | #5 Invitations instead of add-member (migration M1) | Agent 2 | — |
+| P0 | #9 Permanent instrument identity (migration M2) | Agent 3 | M1 merged or re-sequenced → #11, #12 |
+| P0 | #10 Corporate-action validation gates | Agent 3 | soft: #9 → #11 |
+| P0 | #12 Reconciliation report against a second source | Agent 3 | #9 |
+| P0 | #11 Licensed vendor adapter (live part blocked on credentials) | Agent 3 | #9, #10 |
+| P1 | #6 Idempotent retries: 409s and phantom rows | Agent 2 | — |
+| P1 | #7 CSV retry and ambiguous-commit cleanup | Agent 2 | #4 |
+| P1 | #13 Undefined-aware statistics (tracking-error noise) | Agent 3 | — |
+| P1 | #14 Deflated Sharpe input consistency | Agent 3 | — |
+| P1 | #16 E2E flake in the validation panel | Lead | — → #17 |
+| P1 | #17 Playwright E2E in CI | Lead | #16 |
+| P1 | #15 Assistant verifier and hosted eval (eval blocked on key) | Unassigned | — |
+| P1 | #18 Frontend error surfacing | Unassigned | — |
+| P1 | #19 Terraform, validated and never applied | Lead | #3 |
+| P1 | #20 External load test (needs a separate host) | Unassigned | — |
+| P1 | #21 Storage lifecycle on workspace deletion | Unassigned | #9 |
+| P2 | #8 Security hardening batch | Agent 2 | #3 |
+| P2 | #22 Per-worktree isolation hardening | Lead | — |
+| P2 | #23 Frontend completeness and synthetic labels | Unassigned | — |
+| P2 | #24 Benchmark methodology, golden tests | Unassigned | — |
+| P2 | #25 Job-deletion semantics for results | Lead | — |
