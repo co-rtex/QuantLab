@@ -47,11 +47,9 @@ JOB_OUTCOMES = Counter("quantlab_job_outcomes_total", "Job terminal outcomes", [
 JOB_RETRIES = Counter("quantlab_job_retries_total", "Job retries scheduled", ["kind", "reason"])
 JOBS_RUNNING = Gauge("quantlab_jobs_running", "Jobs currently executing in this process")
 CACHE_EVENTS = Counter("quantlab_cache_events_total", "Cache lookups", ["cache", "result"])
-DATASET_ROWS = Gauge(
-    "quantlab_dataset_rows", "Rows in latest ingested dataset version", ["dataset"]
-)
+DATASET_ROWS = Gauge("quantlab_dataset_rows", "Rows in the most recently ingested dataset version")
 DATASET_FRESHNESS_DAYS = Gauge(
-    "quantlab_dataset_freshness_days", "Days between newest bar and ingestion time", ["dataset"]
+    "quantlab_dataset_freshness_days", "Days between newest bar and ingestion time (latest)"
 )
 INGEST_QUALITY = Counter("quantlab_ingest_quality_total", "Ingestion quality outcomes", ["status"])
 

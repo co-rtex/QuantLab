@@ -23,9 +23,20 @@ from sqlalchemy import create_engine, text  # noqa: E402
 from sqlalchemy.engine import make_url  # noqa: E402
 
 TABLES = [
-    "audit_events", "experiment_results", "research_runs", "jobs", "experiments",
-    "portfolio_transactions", "portfolios", "strategies", "instruments", "dataset_versions",
-    "datasets", "workspace_members", "workspaces", "users",
+    "audit_events",
+    "experiment_results",
+    "research_runs",
+    "jobs",
+    "experiments",
+    "portfolio_transactions",
+    "portfolios",
+    "strategies",
+    "instruments",
+    "dataset_versions",
+    "datasets",
+    "workspace_members",
+    "workspaces",
+    "users",
 ]
 
 
@@ -34,8 +45,9 @@ def _ensure_database() -> None:
     admin = create_engine(url.set(database="postgres"), isolation_level="AUTOCOMMIT")
     try:
         with admin.connect() as c:
-            exists = c.scalar(text("SELECT 1 FROM pg_database WHERE datname=:n"),
-                              {"n": url.database})
+            exists = c.scalar(
+                text("SELECT 1 FROM pg_database WHERE datname=:n"), {"n": url.database}
+            )
             if not exists:
                 c.execute(text(f'CREATE DATABASE "{url.database}"'))
     except Exception as exc:  # pragma: no cover
@@ -80,8 +92,10 @@ def client():  # type: ignore[no-untyped-def]
 
 
 def register(client, email: str = "alice@example.com", password: str = "Correct-horse-9"):  # type: ignore[no-untyped-def]
-    r = client.post("/api/v1/auth/register",
-                    json={"email": email, "password": password, "display_name": email[:5]})
+    r = client.post(
+        "/api/v1/auth/register",
+        json={"email": email, "password": password, "display_name": email[:5]},
+    )
     assert r.status_code == 201, r.text
     token = r.json()["access_token"]
     client.cookies.clear()
@@ -105,8 +119,9 @@ def run_pending_jobs(max_jobs: int = 20) -> list[str]:
     outcomes = []
     for _ in range(max_jobs):
         with SessionLocal() as db:
-            job = db.scalar(select(Job).where(Job.status == JobStatus.queued)
-                            .order_by(Job.created_at))
+            job = db.scalar(
+                select(Job).where(Job.status == JobStatus.queued).order_by(Job.created_at)
+            )
         if job is None:
             break
         outcomes.append(execute_job(str(job.id), worker_id="test-worker"))
@@ -118,9 +133,18 @@ def seeded(client):  # type: ignore[no-untyped-def]
     """A user with a small synthetic dataset version ready."""
     h = register(client)
     ws = workspace_id(client, h)
-    r = client.post(f"/api/v1/workspaces/{ws}/datasets/synthetic", headers=h,
-                    json={"slug": "demo", "name": "Demo", "n_assets": 12,
-                          "start": "2020-01-02", "end": "2022-12-30", "seed": 5})
+    r = client.post(
+        f"/api/v1/workspaces/{ws}/datasets/synthetic",
+        headers=h,
+        json={
+            "slug": "demo",
+            "name": "Demo",
+            "n_assets": 12,
+            "start": "2020-01-02",
+            "end": "2022-12-30",
+            "seed": 5,
+        },
+    )
     assert r.status_code == 202, r.text
     assert run_pending_jobs() == ["completed"]
     versions = client.get(f"/api/v1/workspaces/{ws}/dataset-versions", headers=h).json()

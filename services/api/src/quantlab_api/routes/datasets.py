@@ -8,6 +8,7 @@ from fastapi import APIRouter, Header, Query, Request
 from sqlalchemy import func, select
 
 from quantlab.data.synthetic import SyntheticSpec
+from quantlab_api.config import get_settings
 from quantlab_api.errors import ApiError
 from quantlab_api.jobs import redis_conn, submit_job
 from quantlab_api.marketdata import bars_payload
@@ -64,6 +65,16 @@ def create_synthetic(
     require_workspace(db, user, workspace_id, Role.editor)
     if body.end <= body.start:
         raise ApiError(422, "validation_error", "end must be after start")
+    if (body.end - body.start).days > 366 * 30:
+        raise ApiError(422, "validation_error", "date range is limited to 30 years")
+    est_rows = (body.n_assets + 1) * (body.end - body.start).days * 252 // 365
+    if est_rows > get_settings().max_synthetic_rows:
+        raise ApiError(
+            422,
+            "dataset_too_large",
+            f"about {est_rows:,} rows requested; the limit is "
+            f"{get_settings().max_synthetic_rows:,}",
+        )
     ds = db.scalar(
         select(Dataset).where(Dataset.workspace_id == workspace_id, Dataset.slug == body.slug)
     )

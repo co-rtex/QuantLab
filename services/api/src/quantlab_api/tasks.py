@@ -89,11 +89,10 @@ def register_version(
                 rows=int(st["count"]),
             )
         )
-    DATASET_ROWS.labels(dataset.slug).set(m["rows"])
+    # Aggregate gauges: tenant-controlled names never become metric labels.
+    DATASET_ROWS.set(m["rows"])
     if m["end"]:
-        DATASET_FRESHNESS_DAYS.labels(dataset.slug).set(
-            (datetime.now(UTC).date() - pd.Timestamp(m["end"]).date()).days
-        )
+        DATASET_FRESHNESS_DAYS.set((datetime.now(UTC).date() - pd.Timestamp(m["end"]).date()).days)
     INGEST_QUALITY.labels(quality.status).inc()
     return row
 

@@ -140,23 +140,47 @@ def audit(
     )
 
 
-class SlidingWindowLimiter:
-    """In-process limiter for credential endpoints (per client key)."""
+class RateLimiter:
+    """Fixed-window limiter shared across API replicas through Redis.
+
+    Falls back to an in-process window if Redis is unavailable so credential endpoints
+    stay protected (per replica) during a cache outage.
+    """
 
     def __init__(self) -> None:
-        self.events: dict[str, deque[float]] = defaultdict(deque)
+        self.local: dict[str, deque[float]] = defaultdict(deque)
 
-    def check(self, key: str, limit: int, window: float = 60.0) -> None:
+    def _local_check(self, key: str, limit: int, window: float) -> bool:
         now = time.monotonic()
-        q = self.events[key]
+        q = self.local[key]
         while q and now - q[0] > window:
             q.popleft()
         if len(q) >= limit:
-            raise ApiError(429, "rate_limited", "Too many attempts; try again later")
+            return False
         q.append(now)
+        return True
+
+    def check(self, key: str, limit: int, window: int = 60) -> None:
+        from quantlab_api.jobs import redis_conn
+
+        bucket = f"ql:rl:{key}:{int(time.time() // window)}"
+        try:
+            r = redis_conn()
+            count = int(r.incr(bucket))
+            if count == 1:
+                r.expire(bucket, window + 1)
+            allowed = count <= limit
+        except Exception:
+            allowed = self._local_check(key, limit, window)
+        if not allowed:
+            raise ApiError(429, "rate_limited", "Too many attempts; try again later")
+
+    def check_all(self, keys: list[str], limit: int, window: int = 60) -> None:
+        for k in keys:
+            self.check(k, limit, window)
 
     def reset(self) -> None:
-        self.events.clear()
+        self.local.clear()
 
 
-login_limiter = SlidingWindowLimiter()
+login_limiter = RateLimiter()

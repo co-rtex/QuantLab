@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+import hmac
 from typing import Any
 
 from fastapi import APIRouter, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 from sqlalchemy import text
+from starlette.requests import Request
 from starlette.responses import JSONResponse, Response
 
 from quantlab_api import tasks  # noqa: F401 - registers job handlers
@@ -96,7 +98,12 @@ def create_app() -> FastAPI:
     app.include_router(api)
 
     @app.get("/metrics", include_in_schema=False)
-    def metrics() -> Response:
+    def metrics(request: Request) -> Response:
+        token = settings.metrics_token
+        if token is not None:
+            given = request.headers.get("authorization", "").removeprefix("Bearer ").strip()
+            if not hmac.compare_digest(given, token.get_secret_value()):
+                return Response(status_code=401)
         return Response(generate_latest(), media_type=CONTENT_TYPE_LATEST)
 
     return app

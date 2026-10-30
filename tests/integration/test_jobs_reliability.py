@@ -43,11 +43,20 @@ def test_crashed_worker_lease_expiry_then_takeover_is_fenced(client, seeded):
     a = J.claim(job_id, "worker-A")
     assert a is not None
     assert a.attempts == 1
-    ctx_a = J.JobContext(job_id=job_id, kind="backtest", attempt=1, worker_id="worker-A",
-                         timeout_seconds=900, payload=a.payload)
+    ctx_a = J.JobContext(
+        job_id=job_id,
+        kind="backtest",
+        attempt=1,
+        worker_id="worker-A",
+        timeout_seconds=900,
+        payload=a.payload,
+    )
     with SessionLocal() as db:
-        db.execute(update(Job).where(Job.id == job_id)
-                   .values(lease_expires_at=J.now() - timedelta(seconds=1)))
+        db.execute(
+            update(Job)
+            .where(Job.id == job_id)
+            .values(lease_expires_at=J.now() - timedelta(seconds=1))
+        )
         db.commit()
     # A redelivery while the lease is expired lets worker B take over (attempt 2).
     assert J.execute_job(str(job_id), "worker-B") == "completed"
@@ -70,8 +79,11 @@ def test_reaper_requeues_then_fails_exhausted_jobs(client, seeded):
         claimed = J.claim(job_id, f"dead-{expected_attempt}")
         assert claimed.attempts == expected_attempt
         with SessionLocal() as db:
-            db.execute(update(Job).where(Job.id == job_id)
-                       .values(lease_expires_at=J.now() - timedelta(seconds=1)))
+            db.execute(
+                update(Job)
+                .where(Job.id == job_id)
+                .values(lease_expires_at=J.now() - timedelta(seconds=1))
+            )
             db.commit()
         stats = J.reap()
         if expected_attempt < 3:
@@ -92,8 +104,11 @@ def test_reaper_recovers_and_job_completes(client, seeded):
         job_id = _job(db, exp_id).id
     J.claim(job_id, "dead-worker")
     with SessionLocal() as db:
-        db.execute(update(Job).where(Job.id == job_id)
-                   .values(lease_expires_at=J.now() - timedelta(seconds=1)))
+        db.execute(
+            update(Job)
+            .where(Job.id == job_id)
+            .values(lease_expires_at=J.now() - timedelta(seconds=1))
+        )
         db.commit()
     assert J.reap()["requeued"] == 1
     assert run_pending_jobs() == ["completed"]
@@ -103,8 +118,15 @@ def _make_job(kind: str, timeout: int = 900, max_attempts: int = 3) -> uuid.UUID
     with SessionLocal() as db:
         user = db.scalar(select(User))
         ws = db.scalar(select(Workspace))
-        job, _ = J.submit_job(db, workspace_id=ws.id, user_id=user.id, kind=kind, payload={},
-                              timeout_seconds=timeout, dispatch=False)
+        job, _ = J.submit_job(
+            db,
+            workspace_id=ws.id,
+            user_id=user.id,
+            kind=kind,
+            payload={},
+            timeout_seconds=timeout,
+            dispatch=False,
+        )
         if max_attempts != 3:
             job.max_attempts = max_attempts
             db.commit()
@@ -137,8 +159,9 @@ def test_handlers(seeded):
         ctx.heartbeat(force=True)
         return lambda db: None
 
-    J.HANDLERS.update({"t.flaky": flaky, "t.permanent": permanent, "t.cancel": cancellable,
-                       "t.slow": slow})
+    J.HANDLERS.update(
+        {"t.flaky": flaky, "t.permanent": permanent, "t.cancel": cancellable, "t.slow": slow}
+    )
     yield calls
     for k in ("t.flaky", "t.permanent", "t.cancel", "t.slow"):
         J.HANDLERS.pop(k, None)

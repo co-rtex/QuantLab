@@ -4,8 +4,13 @@ from __future__ import annotations
 
 from tests.integration.conftest import register, run_pending_jobs, workspace_id
 
-BT = {"start": "2021-01-04", "rebalance": "monthly", "benchmark": "SYNIDX",
-      "commission_bps": 2, "slippage_bps": 5}
+BT = {
+    "start": "2021-01-04",
+    "rebalance": "monthly",
+    "benchmark": "SYNIDX",
+    "commission_bps": 2,
+    "slippage_bps": 5,
+}
 
 
 def submit(client, seeded, strategy="momentum", params=None, key=None, name="Momentum test"):
@@ -13,10 +18,17 @@ def submit(client, seeded, strategy="momentum", params=None, key=None, name="Mom
     if key:
         headers["Idempotency-Key"] = key
     return client.post(
-        f"/api/v1/workspaces/{seeded['ws']}/experiments", headers=headers,
-        json={"name": name, "dataset_version_id": seeded["dv"], "strategy_key": strategy,
-              "strategy_params": params if params is not None else {"lookback": 126, "skip": 21, "top_n": 4},
-              "config": BT},
+        f"/api/v1/workspaces/{seeded['ws']}/experiments",
+        headers=headers,
+        json={
+            "name": name,
+            "dataset_version_id": seeded["dv"],
+            "strategy_key": strategy,
+            "strategy_params": params
+            if params is not None
+            else {"lookback": 126, "skip": 21, "top_n": 4},
+            "config": BT,
+        },
     )
 
 
@@ -97,11 +109,15 @@ def test_backtest_workflow_results_and_reproduction(client, seeded):
     assert manifest["dataset"]["is_synthetic"] is True
     assert manifest["result_fingerprint"] == exp["fingerprint"]
 
-    cmp = client.post(f"/api/v1/workspaces/{seeded['ws']}/experiments/compare", headers=h,
-                      json={"experiment_ids": [exp_id, child["id"]]}).json()
+    cmp = client.post(
+        f"/api/v1/workspaces/{seeded['ws']}/experiments/compare",
+        headers=h,
+        json={"experiment_ids": [exp_id, child["id"]]},
+    ).json()
     assert len(cmp["experiments"]) == 2
-    lst = client.get(f"/api/v1/workspaces/{seeded['ws']}/experiments?status=completed",
-                     headers=h).json()
+    lst = client.get(
+        f"/api/v1/workspaces/{seeded['ws']}/experiments?status=completed", headers=h
+    ).json()
     assert lst["total"] == 2
 
 
@@ -113,8 +129,9 @@ def test_idempotent_submission(client, seeded):
     assert b.json()["created"] is False
     conflict = submit(client, seeded, key="abc-1", params={"lookback": 63, "skip": 5, "top_n": 3})
     assert conflict.status_code == 409
-    lst = client.get(f"/api/v1/workspaces/{seeded['ws']}/experiments",
-                     headers=seeded["headers"]).json()
+    lst = client.get(
+        f"/api/v1/workspaces/{seeded['ws']}/experiments", headers=seeded["headers"]
+    ).json()
     assert lst["total"] == 1
 
 
@@ -124,24 +141,43 @@ def test_validation_errors_are_structured(client, seeded):
     assert bad.json()["error"]["code"] == "invalid_strategy_params"
     unknown = submit(client, seeded, strategy="does_not_exist")
     assert unknown.json()["error"]["code"] == "unknown_strategy"
-    r = client.post(f"/api/v1/workspaces/{seeded['ws']}/experiments", headers=seeded["headers"],
-                    json={"name": "x", "dataset_version_id": seeded["dv"],
-                          "strategy_key": "equal_weight",
-                          "config": {"universe": ["ZZZ"], "commission_bps": -1}})
+    r = client.post(
+        f"/api/v1/workspaces/{seeded['ws']}/experiments",
+        headers=seeded["headers"],
+        json={
+            "name": "x",
+            "dataset_version_id": seeded["dv"],
+            "strategy_key": "equal_weight",
+            "config": {"universe": ["ZZZ"], "commission_bps": -1},
+        },
+    )
     assert r.status_code == 422
     assert r.json()["error"]["request_id"]
 
 
 def test_saved_strategy_definition(client, seeded):
     h, ws = seeded["headers"], seeded["ws"]
-    s = client.post(f"/api/v1/workspaces/{ws}/strategies", headers=h,
-                    json={"name": "Trend 20/100", "strategy_key": "sma_crossover",
-                          "params": {"fast": 20, "slow": 100}})
+    s = client.post(
+        f"/api/v1/workspaces/{ws}/strategies",
+        headers=h,
+        json={
+            "name": "Trend 20/100",
+            "strategy_key": "sma_crossover",
+            "params": {"fast": 20, "slow": 100},
+        },
+    )
     assert s.status_code == 201, s.text
     assert s.json()["params"] == {"fast": 20, "slow": 100}
-    r = client.post(f"/api/v1/workspaces/{ws}/experiments", headers=h,
-                    json={"name": "trend", "dataset_version_id": seeded["dv"],
-                          "strategy_id": s.json()["id"], "config": BT})
+    r = client.post(
+        f"/api/v1/workspaces/{ws}/experiments",
+        headers=h,
+        json={
+            "name": "trend",
+            "dataset_version_id": seeded["dv"],
+            "strategy_id": s.json()["id"],
+            "config": BT,
+        },
+    )
     assert r.status_code == 202
     assert r.json()["experiment"]["strategy_key"] == "sma_crossover"
     cat = client.get("/api/v1/strategies/catalog").json()
@@ -173,7 +209,14 @@ def test_second_user_workspace_isolation(client, seeded):
     assert client.get(f"/api/v1/dataset-versions/{dv}", headers=other).status_code == 404
     assert client.get(f"/api/v1/workspaces/{ws}/experiments", headers=other).status_code == 404
     own = workspace_id(client, other)
-    r = client.post(f"/api/v1/workspaces/{own}/experiments", headers=other,
-                    json={"name": "steal", "dataset_version_id": dv,
-                          "strategy_key": "equal_weight", "config": {}})
+    r = client.post(
+        f"/api/v1/workspaces/{own}/experiments",
+        headers=other,
+        json={
+            "name": "steal",
+            "dataset_version_id": dv,
+            "strategy_key": "equal_weight",
+            "config": {},
+        },
+    )
     assert r.status_code == 404

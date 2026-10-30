@@ -36,14 +36,22 @@ class Settings(BaseSettings):
     anthropic_api_key: SecretStr | None = None
     llm_model: str = "claude-sonnet-5-5"
     git_sha: str = "unknown"
+    # When set, /metrics requires "Authorization: Bearer <token>" (scrapers only).
+    metrics_token: SecretStr | None = None
+    max_synthetic_rows: int = Field(5_000_000, ge=1000)
 
     @model_validator(mode="after")
     def _production_guards(self) -> Settings:
         if self.environment == "production":
             if self.jwt_secret.get_secret_value() == _DEV_SECRET:
                 raise ValueError("QUANTLAB_JWT_SECRET must be set in production")
-            if len(self.jwt_secret.get_secret_value()) < 32:
+            secret = self.jwt_secret.get_secret_value()
+            if len(secret) < 32:
                 raise ValueError("QUANTLAB_JWT_SECRET must be at least 32 characters")
+            if any(m in secret.lower() for m in ("insecure", "change-me", "changeme", "dev-only")):
+                raise ValueError("QUANTLAB_JWT_SECRET is a placeholder; generate a real secret")
+            if self.metrics_token is None:
+                raise ValueError("QUANTLAB_METRICS_TOKEN must be set in production")
             if not self.cookie_secure:
                 raise ValueError("QUANTLAB_COOKIE_SECURE must be true in production")
         return self

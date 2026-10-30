@@ -42,10 +42,10 @@ def query_bars(path: Path, symbol: str, start: date | None, end: date | None) ->
     if end is not None:
         where.append("date <= CAST(? AS TIMESTAMP_NS)")
         params.append(str(end))
-    sql = (
-        "SELECT date, open, high, low, close, volume FROM read_parquet(?) "
-        f"WHERE {' AND '.join(where)} ORDER BY date"  # noqa: S608 - fixed fragments only
-    )
+    # Only fixed predicate fragments are interpolated; values are bound parameters.
+    cols = "date, open, high, low, close, volume"
+    predicate = " AND ".join(where)
+    sql = f"SELECT {cols} FROM read_parquet(?) WHERE {predicate} ORDER BY date"  # noqa: S608
     return _duck().execute(sql, params).df()
 
 
