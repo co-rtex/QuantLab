@@ -45,3 +45,4 @@ logs/
 
 # Browser automation artifacts
 .playwright-mcp/
+infra/prometheus/metrics_token

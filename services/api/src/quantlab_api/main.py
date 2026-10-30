@@ -17,6 +17,7 @@ from quantlab_api.config import get_settings
 from quantlab_api.db import get_engine
 from quantlab_api.errors import install_error_handlers
 from quantlab_api.jobs import redis_conn
+from quantlab_api.limits import BodySizeLimitMiddleware
 from quantlab_api.observability import configure_logging, request_context_middleware
 from quantlab_api.routes import (
     auth,
@@ -29,6 +30,7 @@ from quantlab_api.routes import (
     strategies,
     workspaces,
 )
+from quantlab_api.tracing import setup_tracing
 
 API_PREFIX = "/api/v1"
 
@@ -46,6 +48,11 @@ def create_app() -> FastAPI:
         redoc_url=None,
     )
     install_error_handlers(app)
+    if setup_tracing("quantlab-api"):
+        from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
+
+        FastAPIInstrumentor.instrument_app(app, excluded_urls="/metrics,/api/v1/health")
+    app.add_middleware(BodySizeLimitMiddleware)
     app.middleware("http")(request_context_middleware)
     app.add_middleware(
         CORSMiddleware,

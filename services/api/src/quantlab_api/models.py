@@ -294,6 +294,9 @@ class Job(Base):
     heartbeat_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     error: Mapped[dict[str, Any] | None] = mapped_column(JSONType)
     request_id: Mapped[str | None] = mapped_column(String(64))
+    # W3C trace context of the submitting request (kept out of the payload so it never
+    # affects idempotency hashing).
+    trace_context: Mapped[dict[str, Any] | None] = mapped_column(JSONType)
     created_by: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id"))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))

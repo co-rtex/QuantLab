@@ -58,6 +58,11 @@ def _add_request_id(_: Any, __: str, event: MutableMapping[str, Any]) -> Mutable
     rid = request_id_var.get()
     if rid:
         event.setdefault("request_id", rid)
+    from quantlab_api.tracing import trace_id_hex
+
+    tid = trace_id_hex()
+    if tid:
+        event.setdefault("trace_id", tid)
     return event
 
 

@@ -30,9 +30,9 @@ run as a background job and rendered in the experiment page. Playwright 10/10 (w
 * Lint: ruff clean; mypy --strict clean.
 
 ## In progress / immediate next steps
-1. Observability: OpenTelemetry tracing, Grafana dashboard, runbook; Terraform (validated).
+1. Terraform (validated, not applied); concurrent load testing; RQ worker scaling benchmark.
 2. Interactive optimizer UI (domain allocators exist).
-3. CSV dataset import endpoint; accessibility audit; load testing.
+3. Accessibility audit of the frontend; service-layer architecture review.
 4. Portfolio workspace (manual ledger + valuation), optimization/stress UI.
 
 ## Known blockers

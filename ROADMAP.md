@@ -7,7 +7,7 @@ Dependency-ordered. ✅ done and verified · 🔶 partial · ⬜ not started.
 | 0 | Preflight, architecture, project memory | ✅ |
 | 1 | Workspace, tooling, Docker Compose, FastAPI, Next.js, migrations, CI | ✅ |
 | 2 | Calendar, schema, synthetic provider, quality checks, versioned store, ingestion with throttling/retries/checkpoints, bar queries + cache | ✅ |
-| 2 | CSV import endpoint (provider exists in domain) | ⬜ |
+| 2 | CSV import endpoint (provenance, licence, size limits) | ✅ |
 | 3 | Ledger with invariants, corporate actions | ✅ |
 | 3 | Portfolio workspace API + UI (append-only ledger, valuation, TWR, risk, stress, Monte Carlo) | ✅ |
 | 4 | Strategy framework (9 strategies), event-driven engine, async jobs, results explorer | ✅ |
@@ -22,7 +22,8 @@ Dependency-ordered. ✅ done and verified · 🔶 partial · ⬜ not started.
 | 8 | ML pipeline (purged chronological CV, baselines, artifacts; API + UI) | ✅ |
 | 8 | Grounded research assistant + deterministic fallback + eval suite | ✅ (hosted-model eval pending credentials) |
 | 8 | Report export (HTML/Markdown) | ✅ |
-| 9 | OpenTelemetry tracing, Grafana dashboards, runbook, Terraform (validated, not applied) | ⬜ |
+| 9 | OpenTelemetry tracing (request → job, verified in Jaeger), Prometheus/Grafana dashboard, runbook | ✅ |
+| 9 | Terraform for a cloud deployment (validated, not applied) | ⬜ |
 | 9 | Benchmarks harness and BENCHMARKS.md measurements | ✅ (load testing and worker scaling pending) |
 | 10 | Case study: momentum vs passive after costs, out of sample (docs/CASE_STUDY.md) | ✅ |
 | 10 | Fresh-context financial-core review (10 findings, fixed with regression tests) | ✅ |

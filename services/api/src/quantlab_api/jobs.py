@@ -48,6 +48,7 @@ from quantlab_api.observability import (
     JOBS_RUNNING,
     log,
 )
+from quantlab_api.tracing import attach_carrier, current_carrier, detach, flush, tracer
 
 
 class JobCancelledError(Exception):
@@ -159,6 +160,7 @@ def submit_job(
         timeout_seconds=timeout_seconds or s.job_default_timeout_seconds,
         request_id=request_id,
         created_by=user_id,
+        trace_context=current_carrier() or None,
     )
     db.add(job)
     db.commit()
@@ -357,6 +359,26 @@ def execute_job(job_id: str, worker_id: str | None = None) -> str:
     if job is None:
         log.info("job_skip", job_id=job_id, reason="not claimable")
         return "skipped"
+    token = attach_carrier(job.trace_context)
+    try:
+        with tracer.start_as_current_span(
+            "job.execute",
+            attributes={
+                "quantlab.job.id": job_id,
+                "quantlab.job.kind": job.kind,
+                "quantlab.job.attempt": job.attempts,
+            },
+        ) as span:
+            outcome = _run_claimed(job, jid, wid)
+            span.set_attribute("quantlab.job.outcome", outcome)
+            return outcome
+    finally:
+        detach(token)
+        flush()
+
+
+def _run_claimed(job: Job, jid: uuid.UUID, wid: str) -> str:
+    job_id = str(jid)
     if job.attempts == 1 and job.created_at is not None:
         JOB_QUEUE_WAIT_SECONDS.labels(job.kind).observe(
             max(0.0, (now() - job.created_at).total_seconds())
@@ -378,7 +400,8 @@ def execute_job(job_id: str, worker_id: str | None = None) -> str:
         fn = HANDLERS.get(job.kind)
         if fn is None:
             raise PermanentJobError(f"no handler for job kind {job.kind!r}")
-        finalize = fn(ctx)
+        with tracer.start_as_current_span("job.handler"):
+            finalize = fn(ctx)
         ctx.heartbeat(progress=1.0, message="committing", force=True)
         with SessionLocal() as db:
             locked = db.scalar(select(Job).where(Job.id == jid).with_for_update())
@@ -460,7 +483,7 @@ def execute_job(job_id: str, worker_id: str | None = None) -> str:
 def reap(redeliver_after_seconds: int = 120) -> dict[str, int]:
     """Recover jobs whose worker died and re-deliver queued jobs that were never picked up."""
     t = now()
-    stats = {"requeued": 0, "failed": 0, "timed_out": 0, "redelivered": 0}
+    stats = {"requeued": 0, "failed": 0, "timed_out": 0, "redelivered": 0, "uploads_swept": 0}
     with SessionLocal() as db:
         stale = db.scalars(
             select(Job)
@@ -508,6 +531,23 @@ def reap(redeliver_after_seconds: int = 120) -> dict[str, int]:
         for job in waiting:
             if enqueue(job):
                 stats["redelivered"] += 1
+    stats["uploads_swept"] = sweep_uploads()
     if any(stats.values()):
         log.info("reaper_cycle", **stats)
     return stats
+
+
+def sweep_uploads(max_age_hours: float = 24.0) -> int:
+    """Delete staged upload directories older than ``max_age_hours`` (abandoned imports)."""
+    import shutil
+
+    root = get_settings().data_dir / "uploads"
+    if not root.exists():
+        return 0
+    cutoff = time.time() - max_age_hours * 3600
+    removed = 0
+    for d in root.iterdir():
+        if d.is_dir() and d.stat().st_mtime < cutoff:
+            shutil.rmtree(d, ignore_errors=True)
+            removed += 1
+    return removed

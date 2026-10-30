@@ -65,3 +65,21 @@ def test_csv_import_rejects_bad_input(client):
         data={"slug": "x1", "name": "x", "source": "somewhere"},
     )
     assert missing_license.status_code == 422
+
+
+def test_failed_import_releases_staged_files_and_body_limits(client):
+    from quantlab_api.config import get_settings
+
+    h = register(client, "lim@example.com")
+    ws = workspace_id(client, h)
+    _upload(client, h, ws, bars="symbol,date,close\nabc,2024-01-02,1\n", actions=None, slug="bad")
+    assert run_pending_jobs() == ["failed"]
+    uploads = get_settings().data_dir / "uploads"
+    assert not any(uploads.iterdir())
+    big = client.post(
+        f"/api/v1/workspaces/{ws}/strategies",
+        headers={**h, "content-type": "application/json"},
+        content=b"{" + b" " * (3 * 2**20) + b"}",
+    )
+    assert big.status_code == 413
+    assert big.json()["error"]["code"] == "payload_too_large"

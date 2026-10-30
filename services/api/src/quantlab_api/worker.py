@@ -15,10 +15,12 @@ from quantlab_api import tasks  # noqa: F401 - registers job handlers
 from quantlab_api.config import get_settings
 from quantlab_api.jobs import get_queue, redis_conn, worker_identity
 from quantlab_api.observability import configure_logging, log
+from quantlab_api.tracing import setup_tracing
 
 
 def main() -> None:
     configure_logging(json=get_settings().environment != "development")
+    setup_tracing("quantlab-worker", synchronous=True)
     name = os.environ.get("QUANTLAB_WORKER_NAME") or worker_identity().replace(":", "-")
     worker = Worker([get_queue()], connection=redis_conn(), name=name)
     log.info("worker_start", name=name, queue=get_settings().queue_name)

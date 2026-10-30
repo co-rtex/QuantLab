@@ -335,11 +335,25 @@ def csv_dataset_task(ctx: JobContext) -> Finalizer:
     import shutil
     from pathlib import Path
 
+    p = ctx.payload
+    staged = Path(p["staged_dir"])
+    if not staged.exists():
+        raise PermanentJobError("uploaded files are no longer available; upload again")
+    ctx.heartbeat(0.05, "parsing CSV", force=True)
+    try:
+        return _csv_finalizer(ctx, staged)
+    except PermanentJobError:
+        # Retrying cannot fix a bad file, so release the staged upload now.
+        shutil.rmtree(staged, ignore_errors=True)
+        raise
+
+
+def _csv_finalizer(ctx: JobContext, staged: Any) -> Finalizer:
+    import shutil
+
     from quantlab.data.schema import SchemaError, normalize_actions, normalize_bars
 
     p = ctx.payload
-    staged = Path(p["staged_dir"])
-    ctx.heartbeat(0.05, "parsing CSV", force=True)
     try:
         bars = normalize_bars(pd.read_csv(staged / "bars.csv"))
         actions_path = staged / "actions.csv"
