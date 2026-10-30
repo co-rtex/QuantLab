@@ -39,7 +39,7 @@ from sqlalchemy.orm import Session
 from quantlab_api.config import get_settings
 from quantlab_api.db import SessionLocal
 from quantlab_api.errors import ApiError
-from quantlab_api.models import TERMINAL, Experiment, Job, JobStatus, ResearchRun
+from quantlab_api.models import TERMINAL, Experiment, Job, JobStatus, ResearchRun, Workspace
 from quantlab_api.observability import (
     JOB_OUTCOMES,
     JOB_QUEUE_WAIT_SECONDS,
@@ -49,6 +49,21 @@ from quantlab_api.observability import (
     log,
 )
 from quantlab_api.tracing import attach_carrier, current_carrier, detach, flush, tracer
+
+# Exceptions whose messages are written by QuantLab for users (never raw driver errors).
+SAFE_ERROR_TYPES = frozenset(
+    {
+        "PermanentJobError",
+        "BacktestError",
+        "ValidationError",
+        "ValueError",
+        "OptimizationError",
+        "InfeasibleConstraints",
+        "JobTimeoutError",
+        "LeaseExpired",
+        "LedgerError",
+    }
+)
 
 
 class JobCancelledError(Exception):
@@ -150,6 +165,8 @@ def submit_job(
                     "Idempotency-Key was already used with a different request",
                 )
             return existing, False
+    # Lock the workspace row so concurrent submissions cannot all pass the cap check.
+    db.execute(select(Workspace.id).where(Workspace.id == workspace_id).with_for_update())
     active = (
         db.scalar(
             select(func.count())
@@ -492,7 +509,12 @@ def _run_claimed(job: Job, jid: uuid.UUID, wid: str) -> str:
                 enqueue(again, delay_seconds=delay)
         else:
             outcome = "failed"
-            _finish(jid, ctx.attempt, JobStatus.failed, message=str(exc)[:500], error=err)
+            public = (
+                str(exc)[:500]
+                if type(exc).__name__ in SAFE_ERROR_TYPES
+                else f"failed: {type(exc).__name__} (details in server logs)"
+            )
+            _finish(jid, ctx.attempt, JobStatus.failed, message=public, error=err)
         bound.error("job_error", error=str(exc), outcome=outcome)
     finally:
         JOBS_RUNNING.dec()

@@ -63,6 +63,7 @@ def test_job_errors_do_not_leak_tracebacks_or_paths(client, seeded, monkeypatch)
     assert "trace" not in j["error"]
     assert "/srv/private" not in j["error"]["message"]
     assert j["error"]["type"] == "RuntimeError"
+    assert "/srv/private" not in j["message"]
 
 
 def test_retry_mirrors_queued_status(client, seeded, monkeypatch):

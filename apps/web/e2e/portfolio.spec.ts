@@ -32,4 +32,10 @@ test("portfolio ledger: create, trade, value and reject an overdraft", async ({ 
   await page.getByRole("button", { name: "Record transaction" }).click();
   await expect(page.getByText(/transaction #3/)).toBeVisible();
   await expect(page.getByText("One-day VaR, 95%")).toBeVisible();
+
+  await page.goto("/optimize");
+  await expect(page.getByPlaceholder(/First 12: SYN001/)).toBeVisible(); // instruments loaded
+  await page.getByRole("button", { name: "Compare allocations" }).click();
+  await expect(page.getByRole("cell", { name: "Expected volatility" })).toBeVisible();
+  await expect(page.getByRole("columnheader", { name: /Risk parity/ })).toBeVisible();
 });

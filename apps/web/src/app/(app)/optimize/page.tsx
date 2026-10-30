@@ -1,0 +1,201 @@
+"use client";
+
+import { useState, type FormEvent } from "react";
+import { SERIES } from "@/components/charts";
+import { PageHeader } from "@/components/Shell";
+import { ErrorNote, Panel, SyntheticTag } from "@/components/ui";
+import { api, ApiError, type DatasetVersion, type Instrument, type Page } from "@/lib/api";
+import { num, pct, shortHash } from "@/lib/format";
+import { useApi } from "@/lib/useApi";
+import { useWorkspace } from "@/lib/workspace";
+
+interface Result {
+  method: string;
+  error?: string;
+  weights?: Record<string, number>;
+  expected_volatility?: number;
+  historical_mean_return?: number;
+  beta?: number | null;
+  risk_share?: Record<string, number>;
+  concentration?: { effective_n: number | null; top1: number | null };
+}
+interface Response {
+  as_of: string;
+  window_start: string;
+  observations: number;
+  symbols: string[];
+  excluded_for_history: string[];
+  is_synthetic: boolean;
+  results: Result[];
+  notes: string[];
+}
+
+const LABEL: Record<string, string> = {
+  equal_weight: "Equal weight",
+  min_variance: "Minimum variance",
+  mean_variance: "Mean-variance",
+  risk_parity: "Risk parity",
+};
+
+export default function OptimizePage() {
+  const { workspace } = useWorkspace();
+  const ws = workspace?.id;
+  const versions = useApi<DatasetVersion[]>(ws ? `/workspaces/${ws}/dataset-versions` : null);
+  const [dv, setDv] = useState("");
+  const dvId = dv || versions.data?.[0]?.id || null;
+  const version = versions.data?.find((v) => v.id === dvId);
+  const inst = useApi<Page<Instrument>>(dvId ? `/dataset-versions/${dvId}/instruments?limit=2000` : null);
+  const assets = inst.data?.items.filter((i) => i.asset_class !== "index_fund") ?? [];
+  const index = inst.data?.items.find((i) => i.asset_class === "index_fund")?.symbol;
+  const [res, setRes] = useState<Response>();
+  const [err, setErr] = useState<ApiError>();
+  const [busy, setBusy] = useState(false);
+
+  async function run(e: FormEvent<HTMLFormElement>) {
+    e.preventDefault();
+    const f = new FormData(e.currentTarget);
+    const text = String(f.get("symbols") ?? "").trim();
+    const symbols = text ? text.split(/[\s,]+/).filter(Boolean) : assets.slice(0, 12).map((a) => a.symbol);
+    setBusy(true);
+    setErr(undefined);
+    try {
+      setRes(
+        await api<Response>(`/dataset-versions/${dvId}/optimize`, {
+          method: "POST",
+          json: {
+            symbols,
+            as_of: f.get("as_of") || null,
+            lookback: Number(f.get("lookback")),
+            max_weight: Number(f.get("max_weight")) / 100,
+            covariance: f.get("covariance"),
+            benchmark: index ?? null,
+          },
+        }),
+      );
+    } catch (x) {
+      setErr(x as ApiError);
+    }
+    setBusy(false);
+  }
+
+  const ok = res?.results.filter((r) => r.weights) ?? [];
+  return (
+    <>
+      <PageHeader
+        title="Portfolio construction"
+        lede="Compare allocation methods on the same assets using only returns available up to a chosen date. Expected volatility is estimated from that history and is usually lower than what follows."
+      />
+      <div className="grid gap-6 xl:grid-cols-[1fr_2.5fr]">
+        <Panel title="Inputs">
+          <form onSubmit={run} className="space-y-3 text-sm">
+            <label className="block">
+              <span className="mb-1 block">Dataset version</span>
+              <select className="field" value={dvId ?? ""} onChange={(e) => setDv(e.target.value)}>
+                {versions.data?.map((v) => (
+                  <option key={v.id} value={v.id}>
+                    {shortHash(v.version_hash, 12)}
+                    {v.is_synthetic ? " (synthetic)" : ""}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className="block">
+              <span className="mb-1 block">Symbols</span>
+              <textarea name="symbols" rows={3} className="field" placeholder={`First 12: ${assets.slice(0, 12).map((a) => a.symbol).join(", ")}`} />
+            </label>
+            <div className="grid grid-cols-2 gap-3">
+              <label className="block">
+                <span className="mb-1 block">As of</span>
+                <input name="as_of" type="date" min={version?.start_date} max={version?.end_date} className="field" />
+              </label>
+              <label className="block">
+                <span className="mb-1 block">Look-back (sessions)</span>
+                <input name="lookback" type="number" min={40} max={1260} defaultValue={252} className="field num" />
+              </label>
+              <label className="block">
+                <span className="mb-1 block">Max weight (%)</span>
+                <input name="max_weight" type="number" min={1} max={100} defaultValue={30} className="field num" />
+              </label>
+              <label className="block">
+                <span className="mb-1 block">Covariance</span>
+                <select name="covariance" className="field" defaultValue="ledoit_wolf">
+                  <option value="ledoit_wolf">Ledoit-Wolf shrinkage</option>
+                  <option value="sample">Sample</option>
+                </select>
+              </label>
+            </div>
+            <ErrorNote error={err} />
+            <button className="btn btn-primary" disabled={busy || !dvId}>
+              {busy ? "Optimizing…" : "Compare allocations"}
+            </button>
+          </form>
+        </Panel>
+        <Panel title="Allocations" aside={res ? `${res.window_start} to ${res.as_of}, ${res.observations} sessions` : undefined}>
+          {!res ? (
+            <p className="text-sm text-ink-2">Choose assets and a date to compare equal weight, minimum variance, mean-variance and risk parity.</p>
+          ) : (
+            <div className="space-y-4">
+              {res.is_synthetic && <SyntheticTag />}
+              <div className="overflow-x-auto" tabIndex={0}>
+                <table className="data num">
+                  <thead>
+                    <tr>
+                      <th>Symbol</th>
+                      {ok.map((r, i) => (
+                        <th key={r.method} className="r">
+                          <span className="mr-1 inline-block h-2 w-2 rounded-full align-middle" style={{ background: SERIES[i] }} aria-hidden />
+                          {LABEL[r.method]}
+                        </th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {res.symbols.map((s) => (
+                      <tr key={s}>
+                        <td className="font-medium">{s}</td>
+                        {ok.map((r) => (
+                          <td key={r.method} className="r">
+                            {pct(r.weights?.[s] ?? 0, 1)}
+                            <span className="ml-1 text-xs text-ink-3">({pct(r.risk_share?.[s] ?? 0, 0)} risk)</span>
+                          </td>
+                        ))}
+                      </tr>
+                    ))}
+                    {[
+                      ["Expected volatility", (r: Result) => pct(r.expected_volatility, 1)],
+                      ["Historical mean return", (r: Result) => pct(r.historical_mean_return, 1)],
+                      ["Beta to benchmark", (r: Result) => num(r.beta)],
+                      ["Effective number of assets", (r: Result) => num(r.concentration?.effective_n, 1)],
+                    ].map(([label, f]) => (
+                      <tr key={label as string} className="font-medium">
+                        <td>{label as string}</td>
+                        {ok.map((r) => (
+                          <td key={r.method} className="r">
+                            {(f as (r: Result) => string)(r)}
+                          </td>
+                        ))}
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+              {res.results
+                .filter((r) => r.error)
+                .map((r) => (
+                  <p key={r.method} className="text-sm text-loss">
+                    {LABEL[r.method]}: {r.error}
+                  </p>
+                ))}
+              {res.excluded_for_history.length > 0 && <p className="text-xs text-ink-2">Excluded for insufficient history: {res.excluded_for_history.join(", ")}.</p>}
+              <ul className="list-disc space-y-1 pl-5 text-xs text-ink-3">
+                {res.notes.map((n) => (
+                  <li key={n}>{n}</li>
+                ))}
+              </ul>
+            </div>
+          )}
+        </Panel>
+      </div>
+    </>
+  );
+}

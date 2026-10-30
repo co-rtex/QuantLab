@@ -8,6 +8,8 @@ from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator
 
+from quantlab_api.jobs import SAFE_ERROR_TYPES
+
 MIN_DATE, MAX_DATE = date(1900, 1, 1), date(2200, 12, 31)
 BoundedDate = Annotated[date, Field(ge=MIN_DATE, le=MAX_DATE)]
 
@@ -174,18 +176,6 @@ class ExperimentIn(BaseModel):
 
 
 INTERNAL_PAYLOAD_KEYS = {"staged_dir", "files"}
-# Exceptions whose messages are written by QuantLab for users (never raw driver errors).
-SAFE_ERROR_TYPES = {
-    "PermanentJobError",
-    "BacktestError",
-    "ValidationError",
-    "ValueError",
-    "OptimizationError",
-    "InfeasibleConstraints",
-    "JobTimeoutError",
-    "LeaseExpired",
-    "LedgerError",
-}
 
 
 class JobOut(ORM):

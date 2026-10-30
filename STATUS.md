@@ -34,7 +34,7 @@ run as a background job and rendered in the experiment page. Playwright 12/12 (i
 ## In progress / immediate next steps
 1. Terraform (validated, not applied).
 2. Interactive optimizer UI (domain allocators exist).
-3. Interactive optimizer UI; `xl` (10M row) benchmark profile.
+3. `xl` (10M row) benchmark profile; factor regression exposures.
 4. Portfolio workspace (manual ledger + valuation), optimization/stress UI.
 
 ## Known blockers

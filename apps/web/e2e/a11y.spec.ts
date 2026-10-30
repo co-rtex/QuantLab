@@ -27,7 +27,7 @@ test("core pages have no WCAG 2.1 AA violations detected by axe", async ({ page 
   await expect.poll(async () => (await (await page.request.get(`/api/v1/jobs/${job.id}`)).json()).status, { timeout: 30_000 }).toBe("completed");
   const dv = (await (await page.request.get(`/api/v1/workspaces/${ws}/dataset-versions`)).json())[0].id;
 
-  for (const path of ["/data", `/data/${dv}`, "/experiments/new", "/portfolios", "/ml", "/compare", "/settings"]) {
+  for (const path of ["/data", `/data/${dv}`, "/experiments/new", "/portfolios", "/optimize", "/ml", "/compare", "/settings"]) {
     await page.goto(path);
     await page.waitForLoadState("networkidle");
     await audit(page, path);

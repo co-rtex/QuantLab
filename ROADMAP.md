@@ -18,7 +18,7 @@ Dependency-ordered. ✅ done and verified · 🔶 partial · ⬜ not started.
 | 6 | Research Integrity Report (13 checks; API + UI) | ✅ |
 | 7 | Optimizers (domain) | ✅ |
 | 7 | Stress / Monte Carlo / risk contributions in portfolio UI | ✅ |
-| 7 | Interactive optimizer (target weights from min-variance / risk parity) UI | ⬜ |
+| 7 | Portfolio construction research: equal weight, min-variance, mean-variance, risk parity (point-in-time, API + UI) | ✅ |
 | 8 | ML pipeline (purged chronological CV, baselines, artifacts; API + UI) | ✅ |
 | 8 | Grounded research assistant + deterministic fallback + eval suite | ✅ (hosted-model eval pending credentials) |
 | 8 | Report export (HTML/Markdown) | ✅ |
