@@ -239,7 +239,9 @@ def test_fallback_limiter_is_bounded_and_atomic_reserve():
     set_redis(Down())  # type: ignore[arg-type]
     lim = RateLimiter()
     lim.MAX_LOCAL_KEYS = 50
-    for i in range(500):
+    assert [lim.reserve("victim", 2) for _ in range(3)] == [True, True, False]
+    for i in range(500):  # attacker floods fresh keys to try to evict the victim's counter
         lim.reserve(f"k{i}", 5)
-    assert len(lim.local) == 50
-    assert [lim.reserve("hot", 2) for _ in range(3)] == [True, True, False]
+    assert len(lim.local) <= 51
+    assert lim.reserve("victim", 2) is False  # still throttled: live counters never evicted
+    assert lim.reserve("fresh-key", 5) is False  # store full of live counters: fail closed

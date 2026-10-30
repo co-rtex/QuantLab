@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import time
 import uuid
-from collections import OrderedDict, deque
+from collections import deque
 from datetime import UTC, datetime, timedelta
 from typing import Annotated, Any
 
@@ -145,28 +145,37 @@ class RateLimiter:
 
     ``reserve`` increments and compares in one atomic Redis ``INCR``, so concurrent requests
     cannot all pass a check-then-record gap. If Redis is unavailable an in-process window
-    (bounded in size, expired entries trimmed) keeps credential endpoints protected.
+    keeps credential endpoints protected; its size is bounded without evicting live counters.
     """
 
     MAX_LOCAL_KEYS = 10_000
+    OVERFLOW_KEY = "__overflow__"
 
     def __init__(self) -> None:
-        self.local: OrderedDict[str, deque[float]] = OrderedDict()
+        self.local: dict[str, deque[float]] = {}
 
     @staticmethod
     def _bucket(key: str, window: int) -> str:
         return f"ql:rl:{key}:{int(time.time() // window)}"
 
     def _local_queue(self, key: str, window: float) -> deque[float]:
+        """Return the live window for ``key``. Counters still inside their window are never
+        evicted; when the store is full of live counters, unseen keys share one overflow
+        counter, so flooding with fresh keys trips the limit (fail closed) instead of
+        evicting a victim's counter."""
         now = time.monotonic()
         q = self.local.get(key)
         if q is None:
-            q = deque()
-            self.local[key] = q
-            while len(self.local) > self.MAX_LOCAL_KEYS:
-                self.local.popitem(last=False)
-        else:
-            self.local.move_to_end(key)
+            if len(self.local) >= self.MAX_LOCAL_KEYS:
+                expired = [k for k, v in self.local.items() if not v or now - v[-1] > window]
+                for k in expired:
+                    del self.local[k]
+            if len(self.local) >= self.MAX_LOCAL_KEYS:
+                key = self.OVERFLOW_KEY
+                q = self.local.get(key)
+            if q is None:
+                q = deque()
+                self.local[key] = q
         while q and now - q[0] > window:
             q.popleft()
         return q
