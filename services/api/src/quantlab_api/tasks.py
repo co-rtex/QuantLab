@@ -327,3 +327,49 @@ def ml_task(ctx: JobContext) -> Finalizer:
         }
 
     return finalize
+
+
+@handler("dataset.csv")
+def csv_dataset_task(ctx: JobContext) -> Finalizer:
+    """Validate and version an uploaded CSV dataset (staged by the upload endpoint)."""
+    import shutil
+    from pathlib import Path
+
+    from quantlab.data.schema import SchemaError, normalize_actions, normalize_bars
+
+    p = ctx.payload
+    staged = Path(p["staged_dir"])
+    ctx.heartbeat(0.05, "parsing CSV", force=True)
+    try:
+        bars = normalize_bars(pd.read_csv(staged / "bars.csv"))
+        actions_path = staged / "actions.csv"
+        actions = normalize_actions(pd.read_csv(actions_path) if actions_path.exists() else None)
+    except (SchemaError, ValueError, pd.errors.ParserError) as exc:
+        raise PermanentJobError(f"invalid CSV: {exc}") from exc
+    if bars["symbol"].nunique() > get_settings().max_dataset_assets:
+        raise PermanentJobError("too many symbols")
+    dupes = int(bars.duplicated(["symbol", "date"]).sum())
+    bars = bars.drop_duplicates(["symbol", "date"], keep="last")
+    provenance = {
+        "provider": "csv",
+        "is_synthetic": False,
+        "source": p["source"],
+        "license": p["license"],
+        "uploaded_files": p["files"],
+        "duplicates_dropped": dupes,
+    }
+    ctx.heartbeat(0.5, "validating and writing dataset version", force=True)
+    dataset_id = uuid.UUID(p["dataset_id"])
+
+    def finalize(db: Session) -> dict[str, Any]:
+        ds = db.get(Dataset, dataset_id)
+        if ds is None:
+            raise PermanentJobError("dataset was deleted")
+        dv = register_version(db, ds, bars, actions, provenance, None)
+        shutil.rmtree(staged, ignore_errors=True)
+        return {
+            "message": f"dataset version {dv.version_hash[:12]} ready ({dv.quality_status})",
+            "dataset_version_id": str(dv.id),
+        }
+
+    return finalize

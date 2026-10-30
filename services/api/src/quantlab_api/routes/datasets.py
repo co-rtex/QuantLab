@@ -3,8 +3,10 @@ from __future__ import annotations
 import uuid
 from dataclasses import asdict
 from datetime import date
+from typing import Annotated
+from pathlib import Path
 
-from fastapi import APIRouter, Header, Query, Request
+from fastapi import APIRouter, File, Form, Header, Query, Request, UploadFile
 from sqlalchemy import func, select
 
 from quantlab.data.synthetic import SyntheticSpec
@@ -210,3 +212,92 @@ def bars(
         Path(dv.storage_path), dv.version_hash, symbol, start, end, adjusted, redis
     )
     return BarsOut(is_synthetic=dv.is_synthetic, **payload)
+
+
+MAX_UPLOAD_BYTES = 50 * 2**20
+
+
+async def _save_upload(f: UploadFile, dest: Path) -> int:
+    size = 0
+    with dest.open("wb") as out:
+        while chunk := await f.read(2**20):
+            size += len(chunk)
+            if size > MAX_UPLOAD_BYTES:
+                raise ApiError(413, "upload_too_large", "Uploads are limited to 50 MB")
+            out.write(chunk)
+    return size
+
+
+@router.post("/workspaces/{workspace_id}/datasets/csv", response_model=JobOut, status_code=202)
+async def upload_csv(
+    workspace_id: uuid.UUID,
+    user: CurrentUser,
+    db: DB,
+    request: Request,
+    slug: str = Form(pattern=r"^[a-z0-9][a-z0-9_-]{1,62}$"),
+    name: str = Form(min_length=1, max_length=120),
+    source: str = Form(min_length=3, max_length=300),
+    license: str = Form(min_length=3, max_length=300),
+    bars: Annotated[UploadFile, File()],
+    actions: Annotated[UploadFile | None, File()] = None,
+) -> JobOut:
+    """Import user-supplied daily bars (columns: symbol,date,open,high,low,close,volume)
+    and optional corporate actions (symbol,ex_date,kind,value). The uploader states the
+    data source and licence, which are recorded in the dataset provenance."""
+    import shutil
+    import tempfile
+
+    require_workspace(db, user, workspace_id, Role.editor)
+    staging_root = get_settings().data_dir / "uploads"
+    staging_root.mkdir(parents=True, exist_ok=True)
+    staged = Path(tempfile.mkdtemp(prefix="csv-", dir=staging_root))
+    try:
+        files = {"bars": await _save_upload(bars, staged / "bars.csv")}
+        if actions is not None and actions.filename:
+            files["actions"] = await _save_upload(actions, staged / "actions.csv")
+    except ApiError:
+        shutil.rmtree(staged, ignore_errors=True)
+        raise
+    ds = db.scalar(
+        select(Dataset).where(Dataset.workspace_id == workspace_id, Dataset.slug == slug)
+    )
+    if ds is None:
+        ds = Dataset(
+            workspace_id=workspace_id,
+            slug=slug,
+            name=name,
+            description=f"Imported from CSV. Source: {source}. Licence: {license}.",
+            provider="csv",
+            created_by=user.id,
+        )
+        db.add(ds)
+        db.flush()
+    elif ds.provider != "csv":
+        shutil.rmtree(staged, ignore_errors=True)
+        raise ApiError(409, "slug_taken", "A dataset from another provider uses this slug")
+    audit(
+        db,
+        request,
+        "dataset.ingest_requested",
+        user=user,
+        workspace_id=workspace_id,
+        target_type="dataset",
+        target_id=ds.id,
+        provider="csv",
+        bytes=sum(files.values()),
+    )
+    job, _ = submit_job(
+        db,
+        workspace_id=workspace_id,
+        user_id=user.id,
+        kind="dataset.csv",
+        payload={
+            "dataset_id": str(ds.id),
+            "staged_dir": str(staged),
+            "source": source,
+            "license": license,
+            "files": files,
+        },
+        request_id=getattr(request.state, "request_id", None),
+    )
+    return JobOut.model_validate(job)
