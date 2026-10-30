@@ -20,6 +20,14 @@ prioritized backlog supersedes the old next-steps list. Details in [ROADMAP.md](
 | Platform | Durable Postgres-backed jobs (fencing, retries, cancel, timeouts, reaper, keepalive, per-workspace cap), OpenTelemetry request→job traces, Prometheus/Grafana, runbook |
 | Quality | Three independent reviews (financial core, service layer, full audit 2026-10-30) with every fixed finding regression-tested; axe WCAG 2.1 AA audit clean on 12 pages |
 
+## P0 implementation in review (branch `fix/p0-account-quotas`)
+* Added configurable account-wide active-job and owned-workspace limits, enforced under
+  database row locks; the existing per-workspace limit remains in effect.
+* Added integration regressions for cross-workspace job limits, idempotent retries,
+  cancellation releasing capacity, and concurrent job/workspace requests.
+* **Not yet independently verified:** run Python lint, mypy, all tests and CI before
+  merging this branch into `audit/deep-verification` or deploying.
+
 ## Last verified (2026-10-30, branch `audit/deep-verification`)
 * Python: 202 tests passing (unit, property-based, research, ML, assistant evals,
   integration, concurrency, security, migrations, failure injection, tracing). ruff and
