@@ -61,3 +61,36 @@ def test_validation_requires_completed_backtest_and_permissions(client, seeded):
     assert client.get(f"/api/v1/experiments/{exp_id}/integrity", headers=h).status_code == 409
     other = register(client, "outsider@example.com")
     assert client.post(f"/api/v1/experiments/{exp_id}/validation", headers=other).status_code == 404
+
+
+def test_report_export_html_and_markdown(client, seeded):
+    h = seeded["headers"]
+    exp_id = _completed_experiment(client, seeded)
+    client.post(f"/api/v1/experiments/{exp_id}/validation", headers=h)
+    run_pending_jobs()
+    r = client.get(f"/api/v1/experiments/{exp_id}/report?format=html", headers=h)
+    assert r.status_code == 200
+    assert r.headers["content-type"].startswith("text/html")
+    assert "default-src 'none'" in r.headers["content-security-policy"]
+    body = r.text
+    assert "Synthetic data." in body
+    assert "<svg" in body
+    assert "<script" not in body
+    assert "Research integrity" in body
+    assert "Out-of-sample validation" in body
+    md = client.get(f"/api/v1/experiments/{exp_id}/report?format=md&download=true", headers=h)
+    assert md.headers["content-disposition"].endswith('.md"')
+    assert md.text.startswith("# Momentum test")
+    assert "| Sharpe ratio |" in md.text
+    exp = client.get(f"/api/v1/experiments/{exp_id}", headers=h).json()
+    assert exp["fingerprint"] in md.text  # report cites the exact output fingerprint
+
+
+def test_report_escapes_user_content(client, seeded):
+    h = seeded["headers"]
+    r = submit(client, seeded, name="<script>alert(1)</script>")
+    run_pending_jobs()
+    exp_id = r.json()["experiment"]["id"]
+    body = client.get(f"/api/v1/experiments/{exp_id}/report", headers=h).text
+    assert "<script>alert(1)</script>" not in body
+    assert "&lt;script&gt;" in body

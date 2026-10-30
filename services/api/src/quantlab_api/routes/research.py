@@ -1,9 +1,9 @@
 from __future__ import annotations
 
 import uuid
-from typing import Any
+from typing import Any, Literal
 
-from fastapi import APIRouter, Header, Request
+from fastapi import APIRouter, Header, Request, Response
 from sqlalchemy import func, select
 
 from quantlab.research.integrity import build_integrity_report
@@ -176,3 +176,56 @@ def integrity(experiment_id: uuid.UUID, user: CurrentUser, db: DB) -> dict[str, 
     report = build_integrity_report(integrity_evidence(db, user, exp))
     report["experiment_id"] = str(exp.id)
     return report
+
+
+@router.get("/experiments/{experiment_id}/report")
+def report(
+    experiment_id: uuid.UUID,
+    user: CurrentUser,
+    db: DB,
+    request: Request,
+    format: Literal["html", "md"] = "html",
+    download: bool = False,
+) -> Response:
+    """Export a research report generated from persisted results."""
+    from quantlab.reports.render import render_html, render_markdown, report_context
+    from quantlab_api.routes.experiments import equity
+
+    exp = load_experiment(db, user, experiment_id)
+    if exp.status != JobStatus.completed:
+        raise ApiError(409, "not_ready", "Reports need a completed backtest")
+    ev = integrity_evidence(db, user, exp)
+    ctx = report_context(
+        experiment={
+            **ev["experiment"],
+            "name": exp.name,
+            "strategy_key": exp.strategy_key,
+            "strategy_params": exp.strategy_params,
+        },
+        dataset=ev["dataset"],
+        analysis=ev["analysis"],
+        equity=equity(exp.id, user, db, max_points=600),
+        integrity=build_integrity_report(ev),
+        validation=ev["validation"],
+    )
+    audit(
+        db,
+        request,
+        "report.export",
+        user=user,
+        workspace_id=exp.workspace_id,
+        target_type="experiment",
+        target_id=exp.id,
+        format=format,
+    )
+    db.commit()
+    body = render_html(ctx) if format == "html" else render_markdown(ctx)
+    media = "text/html; charset=utf-8" if format == "html" else "text/markdown; charset=utf-8"
+    headers = {
+        "Content-Security-Policy": "default-src 'none'; style-src 'unsafe-inline'; "
+        "img-src data:; frame-ancestors 'none'"
+    }
+    if download:
+        ext = "html" if format == "html" else "md"
+        headers["Content-Disposition"] = f'attachment; filename="quantlab-report-{exp.id}.{ext}"'
+    return Response(body, media_type=media, headers=headers)

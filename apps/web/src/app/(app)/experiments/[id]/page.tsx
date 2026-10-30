@@ -282,6 +282,12 @@ export default function ExperimentPage() {
             <StatusPill status={e.status} />
             {done && (
               <>
+                <a className="btn btn-quiet" href={`/api/v1/experiments/${id}/report?format=html`} target="_blank" rel="noopener">
+                  Open report
+                </a>
+                <a className="btn btn-quiet" href={`/api/v1/experiments/${id}/report?format=md&download=true`}>
+                  Export Markdown
+                </a>
                 <button className="btn btn-quiet" onClick={downloadManifest}>
                   Download manifest
                 </button>
