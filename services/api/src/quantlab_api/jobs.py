@@ -39,7 +39,7 @@ from sqlalchemy.orm import Session
 from quantlab_api.config import get_settings
 from quantlab_api.db import SessionLocal
 from quantlab_api.errors import ApiError
-from quantlab_api.models import TERMINAL, Experiment, Job, JobStatus, ResearchRun, Workspace
+from quantlab_api.models import TERMINAL, Experiment, Job, JobStatus, ResearchRun, User, Workspace
 from quantlab_api.observability import (
     JOB_OUTCOMES,
     JOB_QUEUE_WAIT_SECONDS,
@@ -180,9 +180,32 @@ def submit_job(
     db.execute(
         select(Workspace.id).where(Workspace.id == workspace_id).with_for_update(key_share=True)
     )
-    # A concurrent request with the same key may have committed while we waited.
+    # Serialize this account's submissions across *all* workspaces. Locking the
+    # user row with NO KEY UPDATE permits FK KEY SHARE references from the request
+    # transaction (e.g. a newly created dataset), avoiding the former deadlock.
+    db.execute(select(User.id).where(User.id == user_id).with_for_update(key_share=True))
+    # Recheck idempotency after both locks: a concurrent replay should never be
+    # blocked by a quota consumed by its own original job.
     if (existing := replay()) is not None:
         return existing, False
+    user_active = (
+        db.scalar(
+            select(func.count())
+            .select_from(Job)
+            .where(
+                Job.created_by == user_id,
+                Job.status.in_([JobStatus.queued, JobStatus.running]),
+            )
+        )
+        or 0
+    )
+    if user_active >= s.max_active_jobs_per_user:
+        raise ApiError(
+            429,
+            "too_many_jobs",
+            "Your account has reached its limit of queued or running jobs; "
+            "wait for some to finish",
+        )
     active = (
         db.scalar(
             select(func.count())
