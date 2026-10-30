@@ -6,6 +6,7 @@ import { useState } from "react";
 import { EquityChart, MonthlyReturns } from "@/components/charts";
 import { PageHeader } from "@/components/Shell";
 import { ErrorNote, JobProgress, Panel, Skeleton, StatusPill, SyntheticTag } from "@/components/ui";
+import { IntegrityReport, ValidationPanel } from "@/components/Validation";
 import { api, ApiError, newIdempotencyKey, type DatasetVersion, type Experiment, type Job, type Series } from "@/lib/api";
 import { DASH, money, num, pct, shortHash, signClass, strategyLabel } from "@/lib/format";
 import { useApi } from "@/lib/useApi";
@@ -224,6 +225,7 @@ export default function ExperimentPage() {
   const version = useApi<DatasetVersion>(exp.data ? `/dataset-versions/${exp.data.dataset_version_id}` : null);
   const repro = useApi<{ comparisons: { experiment_id: string; name: string; fingerprint_match: boolean; same_inputs: boolean; status: string }[] }>(done ? `/experiments/${id}/reproducibility` : null);
   const [actionErr, setActionErr] = useState<ApiError>();
+  const [validationRun, setValidationRun] = useState("");
 
   async function reproduce() {
     try {
@@ -438,6 +440,9 @@ export default function ExperimentPage() {
               </Panel>
             </div>
           )}
+
+          <IntegrityReport experimentId={id} refreshKey={`${validationRun}-${repro.data?.comparisons.length ?? 0}`} />
+          <ValidationPanel experimentId={id} onComplete={setValidationRun} />
 
           {a && (
             <Panel title="Monthly returns" aside="Net of costs; cells shaded by sign and size">

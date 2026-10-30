@@ -14,8 +14,8 @@ Dependency-ordered. ✅ done and verified · 🔶 partial · ⬜ not started.
 | 5 | Performance, risk, drawdowns, attribution, cost analysis, visualizations | ✅ |
 | 5 | Factor exposures / regression on benchmark and sector factors | ⬜ |
 | 6 | Experiment tracking, input hashes, reproduction, manifests | ✅ |
-| 6 | Walk-forward, sensitivity, cost sweeps, bootstrap CIs, deflated Sharpe, regimes | ⬜ |
-| 6 | Research Integrity Report | ⬜ |
+| 6 | Walk-forward, sensitivity, cost sweeps, bootstrap CIs, deflated Sharpe, regimes, leakage check | ✅ |
+| 6 | Research Integrity Report (13 checks; API + UI) | ✅ |
 | 7 | Optimizers (domain) | ✅ |
 | 7 | Optimization / stress / Monte Carlo API + UI | ⬜ |
 | 8 | ML pipeline (purged chronological CV, baselines, artifacts) | ⬜ |

@@ -18,7 +18,15 @@ from quantlab_api.db import get_engine
 from quantlab_api.errors import install_error_handlers
 from quantlab_api.jobs import redis_conn
 from quantlab_api.observability import configure_logging, request_context_middleware
-from quantlab_api.routes import auth, datasets, experiments, jobs, strategies, workspaces
+from quantlab_api.routes import (
+    auth,
+    datasets,
+    experiments,
+    jobs,
+    research,
+    strategies,
+    workspaces,
+)
 
 API_PREFIX = "/api/v1"
 
@@ -93,6 +101,7 @@ def create_app() -> FastAPI:
         strategies.router,
         experiments.router,
         jobs.router,
+        research.router,
     ):
         api.include_router(r)
     app.include_router(api)

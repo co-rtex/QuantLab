@@ -42,6 +42,12 @@ test("research workflow: data -> backtest -> results -> reproduction", async ({ 
   const [decided, filled] = await Promise.all([firstRow.getByRole("cell").nth(0).innerText(), firstRow.getByRole("cell").nth(1).innerText()]);
   expect(filled > decided).toBeTruthy();
 
+  // Integrity report is available immediately; validation fills in the unassessed checks.
+  await expect(page.getByText("Research integrity report")).toBeVisible();
+  await page.getByRole("button", { name: "Run validation suite" }).click();
+  await expect(page.getByText("Performance by market regime")).toBeVisible({ timeout: 60_000 });
+  await expect(page.getByText("Signals on 8 sampled dates were identical")).toBeVisible();
+
   await page.getByRole("button", { name: "Reproduce" }).click();
   await expect(page.getByText("(reproduction)").first()).toBeVisible();
   await expect(page.getByText("outputs match this run exactly")).toBeVisible({ timeout: 60_000 });

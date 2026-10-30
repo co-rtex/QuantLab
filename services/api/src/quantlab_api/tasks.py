@@ -237,3 +237,43 @@ def _headline(a: dict[str, Any]) -> dict[str, Any]:
         }
     )
     return out
+
+
+@handler("research.validation")
+def validation_task(ctx: JobContext) -> Finalizer:
+    from quantlab.research.suite import run_validation_suite
+    from quantlab_api.models import ResearchRun
+
+    run_id = uuid.UUID(ctx.payload["research_run_id"])
+    with SessionLocal() as db:
+        run = db.get(ResearchRun, run_id)
+        if run is None:
+            raise PermanentJobError("research run not found")
+        exp = db.get(Experiment, run.experiment_id)
+        if exp is None:
+            raise PermanentJobError("experiment not found")
+        ctx.heartbeat(0.01, "loading dataset", force=True)
+        bars, actions, cfg = load_experiment_inputs(db, exp)
+        key, params = exp.strategy_key, dict(exp.strategy_params)
+
+    def progress(f: float, msg: str) -> None:
+        ctx.heartbeat(0.02 + 0.95 * f, msg)
+
+    result = run_validation_suite(
+        bars, actions, key, params, cfg, on_progress=progress, seed=int(ctx.payload.get("seed", 0))
+    )
+
+    def finalize(db: Session) -> dict[str, Any]:
+        row = db.get(ResearchRun, run_id)
+        if row is None:
+            raise PermanentJobError("research run was deleted")
+        row.result = result
+        wf = result.get("walk_forward") or {}
+        oos = wf.get("mean_oos_sharpe")
+        return {
+            "message": f"validation complete; mean out-of-sample Sharpe {oos:.2f}"
+            if oos is not None
+            else "validation complete"
+        }
+
+    return finalize
