@@ -658,6 +658,10 @@ def reap(redeliver_after_seconds: int = 120) -> dict[str, int]:
         for job in waiting:
             if enqueue(job):
                 stats["redelivered"] += 1
+                # Record the delivery so the next cycle leaves it alone until the cutoff
+                # passes again; without this every 15 s cycle re-enqueued the whole backlog.
+                job.heartbeat_at = t
+        db.commit()
     stats["uploads_swept"] = sweep_uploads()
     if any(stats.values()):
         log.info("reaper_cycle", **stats)

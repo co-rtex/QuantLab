@@ -252,53 +252,55 @@ async def upload_csv(
     staging_root = get_settings().data_dir / "uploads"
     staging_root.mkdir(parents=True, exist_ok=True)
     staged = Path(tempfile.mkdtemp(prefix="csv-", dir=staging_root))
+    # Every rejection after staging (job cap 429, slug 409, errors) must delete the files;
+    # only an accepted job owns them. Otherwise each rejected retry left up to 100 MB on
+    # disk until the reaper's 24-hour sweep.
     try:
         files = {"bars": await _save_upload(bars, staged / "bars.csv")}
         if actions is not None and actions.filename:
             files["actions"] = await _save_upload(actions, staged / "actions.csv")
-    except ApiError:
+        ds = db.scalar(
+            select(Dataset).where(Dataset.workspace_id == workspace_id, Dataset.slug == slug)
+        )
+        if ds is None:
+            ds = Dataset(
+                workspace_id=workspace_id,
+                slug=slug,
+                name=name,
+                description=f"Imported from CSV. Source: {source}. Licence: {license}.",
+                provider="csv",
+                created_by=user.id,
+            )
+            db.add(ds)
+            db.flush()
+        elif ds.provider != "csv":
+            raise ApiError(409, "slug_taken", "A dataset from another provider uses this slug")
+        audit(
+            db,
+            request,
+            "dataset.ingest_requested",
+            user=user,
+            workspace_id=workspace_id,
+            target_type="dataset",
+            target_id=ds.id,
+            provider="csv",
+            bytes=sum(files.values()),
+        )
+        job, _ = submit_job(
+            db,
+            workspace_id=workspace_id,
+            user_id=user.id,
+            kind="dataset.csv",
+            payload={
+                "dataset_id": str(ds.id),
+                "staged_dir": str(staged),
+                "source": source,
+                "license": license,
+                "files": files,
+            },
+            request_id=getattr(request.state, "request_id", None),
+        )
+    except BaseException:
         shutil.rmtree(staged, ignore_errors=True)
         raise
-    ds = db.scalar(
-        select(Dataset).where(Dataset.workspace_id == workspace_id, Dataset.slug == slug)
-    )
-    if ds is None:
-        ds = Dataset(
-            workspace_id=workspace_id,
-            slug=slug,
-            name=name,
-            description=f"Imported from CSV. Source: {source}. Licence: {license}.",
-            provider="csv",
-            created_by=user.id,
-        )
-        db.add(ds)
-        db.flush()
-    elif ds.provider != "csv":
-        shutil.rmtree(staged, ignore_errors=True)
-        raise ApiError(409, "slug_taken", "A dataset from another provider uses this slug")
-    audit(
-        db,
-        request,
-        "dataset.ingest_requested",
-        user=user,
-        workspace_id=workspace_id,
-        target_type="dataset",
-        target_id=ds.id,
-        provider="csv",
-        bytes=sum(files.values()),
-    )
-    job, _ = submit_job(
-        db,
-        workspace_id=workspace_id,
-        user_id=user.id,
-        kind="dataset.csv",
-        payload={
-            "dataset_id": str(ds.id),
-            "staged_dir": str(staged),
-            "source": source,
-            "license": license,
-            "files": files,
-        },
-        request_id=getattr(request.state, "request_id", None),
-    )
     return JobOut.model_validate(job)

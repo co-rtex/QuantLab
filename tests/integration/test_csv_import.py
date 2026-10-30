@@ -83,3 +83,16 @@ def test_failed_import_releases_staged_files_and_body_limits(client):
     )
     assert big.status_code == 413
     assert big.json()["error"]["code"] == "payload_too_large"
+
+
+def test_rejected_uploads_do_not_leave_staged_files(client, monkeypatch):
+    from quantlab_api.config import get_settings
+
+    monkeypatch.setattr(get_settings(), "max_active_jobs_per_workspace", 1)
+    h = register(client)
+    ws = workspace_id(client, h)
+    uploads = get_settings().data_dir / "uploads"
+    before = set(uploads.iterdir()) if uploads.exists() else set()
+    codes = [_upload(client, h, ws, slug=f"cap-{i}").status_code for i in range(4)]
+    assert codes == [202, 429, 429, 429]
+    assert len(set(uploads.iterdir()) - before) == 1  # only the accepted job's files remain
