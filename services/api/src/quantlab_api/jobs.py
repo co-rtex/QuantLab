@@ -199,7 +199,10 @@ def submit_job(
         )
         or 0
     )
-    if user_active >= s.max_active_jobs_per_user:
+    # A lower workspace cap also bounds the account cap. Otherwise configuring
+    # two jobs/workspace would still allow five workspaces to run ten jobs.
+    account_cap = min(s.max_active_jobs_per_user, s.max_active_jobs_per_workspace)
+    if user_active >= account_cap:
         raise ApiError(
             429,
             "too_many_jobs",
