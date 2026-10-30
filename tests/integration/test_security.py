@@ -238,17 +238,10 @@ def test_fallback_limiter_is_bounded_and_atomic_reserve():
 
     set_redis(Down())  # type: ignore[arg-type]
     lim = RateLimiter()
-    lim.MAX_LOCAL_KEYS = 50
     assert [lim.reserve("victim", 2) for _ in range(3)] == [True, True, False]
-    for i in range(500):  # attacker floods fresh keys to try to evict the victim's counter
-        lim.reserve(f"k{i}", 5)
-    assert len(lim.local) <= 50
-    assert lim.reserve("victim", 2) is False  # throttled counters are never evicted
-    # Fill every slot with throttled counters: new keys land in hashed overflow shards,
-    # so most unrelated principals are still served (no single global lockout).
-    for i in range(60):
-        for _ in range(2):
-            lim.reserve(f"t{i}", 1)
-    allowed = sum(lim.reserve(f"new{i}", 1) for i in range(32))
-    assert allowed >= 16
-    lim.refund("new0")  # refund follows the same key mapping as reserve
+    for i in range(20_000):  # a key flood cannot evict or reset the victim's counter
+        lim.reserve(f"k{i}", 10**9)
+    assert lim.reserve("victim", 2) is False
+    assert len(lim._counts) == RateLimiter.SHARDS  # constant memory
+    lim.refund("victim")  # ignored in degraded mode (shards may be shared)
+    assert lim.reserve("victim", 2) is False
