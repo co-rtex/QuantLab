@@ -49,7 +49,7 @@ export default function Overview() {
           ) : exps.data && exps.data.items.length === 0 ? (
             <p className="text-sm text-ink-2">No experiments yet. Configure a strategy and run your first backtest.</p>
           ) : (
-            <div className="overflow-x-auto">
+            <div className="overflow-x-auto" tabIndex={0}>
               <table className="data num">
                 <thead>
                   <tr>

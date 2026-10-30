@@ -63,7 +63,7 @@ export default function ExperimentsPage() {
           <p className="py-6 text-sm text-ink-2">No experiments match. Adjust the filters or create a new experiment.</p>
         ) : (
           <>
-            <div className="overflow-x-auto">
+            <div className="overflow-x-auto" tabIndex={0}>
               <table className="data num">
                 <thead>
                   <tr>

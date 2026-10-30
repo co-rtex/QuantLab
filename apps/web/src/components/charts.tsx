@@ -209,7 +209,7 @@ export function MonthlyReturns({ data }: { data: { year: number; month: number; 
     return rs.length ? rs.reduce((acc, r) => acc * (1 + r), 1) - 1 : null;
   };
   return (
-    <div className="overflow-x-auto">
+    <div className="overflow-x-auto" tabIndex={0}>
       <table className="data num" aria-label="Monthly returns">
         <thead>
           <tr>

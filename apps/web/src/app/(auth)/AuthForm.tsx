@@ -84,14 +84,14 @@ export function AuthForm({ mode }: { mode: "login" | "register" }) {
         {mode === "login" ? (
           <>
             New to QuantLab?{" "}
-            <Link href="/register" className="text-cobalt hover:underline">
+            <Link href="/register" className="text-cobalt underline underline-offset-2">
               Create an account
             </Link>
           </>
         ) : (
           <>
             Already have an account?{" "}
-            <Link href="/login" className="text-cobalt hover:underline">
+            <Link href="/login" className="text-cobalt underline underline-offset-2">
               Sign in
             </Link>
           </>

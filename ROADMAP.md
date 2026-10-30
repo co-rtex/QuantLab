@@ -5,7 +5,7 @@ Dependency-ordered. ✅ done and verified · 🔶 partial · ⬜ not started.
 | Phase | Item | State |
 |---|---|---|
 | 0 | Preflight, architecture, project memory | ✅ |
-| 1 | Workspace, tooling, Docker Compose, FastAPI, Next.js, migrations, CI | ✅ |
+| 1 | Workspace, tooling, Docker Compose, FastAPI, Next.js, migrations, CI; `make app-up` verified from clean images with E2E | ✅ |
 | 2 | Calendar, schema, synthetic provider, quality checks, versioned store, ingestion with throttling/retries/checkpoints, bar queries + cache | ✅ |
 | 2 | CSV import endpoint (provenance, licence, size limits) | ✅ |
 | 3 | Ledger with invariants, corporate actions | ✅ |
@@ -27,4 +27,5 @@ Dependency-ordered. ✅ done and verified · 🔶 partial · ⬜ not started.
 | 9 | Benchmarks harness and BENCHMARKS.md measurements | ✅ (load testing and worker scaling pending) |
 | 10 | Case study: momentum vs passive after costs, out of sample (docs/CASE_STUDY.md) | ✅ |
 | 10 | Fresh-context financial-core review (10 findings, fixed with regression tests) | ✅ |
-| 10 | Accessibility audit, architecture review of service layer | ⬜ |
+| 10 | Accessibility: axe WCAG 2.1 AA audit in E2E, zero violations on 11 pages | ✅ |
+| 10 | Architecture review of the service layer | ⬜ |

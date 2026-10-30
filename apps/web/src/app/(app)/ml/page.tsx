@@ -60,7 +60,7 @@ function RunDetail({ id }: { id: string }) {
         Target: {res.problem}. Panel of {res.panel.rows.toLocaleString()} observations on {res.panel.dates} dates and {res.panel.symbols} symbols (positive rate{" "}
         {pct(res.panel.positive_rate, 1)}), hash <span className="num">{shortHash(res.panel.hash, 12)}</span>.
       </p>
-      <div className="overflow-x-auto">
+      <div className="overflow-x-auto" tabIndex={0}>
         <table className="data num">
           <thead>
             <tr>

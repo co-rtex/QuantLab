@@ -76,7 +76,7 @@ export default function DataPage() {
                     {d.provider === "synthetic" && <SyntheticTag />}
                   </div>
                   <p className="mt-0.5 max-w-prose text-sm text-ink-2">{d.description}</p>
-                  <div className="mt-3 overflow-x-auto">
+                  <div className="mt-3 overflow-x-auto" tabIndex={0}>
                     <table className="data num">
                       <thead>
                         <tr>

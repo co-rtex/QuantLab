@@ -16,7 +16,8 @@ numeric verification; eval suite in docs/AI_EVAL.md) and HTML/Markdown report ex
 Before that: research validation and the Research Integrity Report: walk-forward with in-sample
 parameter selection, parameter and cost sweeps, stationary-bootstrap CIs, PSR/deflated
 Sharpe, regime breakdown and an empirical look-ahead check (proven to catch a planted bug),
-run as a background job and rendered in the experiment page. Playwright 10/10 (workflow now includes validation, assistant and report export).
+run as a background job and rendered in the experiment page. Playwright 12/12 (incl. axe accessibility audit), also verified against the
+  containerized stack from `make app-up` (workflow now includes validation, assistant and report export).
 
 ## Branch / commits
 `main`, pushed to `origin` (github.com/co-rtex/QuantLab). See `git log`.
@@ -24,7 +25,8 @@ run as a background job and rendered in the experiment page. Playwright 10/10 (w
 ## Tests last executed (2026-10-30)
 * Python: 117 tests (unit, property-based, golden, research, integration, security,
   migrations, failure injection) passing.
-* Web: `eslint`, `tsc --noEmit`, `next build` passing; Playwright 10/10 against a local
+* Web: `eslint`, `tsc --noEmit`, `next build` passing; Playwright 12/12 (incl. axe accessibility audit), also verified against the
+  containerized stack from `make app-up` against a local
   stack (workflow incl. validation and reproduction, auth, proxy and redirect security).
 * CI (GitHub Actions): python, web, docker jobs green on the last checked run.
 * Lint: ruff clean; mypy --strict clean.
@@ -32,7 +34,7 @@ run as a background job and rendered in the experiment page. Playwright 10/10 (w
 ## In progress / immediate next steps
 1. Terraform (validated, not applied); concurrent load testing; RQ worker scaling benchmark.
 2. Interactive optimizer UI (domain allocators exist).
-3. Accessibility audit of the frontend; service-layer architecture review.
+3. Fresh-context review of the service layer (API, jobs, security).
 4. Portfolio workspace (manual ledger + valuation), optimization/stress UI.
 
 ## Known blockers

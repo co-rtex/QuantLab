@@ -71,10 +71,10 @@ export default function ComparePage() {
             <Skeleton />
           ) : done.data?.items.length === 0 ? (
             <p className="text-sm text-ink-2">
-              Nothing to compare yet. <Link className="text-cobalt hover:underline" href="/experiments/new">Run an experiment</Link> first.
+              Nothing to compare yet. <Link className="text-cobalt underline underline-offset-2" href="/experiments/new">Run an experiment</Link> first.
             </p>
           ) : (
-            <ul className="max-h-[28rem] space-y-1 overflow-auto text-sm">
+            <ul className="max-h-[28rem] space-y-1 overflow-auto text-sm" tabIndex={0}>
               {done.data?.items.map((e) => (
                 <li key={e.id}>
                   <label className="flex cursor-pointer items-start gap-2 rounded px-1.5 py-1 hover:bg-sunken">
@@ -102,7 +102,7 @@ export default function ComparePage() {
                 <CompareChart series={result.map((r) => ({ name: r.name, dates: r.series.dates, values: r.series.normalized as (number | null)[] }))} />
               </Panel>
               <Panel title="Statistics">
-                <div className="overflow-x-auto">
+                <div className="overflow-x-auto" tabIndex={0}>
                   <table className="data num">
                     <thead>
                       <tr>

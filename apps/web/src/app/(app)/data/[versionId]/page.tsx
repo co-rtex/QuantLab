@@ -94,7 +94,7 @@ export default function VersionPage() {
             <span className="sr-only">Filter symbols</span>
             <input className="field" placeholder="Filter by symbol prefix" value={q} onChange={(e) => setQ(e.target.value)} />
           </label>
-          <div className="max-h-[22rem] overflow-auto">
+          <div className="max-h-[22rem] overflow-auto" tabIndex={0}>
             <table className="data num">
               <thead>
                 <tr>
@@ -127,7 +127,7 @@ export default function VersionPage() {
       </div>
 
       <Panel title="Quality checks" className="mt-6">
-        <div className="overflow-x-auto">
+        <div className="overflow-x-auto" tabIndex={0}>
           <table className="data">
             <thead>
               <tr>

@@ -16,6 +16,7 @@
 | Security | `tests/integration/test_security.py` | Auth flows, cookie flags, forged/none-alg/expired tokens, logout-everywhere revocation, role enforcement, last-owner protection, rate limits (per IP, per account failures, atomic reserve, degraded mode), injection-like inputs, security headers, production config guards, metrics token, dataset size limits, cross-workspace isolation |
 | Failure injection | `tests/integration/test_jobs_reliability.py` | Duplicate delivery → one result; lease expiry + takeover → stale worker fenced out; reaper requeue and exhaustion; transient retries; permanent failures; cancellation while running and queued; timeouts; no partial results on failure; Redis outage → no lost jobs |
 | Migrations | `tests/integration/test_migrations.py` | Downgrade/upgrade round trip; no drift between models and migrations; single head |
+| Accessibility | `apps/web/e2e/a11y.spec.ts` | axe-core WCAG 2.0/2.1 A and AA rules on login, register, overview, market data, dataset version, strategy builder, portfolios, ML, compare, settings and experiment results: zero violations |
 | Browser E2E | `apps/web/e2e/` | Sign-up, synthetic ingestion, strategy builder, async backtest, results explorer, reproduction match; login errors; auth redirects (desktop + mobile) |
 
 Not yet covered (tracked in ROADMAP.md): performance regression tests, load tests,

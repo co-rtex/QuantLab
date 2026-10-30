@@ -118,7 +118,7 @@ function Trades({ id }: { id: string }) {
         <span className="sr-only">Filter by symbol</span>
         <input className="field" placeholder="Filter by symbol" value={symbol} onChange={(e) => { setSymbol(e.target.value.toUpperCase()); setOffset(0); }} />
       </label>
-      <div className="overflow-x-auto">
+      <div className="overflow-x-auto" tabIndex={0}>
         <table className="data num">
           <thead>
             <tr>
@@ -186,7 +186,7 @@ function Holdings({ id, dates }: { id: string; dates: string[] }) {
       {p.data?.items.length === 0 ? (
         <p className="text-sm text-ink-2">Fully in cash on this date.</p>
       ) : (
-        <div className="max-h-80 overflow-auto">
+        <div className="max-h-80 overflow-auto" tabIndex={0}>
           <table className="data num">
             <thead>
               <tr>
@@ -476,7 +476,7 @@ export default function ExperimentPage() {
               )}
               {repro.data?.comparisons.map((c) => (
                 <p key={c.experiment_id} className="mt-2 text-sm">
-                  <Link href={`/experiments/${c.experiment_id}`} className="text-cobalt hover:underline">
+                  <Link href={`/experiments/${c.experiment_id}`} className="text-cobalt underline underline-offset-2">
                     {c.name}
                   </Link>
                   :{" "}

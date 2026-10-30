@@ -146,7 +146,7 @@ export default function SettingsPage() {
       </div>
       {isOwner && (
         <Panel title="Audit log" className="mt-6" aside="Sensitive actions in this workspace">
-          <div className="overflow-x-auto">
+          <div className="overflow-x-auto" tabIndex={0}>
             <table className="data num">
               <thead>
                 <tr>

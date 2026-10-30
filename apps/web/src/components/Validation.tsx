@@ -67,9 +67,9 @@ export function IntegrityReport({ experimentId, refreshKey }: { experimentId: st
           <div key={s} className="flex items-center gap-2">
             <dt>
               <StatusPill status={s} />
+              <span className="sr-only">{LABEL[s]}</span>
             </dt>
             <dd className="num">{rep.data!.summary[s] ?? 0}</dd>
-            <span className="sr-only">{LABEL[s]}</span>
           </div>
         ))}
       </dl>
@@ -171,7 +171,7 @@ export function ValidationPanel({ experimentId, onComplete }: { experimentId: st
                   <span className="num font-medium text-ink">{num(r.walk_forward.mean_oos_sharpe)}</span>.
                 </p>
                 <div className="grid gap-6 xl:grid-cols-2">
-                  <div className="overflow-x-auto">
+                  <div className="overflow-x-auto" tabIndex={0}>
                     <table className="data num">
                       <thead>
                         <tr>
@@ -274,7 +274,7 @@ export function ValidationPanel({ experimentId, onComplete }: { experimentId: st
             </section>
             <section>
               <h3 className="mb-2 text-sm font-semibold">Parameter sweep (in-sample)</h3>
-              <div className="max-h-64 overflow-auto">
+              <div className="max-h-64 overflow-auto" tabIndex={0}>
                 <table className="data num">
                   <thead>
                     <tr>
@@ -303,7 +303,7 @@ export function ValidationPanel({ experimentId, onComplete }: { experimentId: st
           {r.regimes.length > 0 && (
             <section>
               <h3 className="mb-2 text-sm font-semibold">Performance by market regime</h3>
-              <div className="overflow-x-auto">
+              <div className="overflow-x-auto" tabIndex={0}>
                 <table className="data num">
                   <thead>
                     <tr>
