@@ -27,19 +27,27 @@ export function useApi<T>(path: string | null, opts: { poll?: Poll<T> } = {}) {
     if (path === null) return;
     let cancelled = false;
     let timer: ReturnType<typeof setTimeout> | undefined;
+    let last: T | undefined; // last successful response for this path
+    let failures = 0;
     const tick = async () => {
-      let data: T | undefined;
+      let permanent = false;
       try {
-        data = await api<T>(path);
-        if (!cancelled) setState({ path, data });
+        last = await api<T>(path);
+        failures = 0;
+        if (!cancelled) setState({ path, data: last });
       } catch (e) {
         const error = e instanceof ApiError ? e : new ApiError(0, "network", String(e));
+        // 4xx (gone, forbidden, invalid) will not fix itself; network errors and 5xx may.
+        permanent = error.status >= 400 && error.status < 500 && error.status !== 429;
+        failures += 1;
         if (!cancelled) setState((s) => ({ path, data: s.path === path ? s.data : undefined, error }));
       }
-      if (cancelled) return;
+      if (cancelled || permanent) return;
       const p = pollRef.current;
-      const delay = typeof p === "function" ? p(data) : p;
-      if (delay) timer = setTimeout(tick, delay);
+      // Decide from the last good data: a transient error used to pass `undefined` here,
+      // which stopped function-based polls for good (jobs then looked stuck forever).
+      const delay = typeof p === "function" ? p(last) : p;
+      if (delay) timer = setTimeout(tick, failures ? Math.min(delay * 2 ** failures, 30_000) : delay);
     };
     tick();
     return () => {

@@ -3,7 +3,44 @@ import type { NextRequest } from "next/server";
 // Same-origin proxy to the QuantLab API so the httpOnly session cookie is first-party.
 // The upstream URL is read at request time, which keeps container images portable.
 const FORWARD_REQUEST = ["content-type", "authorization", "idempotency-key", "x-request-id", "cookie"];
-const FORWARD_RESPONSE = ["content-type", "x-request-id", "set-cookie", "content-disposition"];
+// content-security-policy: the API sandboxes HTML reports with a CSP; dropping it here served
+// them same-origin with the app and no policy.
+const FORWARD_RESPONSE = [
+  "content-type",
+  "x-request-id",
+  "set-cookie",
+  "content-disposition",
+  "content-security-policy",
+];
+// Largest body the API accepts (CSV import, services/api/src/quantlab_api/limits.py).
+const MAX_BODY_BYTES = 110 * 1024 * 1024;
+
+/** Read the request body, refusing anything larger than MAX_BODY_BYTES without buffering it. */
+async function readCapped(req: NextRequest): Promise<ArrayBuffer | null> {
+  const declared = Number(req.headers.get("content-length") ?? "0");
+  if (declared > MAX_BODY_BYTES) return null;
+  if (!req.body) return new ArrayBuffer(0);
+  const reader = req.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let size = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    size += value.byteLength;
+    if (size > MAX_BODY_BYTES) {
+      await reader.cancel();
+      return null;
+    }
+    chunks.push(value);
+  }
+  const out = new Uint8Array(size);
+  let offset = 0;
+  for (const c of chunks) {
+    out.set(c, offset);
+    offset += c.byteLength;
+  }
+  return out.buffer;
+}
 
 async function forward(req: NextRequest, ctx: { params: Promise<{ path: string[] }> }) {
   const { path } = await ctx.params;
@@ -29,12 +66,19 @@ async function forward(req: NextRequest, ctx: { params: Promise<{ path: string[]
   const hops = (req.headers.get("x-forwarded-for") ?? "").split(",").map((h) => h.trim()).filter(Boolean);
   if (hops.length) headers.set("x-forwarded-for", hops[hops.length - 1]);
   const hasBody = !["GET", "HEAD"].includes(req.method);
+  const body = hasBody ? await readCapped(req) : undefined;
+  if (body === null) {
+    return Response.json(
+      { error: { code: "payload_too_large", message: "Request body is too large." } },
+      { status: 413 },
+    );
+  }
   let res: Response;
   try {
     res = await fetch(url, {
       method: req.method,
       headers,
-      body: hasBody ? await req.arrayBuffer() : undefined,
+      body,
       cache: "no-store",
       redirect: "manual",
     });

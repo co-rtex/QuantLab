@@ -2,8 +2,8 @@
 
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
-import type { ReactNode } from "react";
-import { api } from "@/lib/api";
+import { type ReactNode, useState } from "react";
+import { api, ApiError } from "@/lib/api";
 import { useWorkspace } from "@/lib/workspace";
 
 const NAV = [
@@ -22,8 +22,19 @@ export function Shell({ children }: { children: ReactNode }) {
   const router = useRouter();
   const { user, workspaces, workspace, setWorkspaceId } = useWorkspace();
 
+  const [signOutFailed, setSignOutFailed] = useState(false);
+
   async function signOut() {
-    await api("/auth/logout", { method: "POST" }).catch(() => {});
+    try {
+      await api("/auth/logout", { method: "POST" });
+    } catch (e) {
+      // 401: the session had already ended. Anything else means the httpOnly cookie may
+      // still be valid, so do not pretend the user is signed out.
+      if (!(e instanceof ApiError && e.status === 401)) {
+        setSignOutFailed(true);
+        return;
+      }
+    }
     router.push("/login");
   }
 
@@ -77,6 +88,11 @@ export function Shell({ children }: { children: ReactNode }) {
           <button onClick={signOut} className="mt-1 text-cobalt hover:underline">
             Sign out
           </button>
+          {signOutFailed && (
+            <p role="alert" className="mt-1 text-loss">
+              Sign-out failed; you are still signed in. Try again.
+            </p>
+          )}
         </div>
       </aside>
       <main className="min-w-0 px-4 py-6 md:px-8 md:py-8">{children}</main>
