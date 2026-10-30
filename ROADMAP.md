@@ -12,7 +12,7 @@ Dependency-ordered. ✅ done and verified · 🔶 partial · ⬜ not started.
 | 3 | Portfolio workspace API + UI (append-only ledger, valuation, TWR, risk, stress, Monte Carlo) | ✅ |
 | 4 | Strategy framework (9 strategies), event-driven engine, async jobs, results explorer | ✅ |
 | 5 | Performance, risk, drawdowns, attribution, cost analysis, visualizations | ✅ |
-| 5 | Factor exposures / regression on benchmark and sector factors | ⬜ |
+| 5 | Factor exposures: market and sector factors, Newey-West OLS, in analysis and UI | ✅ |
 | 6 | Experiment tracking, input hashes, reproduction, manifests | ✅ |
 | 6 | Walk-forward, sensitivity, cost sweeps, bootstrap CIs, deflated Sharpe, regimes, leakage check | ✅ |
 | 6 | Research Integrity Report (13 checks; API + UI) | ✅ |

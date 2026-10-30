@@ -59,7 +59,7 @@ def rolling_metrics(equity: pd.Series, window: int = 126) -> pd.DataFrame:
     return pd.DataFrame({"rolling_vol": vol, "rolling_sharpe": sharpe})
 
 
-def analyze_backtest(res: BacktestResult) -> dict[str, Any]:
+def analyze_backtest(res: BacktestResult, factors: pd.DataFrame | None = None) -> dict[str, Any]:
     eq = res.equity
     rf = res.config.risk_free_rate
     perf = compute_performance(eq["equity"], res.benchmark, risk_free_rate=rf)
@@ -85,6 +85,11 @@ def analyze_backtest(res: BacktestResult) -> dict[str, Any]:
     exposure = eq["market_value"] / eq["equity"]
     dd = drawdown_episodes(eq["equity"], top=5)
     contrib = _contributions(res)
+    factor_doc = None
+    if factors is not None and len(factors.columns):
+        from quantlab.analytics.factors import exposures
+
+        factor_doc = exposures(simple_returns(eq["equity"]), factors)
     return jsonable(
         {
             "performance": perf.to_dict(),
@@ -106,6 +111,7 @@ def analyze_backtest(res: BacktestResult) -> dict[str, Any]:
             "final_concentration": concentration(final_w),
             "final_holdings": final_w.sort_values(ascending=False).head(25).to_dict(),
             "contributions": contrib,
+            "factor_exposures": factor_doc,
             "rejections": {
                 "count": len(res.rejections),
                 "by_reason": res.rejections["reason"].value_counts().to_dict()

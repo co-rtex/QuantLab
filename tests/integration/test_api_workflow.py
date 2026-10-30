@@ -93,6 +93,9 @@ def test_backtest_workflow_results_and_reproduction(client, seeded):
     assert pos["date"] <= "2022-06-15"
     analysis = client.get(f"/api/v1/experiments/{exp_id}/analysis", headers=h).json()
     assert {"performance", "risk", "drawdowns", "costs", "trades"} <= set(analysis)
+    fx = analysis["factor_exposures"]
+    assert any(x["factor"] == "market" for x in fx["loadings"])
+    assert 0 <= fx["r_squared"] <= 1
     contrib = analysis["contributions"]
     final_equity = eq["equity"][-1]
     assert abs(contrib["total"] - (final_equity - 1_000_000)) < 1e-4 * 1_000_000

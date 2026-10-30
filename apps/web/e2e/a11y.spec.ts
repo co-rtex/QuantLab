@@ -3,7 +3,7 @@ import { expect, test, type Page } from "@playwright/test";
 
 async function audit(page: Page, name: string) {
   const results = await new AxeBuilder({ page }).withTags(["wcag2a", "wcag2aa", "wcag21aa"]).analyze();
-  const summary = results.violations.map((v) => `${v.id} (${v.impact}): ${v.nodes.length} node(s) — ${v.help}`);
+  const summary = results.violations.map((v) => `${v.id} (${v.impact}): ${v.nodes.length} node(s) — ${v.help} [${v.nodes.map((n) => n.target.join(" ")).join("; ")}]`);
   expect(summary, `${name}\n${summary.join("\n")}`).toEqual([]);
 }
 

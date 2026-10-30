@@ -105,6 +105,14 @@ Sharpe.
   10, seeded for reproducibility. It resamples history and so cannot produce shocks
   larger than those observed.
 
+## Factor exposures (`quantlab.analytics.factors`)
+
+Daily strategy returns are regressed by OLS on a market factor (the benchmark's total
+return) and, for each sector with at least three members, the equal-weighted sector return
+minus the market. Standard errors are Newey-West (HAC) with
+`floor(4 * (T/100)^(2/9))` lags. Alpha is the intercept times 252. The regression is
+descriptive: it uses the whole sample.
+
 ## Optimizers (`quantlab.optimize`)
 
 Long-only, fully invested. Minimum-variance and mean-variance use SLSQP on a rescaled

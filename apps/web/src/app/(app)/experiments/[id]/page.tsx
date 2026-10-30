@@ -28,6 +28,15 @@ interface Analysis {
   final_concentration: Record<string, number | null>;
   contributions: { top: { symbol: string; pnl: number }[]; bottom: { symbol: string; pnl: number }[]; method?: string };
   rejections: { count: number; by_reason: Record<string, number> };
+  factor_exposures: {
+    error?: string;
+    method: string;
+    alpha_annualized: number;
+    alpha_t_stat: number;
+    r_squared: number;
+    residual_volatility: number;
+    loadings: { factor: string; beta: number; t_stat: number }[];
+  } | null;
   meta: { universe: string[]; benchmark: string | null; sessions: number; first_session: string; last_session: string };
 }
 interface Trade {
@@ -451,6 +460,49 @@ export default function ExperimentPage() {
           <IntegrityReport experimentId={id} refreshKey={`${validationRun}-${repro.data?.comparisons.length ?? 0}`} />
           <ValidationPanel experimentId={id} onComplete={setValidationRun} />
           <AssistantPanel experimentId={id} />
+
+          {a?.factor_exposures && !a.factor_exposures.error && (
+            <Panel title="Factor exposures" aside={a.factor_exposures.method}>
+              <div className="grid gap-6 lg:grid-cols-[2fr_1fr]">
+                <div className="overflow-x-auto" tabIndex={0}>
+                  <table className="data num">
+                    <thead>
+                      <tr>
+                        <th>Factor</th>
+                        <th className="r">Loading</th>
+                        <th className="r">t-statistic</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {a.factor_exposures.loadings.map((l) => (
+                        <tr key={l.factor}>
+                          <td>{l.factor === "market" ? "Market (benchmark)" : `${l.factor.replace("sector:", "")} minus market`}</td>
+                          <td className="r">{num(l.beta)}</td>
+                          <td className={`r ${Math.abs(l.t_stat) >= 2 ? "font-medium" : "text-ink-2"}`}>{num(l.t_stat)}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+                <div>
+                <dl className="space-y-1.5 text-sm">
+                  {[
+                    ["Alpha (annualized)", pct(a.factor_exposures.alpha_annualized, 2)],
+                    ["Alpha t-statistic", num(a.factor_exposures.alpha_t_stat)],
+                    ["R²", num(a.factor_exposures.r_squared)],
+                    ["Residual volatility", pct(a.factor_exposures.residual_volatility, 1)],
+                  ].map(([k, v]) => (
+                    <div key={k} className="flex justify-between gap-2">
+                      <dt className="text-ink-2">{k}</dt>
+                      <dd className="num">{v}</dd>
+                    </div>
+                  ))}
+                </dl>
+                <p className="pt-2 text-xs text-ink-3">|t| ≥ 2 is shown in bold. Sector factors are equal-weighted sector returns minus the market.</p>
+                </div>
+              </div>
+            </Panel>
+          )}
 
           {a && (
             <Panel title="Monthly returns" aside="Net of costs; cells shaded by sign and size">

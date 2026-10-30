@@ -201,3 +201,43 @@ def test_trade_statistics_handle_splits_and_unmatched_sells():
     )
     m2 = trade_statistics(rev, pd.DataFrame([{"date": d[1], "symbol": "C", "ratio": 0.1}]))
     assert m2["avg_win"] == pytest.approx(10 * (110 - 100))
+
+
+def test_factor_exposures_recover_known_loadings():
+    from quantlab.analytics.factors import exposures
+
+    rng = np.random.default_rng(9)
+    idx = pd.bdate_range("2020-01-01", periods=750)
+    f = pd.DataFrame(
+        {"market": rng.normal(0.0004, 0.01, 750), "sector:Tech": rng.normal(0, 0.005, 750)},
+        index=idx,
+    )
+    y = 0.0002 + 1.3 * f["market"] - 0.6 * f["sector:Tech"] + rng.normal(0, 0.002, 750)
+    out = exposures(y, f)
+    load = {x["factor"]: x for x in out["loadings"]}
+    assert load["market"]["beta"] == pytest.approx(1.3, abs=0.03)
+    assert load["sector:Tech"]["beta"] == pytest.approx(-0.6, abs=0.05)
+    assert out["alpha_annualized"] == pytest.approx(0.0002 * 252, abs=0.03)
+    assert out["r_squared"] > 0.9
+    assert "error" in exposures(y.iloc[:10], f)
+
+
+def test_sector_factors_and_analysis_include_exposures(market):
+    from quantlab.analytics.factors import sector_factors
+    from quantlab.analytics.summary import analyze_backtest
+    from quantlab.backtest.engine import BacktestConfig, run_backtest
+    from quantlab.strategies.library import create_strategy
+
+    sectors = market.instruments.set_index("symbol")["sector"]
+    f = sector_factors(market.bars, market.actions, sectors, "SYNIDX")
+    assert "market" in f.columns
+    assert any(c.startswith("sector:") for c in f.columns)
+    res = run_backtest(
+        market.bars,
+        market.actions,
+        create_strategy("equal_weight"),
+        BacktestConfig(start="2020-01-02", benchmark="SYNIDX"),
+    )
+    doc = analyze_backtest(res, f)["factor_exposures"]
+    market_beta = next(x["beta"] for x in doc["loadings"] if x["factor"] == "market")
+    assert 0.5 < market_beta < 1.5  # equal weight of beta~1 synthetic names

@@ -72,7 +72,7 @@ export function Empty({ title, children }: { title: string; children?: ReactNode
 }
 
 export function Skeleton({ h = "h-40" }: { h?: string }) {
-  return <div className={`${h} animate-pulse rounded bg-sunken`} aria-busy="true" aria-label="Loading" />;
+  return <div className={`${h} animate-pulse rounded bg-sunken`} role="status" aria-busy="true" aria-label="Loading" />;
 }
 
 export function JobProgress({ job, onCancel }: { job: Job; onCancel?: () => void }) {

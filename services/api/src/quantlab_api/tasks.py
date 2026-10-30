@@ -165,6 +165,30 @@ def run_experiment_backtest(
     return run_backtest(bars, actions, strategy, cfg, on_progress=progress)
 
 
+def _factors(
+    exp: Experiment, bars: pd.DataFrame, actions: pd.DataFrame, cfg: BacktestConfig
+) -> pd.DataFrame | None:
+    """Market and sector factors when the dataset carries sector metadata."""
+    from quantlab.analytics.factors import sector_factors
+
+    if not cfg.benchmark:
+        return None
+    with SessionLocal() as db:
+        rows = db.execute(
+            select(Instrument.symbol, Instrument.sector).where(
+                Instrument.dataset_version_id == exp.dataset_version_id,
+                Instrument.sector.is_not(None),
+            )
+        ).all()
+    if not rows:
+        return None
+    sectors = pd.Series({s: sec for s, sec in rows})
+    try:
+        return sector_factors(bars, actions, sectors, cfg.benchmark.upper())
+    except ValueError:
+        return None
+
+
 @handler("backtest")
 def backtest_task(ctx: JobContext) -> Finalizer:
     exp_id = uuid.UUID(ctx.payload["experiment_id"])
@@ -177,7 +201,7 @@ def backtest_task(ctx: JobContext) -> Finalizer:
         db.expunge(exp)
     res = run_experiment_backtest(exp, bars, actions, cfg, ctx)
     ctx.heartbeat(0.88, "computing analytics", force=True)
-    analysis = analyze_backtest(res)
+    analysis = analyze_backtest(res, _factors(exp, bars, actions, cfg))
     staging = artifacts.stage_dir(exp_id, ctx.attempt)
     artifacts.write_backtest(staging, res, analysis)
     fingerprint = res.fingerprint()
