@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
+import hashlib
 import time
 import uuid
-from collections import deque
+from collections import OrderedDict, deque
 from datetime import UTC, datetime, timedelta
 from typing import Annotated, Any
 
@@ -144,40 +145,58 @@ class RateLimiter:
     """Fixed-window counters shared across API replicas through Redis.
 
     ``reserve`` increments and compares in one atomic Redis ``INCR``, so concurrent requests
-    cannot all pass a check-then-record gap. If Redis is unavailable an in-process window
-    keeps credential endpoints protected; its size is bounded without evicting live counters.
+    cannot all pass a check-then-record gap.
+
+    If Redis is unavailable, a bounded per-process fallback keeps credential endpoints
+    protected. It is an LRU keyed by last touch: expired entries are dropped from the front
+    in amortized O(1); when full, the least-recently-used counter that is *not* currently
+    throttled is evicted, so throttled (security-relevant) counters survive key floods. Only
+    if every tracked counter is throttled do new keys fall into one of ``OVERFLOW_SHARDS``
+    hashed overflow counters, which bounds memory without one global lockout.
     """
 
     MAX_LOCAL_KEYS = 10_000
-    OVERFLOW_KEY = "__overflow__"
+    OVERFLOW_SHARDS = 64
 
     def __init__(self) -> None:
-        self.local: dict[str, deque[float]] = {}
+        # key -> (timestamps, limit); ordered by last touch (oldest first)
+        self.local: OrderedDict[str, tuple[deque[float], int]] = OrderedDict()
+        self.alias: dict[str, str] = {}
 
     @staticmethod
     def _bucket(key: str, window: int) -> str:
         return f"ql:rl:{key}:{int(time.time() // window)}"
 
-    def _local_queue(self, key: str, window: float) -> deque[float]:
-        """Return the live window for ``key``. Counters still inside their window are never
-        evicted; when the store is full of live counters, unseen keys share one overflow
-        counter, so flooding with fresh keys trips the limit (fail closed) instead of
-        evicting a victim's counter."""
+    def _overflow_key(self, key: str) -> str:
+        shard = int(hashlib.sha256(key.encode()).hexdigest(), 16) % self.OVERFLOW_SHARDS
+        return f"__overflow__:{shard}"
+
+    def _local_entry(self, key: str, limit: int, window: float) -> deque[float]:
         now = time.monotonic()
-        q = self.local.get(key)
-        if q is None:
-            if len(self.local) >= self.MAX_LOCAL_KEYS:
-                expired = [k for k, v in self.local.items() if not v or now - v[-1] > window]
-                for k in expired:
-                    del self.local[k]
-            if len(self.local) >= self.MAX_LOCAL_KEYS:
-                key = self.OVERFLOW_KEY
-                q = self.local.get(key)
-            if q is None:
-                q = deque()
-                self.local[key] = q
+        key = self.alias.get(key, key)
+        while self.local:
+            oldest_key, (oldest, _) = next(iter(self.local.items()))
+            if oldest and now - oldest[-1] <= window:
+                break
+            del self.local[oldest_key]
+        entry = self.local.get(key)
+        if entry is None and len(self.local) >= self.MAX_LOCAL_KEYS:
+            victim = next((k for k, (q, lim) in self.local.items() if len(q) < lim), None)
+            if victim is not None:
+                del self.local[victim]
+            else:
+                original, key = key, self._overflow_key(key)
+                self.alias[original] = key
+                if len(self.alias) > self.MAX_LOCAL_KEYS:
+                    self.alias.clear()
+                entry = self.local.get(key)
+        if entry is None:
+            entry = (deque(), limit)
+        q = entry[0]
         while q and now - q[0] > window:
             q.popleft()
+        self.local[key] = (q, limit)
+        self.local.move_to_end(key)
         return q
 
     def reserve(self, key: str, limit: int, window: int = 60) -> bool:
@@ -192,7 +211,7 @@ class RateLimiter:
                 r.expire(bucket, window + 1)
             return count <= limit
         except Exception:
-            q = self._local_queue(key, window)
+            q = self._local_entry(key, limit, window)
             q.append(time.monotonic())
             return len(q) <= limit
 
@@ -203,9 +222,9 @@ class RateLimiter:
         try:
             redis_conn().decr(self._bucket(key, window))
         except Exception:
-            q = self.local.get(key)
-            if q:
-                q.pop()
+            entry = self.local.get(self.alias.get(key, key))
+            if entry and entry[0]:
+                entry[0].pop()
 
     def count(self, key: str, window: int = 60) -> int:
         from quantlab_api.jobs import redis_conn
@@ -213,7 +232,8 @@ class RateLimiter:
         try:
             return int(redis_conn().get(self._bucket(key, window)) or 0)
         except Exception:
-            return len(self._local_queue(key, window))
+            entry = self.local.get(self.alias.get(key, key))
+            return len(entry[0]) if entry else 0
 
     def check(self, key: str, limit: int, window: int = 60) -> None:
         if not self.reserve(key, limit, window):
@@ -221,6 +241,7 @@ class RateLimiter:
 
     def reset(self) -> None:
         self.local.clear()
+        self.alias.clear()
 
 
 login_limiter = RateLimiter()
