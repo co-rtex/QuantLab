@@ -1,6 +1,6 @@
 # Autonomous execution
 
-QuantLab is being built in long Claude Code sessions. Work must survive context resets.
+Development runs in long, interruptible automated sessions. Work must survive context resets.
 
 ## Durable state
 `STATUS.md` (handoff), `ROADMAP.md` (what next), `DECISIONS.md` (why), `CLAUDE.md`
