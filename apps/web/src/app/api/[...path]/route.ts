@@ -7,16 +7,27 @@ const FORWARD_RESPONSE = ["content-type", "x-request-id", "set-cookie", "content
 
 async function forward(req: NextRequest, ctx: { params: Promise<{ path: string[] }> }) {
   const { path } = await ctx.params;
+  // Only proxy the versioned API; never let dot segments or separators escape it.
+  if (path[0] !== "v1" || path.some((seg) => seg === "." || seg === ".." || /[\\/]/.test(seg))) {
+    return Response.json({ error: { code: "not_found", message: "Not found" } }, { status: 404 });
+  }
   const upstream = process.env.API_INTERNAL_URL ?? "http://localhost:8000";
   const url = new URL(`/api/${path.map(encodeURIComponent).join("/")}`, upstream);
+  if (!url.pathname.startsWith("/api/v1/")) {
+    return Response.json({ error: { code: "not_found", message: "Not found" } }, { status: 404 });
+  }
   url.search = req.nextUrl.search;
   const headers = new Headers();
   for (const h of FORWARD_REQUEST) {
     const v = req.headers.get(h);
     if (v) headers.set(h, v);
   }
-  const forwardedFor = req.headers.get("x-forwarded-for");
-  if (forwardedFor) headers.set("x-forwarded-for", forwardedFor);
+  // A client can put anything in X-Forwarded-For. Forward it only when this server sits
+  // behind a trusted edge that overwrites the header (TRUST_FORWARDED_FOR=true).
+  if (process.env.TRUST_FORWARDED_FOR === "true") {
+    const forwardedFor = req.headers.get("x-forwarded-for");
+    if (forwardedFor) headers.set("x-forwarded-for", forwardedFor);
+  }
   const hasBody = !["GET", "HEAD"].includes(req.method);
   let res: Response;
   try {

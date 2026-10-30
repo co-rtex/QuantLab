@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useState, type FormEvent } from "react";
 import { api, ApiError } from "@/lib/api";
+import { safeNext } from "@/lib/safeRedirect";
 
 export function AuthForm({ mode }: { mode: "login" | "register" }) {
   const router = useRouter();
@@ -24,8 +25,7 @@ export function AuthForm({ mode }: { mode: "login" | "register" }) {
             ? { email: f.get("email"), password: f.get("password") }
             : { email: f.get("email"), password: f.get("password"), display_name: f.get("display_name") },
       });
-      const next = params.get("next");
-      router.push(next && next.startsWith("/") && !next.startsWith("//") ? next : "/");
+      router.push(safeNext(params.get("next"), window.location.origin));
     } catch (err) {
       if (err instanceof ApiError && Array.isArray(err.details)) {
         setError((err.details as { msg: string }[]).map((d) => d.msg.replace("Value error, ", "")).join(". "));

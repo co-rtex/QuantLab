@@ -67,3 +67,16 @@ refunds are ignored because a shard may be shared.
 **Consequences.** During a Redis outage throttling is per-replica and may over-throttle on
 hash collisions, but cannot be reset by flooding. Production deployments should run Redis
 with persistence and monitoring (see docs/RUNBOOK.md).
+
+## ADR-0008 Client address handling behind the web proxy
+
+**Context.** The Next.js `/api/*` proxy sits between browsers and the API. Forwarding a
+client-supplied `X-Forwarded-For` would let anyone choose the address used for login
+throttling.
+**Decision.** The proxy forwards `X-Forwarded-For` only when `TRUST_FORWARDED_FOR=true`,
+i.e. when deployed behind an edge (load balancer, Caddy, nginx) that overwrites the header.
+Uvicorn trusts forwarded headers only from configured proxy addresses.
+**Consequences.** Without a trusted edge, the API sees the web tier's address, so the
+per-address login limit applies to web traffic as a whole; the per-account failure limit
+still isolates accounts. Production deployments should terminate TLS at a trusted edge
+and enable the flag (docs/RUNBOOK.md).
