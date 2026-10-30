@@ -53,7 +53,7 @@ reaper:
 	uv run quantlab-cli reaper --interval 15
 
 web-dev:
-	cd apps/web && npm run dev
+	cd apps/web && API_INTERNAL_URL=http://localhost:$(QUANTLAB_API_PORT) npx next dev -p $(QUANTLAB_WEB_PORT)
 
 bench:
 	uv run python benchmarks/run_all.py
