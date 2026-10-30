@@ -5,7 +5,7 @@ import { useState } from "react";
 import { PageHeader } from "@/components/Shell";
 import { ErrorNote, Panel, Skeleton, StatusPill } from "@/components/ui";
 import type { Experiment, Page } from "@/lib/api";
-import { dateTime, num, pct, signClass, strategyLabel } from "@/lib/format";
+import { dateTime, multiple, num, pct, signClass, strategyLabel } from "@/lib/format";
 import { useApi } from "@/lib/useApi";
 import { useWorkspace } from "@/lib/workspace";
 
@@ -97,7 +97,7 @@ export default function ExperimentsPage() {
                       <td className="r">{pct(e.summary?.volatility)}</td>
                       <td className="r">{num(e.summary?.sharpe)}</td>
                       <td className="r">{pct(e.summary?.max_drawdown)}</td>
-                      <td className="r">{num(e.summary?.annual_turnover, 1)}×</td>
+                      <td className="r">{multiple(e.summary?.annual_turnover, 1)}</td>
                       <td className="text-ink-2">{dateTime(e.created_at)}</td>
                     </tr>
                   ))}

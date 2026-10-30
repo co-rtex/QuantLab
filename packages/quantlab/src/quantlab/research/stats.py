@@ -158,7 +158,12 @@ def regime_analysis(
     trend_window: int = 126,
     periods: int = 252,
 ) -> list[dict[str, Any]]:
-    """Performance by market regime, regimes defined from trailing benchmark data only."""
+    """Performance by market regime (ex-post diagnostics).
+
+    Each day's volatility and trend come from trailing benchmark data, but the volatility
+    tercile cut-offs are computed over the whole sample, so the labels are not something a
+    strategy could have known in advance; never feed them back into a strategy.
+    """
     b = benchmark_returns.reindex(returns.index)
     vol = b.rolling(vol_window).std(ddof=1)
     trend = (1 + b).rolling(trend_window).apply(np.prod, raw=True) - 1

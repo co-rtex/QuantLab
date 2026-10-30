@@ -329,7 +329,7 @@ export function ValidationPanel({ experimentId, onComplete }: { experimentId: st
                   </tbody>
                 </table>
               </div>
-              <p className="mt-2 text-xs text-ink-3">Regimes are classified from the benchmark&apos;s trailing 63-session volatility and 126-session return, using only data available before each day.</p>
+              <p className="mt-2 text-xs text-ink-3">Regimes are classified from the benchmark&apos;s trailing 63-session volatility and 126-session return, using only data available before each day. The low/mid/high volatility cut-offs are terciles of the whole period, so this table is an after-the-fact breakdown, not a signal a strategy could have used.</p>
             </section>
           )}
         </div>
