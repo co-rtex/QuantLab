@@ -1,0 +1,95 @@
+{
+  "profile": "xl",
+  "params": {
+    "assets": 2000,
+    "years": 20,
+    "queries": 200,
+    "parallel_runs": 4
+  },
+  "environment": {
+    "timestamp": "2026-10-30T20:39:29.911793+00:00",
+    "platform": "macOS-26.6.2-arm64-arm-64bit",
+    "machine": "arm64",
+    "cpu_count": 8,
+    "python": "3.12.16",
+    "numpy": "2.5.4",
+    "pandas": "3.1.0",
+    "duckdb": "2.0.0",
+    "pyarrow": "26.0.0",
+    "memory_gb": 8.0
+  },
+  "data": {
+    "rows": 9426549,
+    "symbols": 2001,
+    "generate_s": 17.124,
+    "quality_s": 11.367,
+    "quality_status": "warn",
+    "write_parquet_s": 5.68,
+    "parquet_mb": 373.43
+  },
+  "engine": [
+    {
+      "assets": 100,
+      "strategy": "equal_weight",
+      "sessions": 1258,
+      "trades": 5487,
+      "seconds": 0.628
+    },
+    {
+      "assets": 100,
+      "strategy": "momentum",
+      "sessions": 1258,
+      "trades": 769,
+      "seconds": 0.544
+    },
+    {
+      "assets": 2000,
+      "strategy": "equal_weight",
+      "sessions": 1258,
+      "trades": 99969,
+      "seconds": 13.949
+    },
+    {
+      "assets": 2000,
+      "strategy": "momentum",
+      "sessions": 1258,
+      "trades": 864,
+      "seconds": 10.844
+    }
+  ],
+  "engine_peak_rss_mb": 1782.8,
+  "parallel": {
+    "skipped": true
+  },
+  "retrieval": {
+    "duckdb_parquet": {
+      "n": 200,
+      "p50_ms": 5.606,
+      "p95_ms": 7.801,
+      "p99_ms": 9.813,
+      "mean_ms": 9.113
+    },
+    "pyarrow_filters": {
+      "n": 50,
+      "p50_ms": 7.266,
+      "p95_ms": 9.269,
+      "p99_ms": 85.817,
+      "mean_ms": 10.397
+    },
+    "adjusted_full_history_uncached": {
+      "n": 200,
+      "p50_ms": 45.887,
+      "p95_ms": 67.737,
+      "p99_ms": 102.626,
+      "mean_ms": 47.176
+    },
+    "adjusted_full_history_cached": {
+      "n": 200,
+      "p50_ms": 2.743,
+      "p95_ms": 6.395,
+      "p99_ms": 7.638,
+      "mean_ms": 3.336
+    }
+  },
+  "peak_rss_mb": 1782.8
+}

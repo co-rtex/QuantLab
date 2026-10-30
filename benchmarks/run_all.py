@@ -33,7 +33,7 @@ PROFILES = {
     "small": {"assets": 100, "years": 6, "queries": 100, "parallel_runs": 8},
     "medium": {"assets": 500, "years": 6, "queries": 200, "parallel_runs": 8},
     "large": {"assets": 1000, "years": 10, "queries": 200, "parallel_runs": 8},
-    "xl": {"assets": 2000, "years": 20, "queries": 200, "parallel_runs": 4},
+    "xl": {"assets": 2000, "years": 22, "queries": 200, "parallel_runs": 4},
 }
 
 
@@ -98,7 +98,9 @@ def _run_one(args: tuple[str, int]) -> float:
     return time.perf_counter() - t
 
 
-def bench(profile: str, api: str | None) -> dict[str, Any]:
+def bench(
+    profile: str, api: str | None, skip_parallel: bool = False, skip_postgres: bool = False
+) -> dict[str, Any]:
     from quantlab.backtest.engine import BacktestConfig, run_backtest
     from quantlab.data.quality import assess_quality
     from quantlab.data.store import DatasetStore
@@ -125,6 +127,7 @@ def bench(profile: str, api: str | None) -> dict[str, Any]:
     q = assess_quality(m.bars, m.actions)
     out["data"]["quality_s"] = round(time.perf_counter() - t, 3)
     out["data"]["quality_status"] = q.status
+    out["data"]["quality_findings"] = {c.name: c.count for c in q.checks if c.status != "pass"}
     tmp = Path(tempfile.mkdtemp(prefix="qlbench-"))
     store = DatasetStore(tmp)
     t = time.perf_counter()
@@ -154,27 +157,30 @@ def bench(profile: str, api: str | None) -> dict[str, Any]:
     out["engine"] = engine
     out["engine_peak_rss_mb"] = round(maxrss_mb(), 1)
 
-    # --- serial vs parallel independent backtests ----------------------------------------
-    runs = p["parallel_runs"]
-    t = time.perf_counter()
-    serial = [_run_one((str(dv.path), i)) for i in range(runs)]
-    serial_wall = time.perf_counter() - t
-    par = {}
-    for workers in (2, 4):
-        with ProcessPoolExecutor(max_workers=workers) as ex:
-            # Warm the pool first: production workers are long-lived processes, so
-            # interpreter start-up and imports are not part of per-job cost.
-            list(ex.map(_warm, range(workers)))
-            t = time.perf_counter()
-            list(ex.map(_run_one, [(str(dv.path), i) for i in range(runs)]))
-            par[workers] = round(time.perf_counter() - t, 3)
-    out["parallel"] = {
-        "runs": runs,
-        "serial_wall_s": round(serial_wall, 3),
-        "mean_single_run_s": round(statistics.fmean(serial), 3),
-        "workers_wall_s": par,
-        "speedup_4": round(serial_wall / par[4], 2),
-    }
+    if skip_parallel:
+        out["parallel"] = {"skipped": True}
+    else:
+        # --- serial vs parallel independent backtests ----------------------------------------
+        runs = p["parallel_runs"]
+        t = time.perf_counter()
+        serial = [_run_one((str(dv.path), i)) for i in range(runs)]
+        serial_wall = time.perf_counter() - t
+        par = {}
+        for workers in (2, 4):
+            with ProcessPoolExecutor(max_workers=workers) as ex:
+                # Warm the pool first: production workers are long-lived processes, so
+                # interpreter start-up and imports are not part of per-job cost.
+                list(ex.map(_warm, range(workers)))
+                t = time.perf_counter()
+                list(ex.map(_run_one, [(str(dv.path), i) for i in range(runs)]))
+                par[workers] = round(time.perf_counter() - t, 3)
+        out["parallel"] = {
+            "runs": runs,
+            "serial_wall_s": round(serial_wall, 3),
+            "mean_single_run_s": round(statistics.fmean(serial), 3),
+            "workers_wall_s": par,
+            "speedup_4": round(serial_wall / par[4], 2),
+        }
 
     # --- historical retrieval: one symbol, last five years ------------------------------
     rng = np.random.default_rng(0)
@@ -193,7 +199,8 @@ def bench(profile: str, api: str | None) -> dict[str, Any]:
         store.load_bars(dv, symbols=[s], start=str(since.date()))
         arrow.append(time.perf_counter() - t)
     out["retrieval"] = {"duckdb_parquet": summarize(duck), "pyarrow_filters": summarize(arrow)}
-    out["retrieval"].update(postgres_rows(m.bars, syms, since))
+    if not skip_postgres:
+        out["retrieval"].update(postgres_rows(m.bars, syms, since))
     out["retrieval"].update(redis_cache(dv, syms))
     if api:
         out["api"] = api_latency(api, dv)
@@ -327,8 +334,10 @@ def main() -> None:
     ap.add_argument(
         "--api", default=None, help="base URL of a running API, e.g. http://localhost:8000"
     )
+    ap.add_argument("--skip-parallel", action="store_true")
+    ap.add_argument("--skip-postgres", action="store_true")
     args = ap.parse_args()
-    res = bench(args.profile, args.api)
+    res = bench(args.profile, args.api, args.skip_parallel, args.skip_postgres)
     res["peak_rss_mb"] = round(maxrss_mb(), 1)
     outdir = ROOT / "results"
     outdir.mkdir(exist_ok=True)

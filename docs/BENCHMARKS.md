@@ -124,6 +124,21 @@ All 24 jobs completed in each configuration. Scaling is sublinear because the wo
 API, PostgreSQL and Redis share one 8-CPU VM, and each job loads the dataset from Parquet
 before simulating (about 0.4 s of the roughly 0.75 s per job).
 
+## Scale: 10.4M observations (`xl` profile)
+
+`uv run python benchmarks/run_all.py --profile xl --skip-parallel --skip-postgres` uses
+2,000 assets over 22 calendar years. The parallel and PostgreSQL row-copy steps are
+skipped to fit an 8 GB laptop.
+
+| Step | Result |
+|---|---|
+| Observations generated and validated | **10,444,803** rows, 2,001 symbols |
+| Generation / quality checks / Parquet write | 25.9 s / 14.4 s / 6.7 s (418 MB) |
+| Quality status | `warn`: 5 `stale_prices` findings (synthetic names that hit the generator's $0.01 price floor; correctly flagged) |
+| Backtest, 2,000 assets × 5 years, monthly | equal weight 15.1 s (104,659 fills); momentum 10.9 s |
+| One asset, five years: DuckDB / PyArrow | p95 10.6 ms / 9.6 ms |
+| Adjusted full history: Redis miss / hit | p95 76.5 ms / 8.0 ms |
+| Peak resident memory | 2.6 GB |
+
 ## Not yet measured
-The 10M-observation `xl` profile (the harness supports `--profile xl`), load from a
-dedicated generator host, and failure-recovery timing.
+Load from a dedicated generator host, and failure-recovery timing.

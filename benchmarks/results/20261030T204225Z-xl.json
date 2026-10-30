@@ -1,0 +1,98 @@
+{
+  "profile": "xl",
+  "params": {
+    "assets": 2000,
+    "years": 22,
+    "queries": 200,
+    "parallel_runs": 4
+  },
+  "environment": {
+    "timestamp": "2026-10-30T20:40:56.869493+00:00",
+    "platform": "macOS-26.6.2-arm64-arm-64bit",
+    "machine": "arm64",
+    "cpu_count": 8,
+    "python": "3.12.16",
+    "numpy": "2.5.4",
+    "pandas": "3.1.0",
+    "duckdb": "2.0.0",
+    "pyarrow": "26.0.0",
+    "memory_gb": 8.0
+  },
+  "data": {
+    "rows": 10444803,
+    "symbols": 2001,
+    "generate_s": 25.884,
+    "quality_s": 14.356,
+    "quality_status": "warn",
+    "quality_findings": {
+      "stale_prices": 5
+    },
+    "write_parquet_s": 6.682,
+    "parquet_mb": 417.81
+  },
+  "engine": [
+    {
+      "assets": 100,
+      "strategy": "equal_weight",
+      "sessions": 1258,
+      "trades": 5290,
+      "seconds": 0.691
+    },
+    {
+      "assets": 100,
+      "strategy": "momentum",
+      "sessions": 1258,
+      "trades": 755,
+      "seconds": 0.504
+    },
+    {
+      "assets": 2000,
+      "strategy": "equal_weight",
+      "sessions": 1258,
+      "trades": 104659,
+      "seconds": 15.078
+    },
+    {
+      "assets": 2000,
+      "strategy": "momentum",
+      "sessions": 1258,
+      "trades": 851,
+      "seconds": 10.895
+    }
+  ],
+  "engine_peak_rss_mb": 2570.5,
+  "parallel": {
+    "skipped": true
+  },
+  "retrieval": {
+    "duckdb_parquet": {
+      "n": 200,
+      "p50_ms": 6.298,
+      "p95_ms": 10.57,
+      "p99_ms": 12.708,
+      "mean_ms": 9.393
+    },
+    "pyarrow_filters": {
+      "n": 50,
+      "p50_ms": 7.225,
+      "p95_ms": 9.635,
+      "p99_ms": 271.289,
+      "mean_ms": 17.679
+    },
+    "adjusted_full_history_uncached": {
+      "n": 200,
+      "p50_ms": 50.285,
+      "p95_ms": 76.491,
+      "p99_ms": 93.935,
+      "mean_ms": 52.286
+    },
+    "adjusted_full_history_cached": {
+      "n": 200,
+      "p50_ms": 2.778,
+      "p95_ms": 7.968,
+      "p99_ms": 14.599,
+      "mean_ms": 3.69
+    }
+  },
+  "peak_rss_mb": 2570.5
+}
