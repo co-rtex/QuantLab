@@ -250,19 +250,66 @@ class Ledger:
         }
 
 
+def _close(a: float, b: float) -> bool:
+    return math.isclose(a, b, rel_tol=1e-9, abs_tol=1e-6)
+
+
+def _verify(tx: Transaction, held: float) -> None:
+    """Check that a transaction's cash movement is explained by its own economics.
+
+    Summing ``cash_delta`` alone cannot catch a transaction whose cash disagrees with its
+    quantity, price, fee or the shares actually held, so each kind is recomputed here.
+    """
+    bad = f"transaction {tx.seq} ({tx.kind} {tx.symbol or ''})".rstrip() + " "
+    if not all(math.isfinite(v) for v in (tx.quantity, tx.price, tx.cash_delta, tx.commission)):
+        raise LedgerError(bad + "has non-finite values")
+    if tx.kind == "deposit" and not tx.cash_delta > 0:
+        raise LedgerError(bad + "must add cash")
+    elif tx.kind == "withdrawal" and not tx.cash_delta < 0:
+        raise LedgerError(bad + "must remove cash")
+    elif tx.kind in ("buy", "sell"):
+        if (tx.quantity > 0) != (tx.kind == "buy") or abs(tx.quantity) < EPS:
+            raise LedgerError(bad + "quantity sign does not match its side")
+        if tx.price <= 0 or tx.commission < 0 or tx.slippage < -EPS:
+            raise LedgerError(bad + "has a non-positive price or a negative cost")
+        if not _close(tx.cash_delta, -tx.quantity * tx.price - tx.commission):
+            raise LedgerError(bad + "cash is not quantity x price + commission")
+    elif tx.kind == "dividend":
+        if not _close(tx.quantity, held) or not _close(tx.cash_delta, tx.quantity * tx.price):
+            raise LedgerError(bad + "is not paid on the shares held")
+    elif tx.kind == "split" and (
+        tx.price <= 0 or tx.cash_delta != 0 or not _close(tx.quantity, held * (tx.price - 1))
+    ):
+        raise LedgerError(bad + "does not restate the shares held")
+
+
 def replay(
     transactions: Iterable[Transaction],
     *,
     allow_short: bool = False,
     allow_negative_cash: bool = False,
+    verify: bool = True,
 ) -> Ledger:
-    """Rebuild a ledger's state purely from its transaction log."""
+    """Rebuild a ledger's state purely from its transaction log.
+
+    With ``verify`` (the default) every transaction's cash is recomputed from its quantity,
+    price and costs, and the cash and short-selling policies are enforced after each step
+    rather than only on the final state, so a log that went overdrawn midway is rejected.
+    """
     led = Ledger(allow_short=allow_short, allow_negative_cash=allow_negative_cash)
     for tx in transactions:
+        sym = tx.symbol or ""
+        if verify:
+            _verify(tx, led.quantity(sym))
         led.cash += tx.cash_delta
         if tx.kind in ("buy", "sell"):
-            led._set_qty(tx.symbol or "", led.quantity(tx.symbol or "") + tx.quantity)
+            led._set_qty(sym, led.quantity(sym) + tx.quantity)
         elif tx.kind == "split":
-            led._set_qty(tx.symbol or "", led.quantity(tx.symbol or "") * tx.price)
+            led._set_qty(sym, led.quantity(sym) * tx.price)
+        if verify:
+            if not allow_negative_cash and led.cash < -1e-6:
+                raise LedgerError(f"negative cash after transaction {tx.seq}")
+            if not allow_short and led.quantity(sym) < -EPS:
+                raise LedgerError(f"short position after transaction {tx.seq}")
         led.transactions.append(tx)
     return led
