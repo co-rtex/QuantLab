@@ -53,17 +53,16 @@ class FaithfulProvider:
     name = "fake:faithful"
 
     def complete(self, system: str, question: str) -> str:
-        rows = [r.split(" | ") for r in system.split("\n") if re.match(r"^F\d+ \| ", r)]
-        words = {w for w in re.findall(r"[a-z]{4,}", question.lower())}
-        stems = {w[:5] for w in words}
+        data = json.loads(system.split("<facts>\n", 1)[1].split("\n</facts>", 1)[0])
+        rows = [(d["id"], d["description"], d["value"]) for d in data]
+        stems = {w[:5] for w in re.findall(r"[a-z]{4,}", question.lower())}
 
-        def score(row: list[str]) -> int:
-            label = row[1].lower()
-            return sum(st in label for st in stems)
+        def score(row: tuple[str, str, str]) -> int:
+            return sum(st in row[1].lower() for st in stems)
 
         ranked = sorted(rows, key=score, reverse=True)
         picked = [r for r in ranked if score(r) > 0][:3] or rows[:3]
-        return " ".join(f"{label} was {value} [{fid}]." for fid, label, value, _ in picked)
+        return " ".join(f"{label} was {value} [{fid}]." for fid, label, value in picked)
 
 
 class HallucinatingProvider:

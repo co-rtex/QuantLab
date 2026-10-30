@@ -433,7 +433,9 @@ def _candidates(f: Fact) -> list[tuple[float, float]]:
     Numbers in the fact's label (e.g. a 95% confidence level) and in text-valued facts
     (e.g. integrity findings) are evidence too.
     """
-    label_numbers = _numbers_in(f.label, 0.0)
+    # Only template percentages in labels (e.g. a 95% confidence level) count as evidence;
+    # other digits in labels may come from dataset-controlled names such as symbols.
+    label_numbers = [(float(m), 0.0) for m in re.findall(r"(\d+(?:\.\d+)?)%", f.label)]
     if not isinstance(f.value, (int, float)):
         text_numbers = _numbers_in(f.value, 0.051) if isinstance(f.value, str) else []
         return label_numbers + text_numbers
