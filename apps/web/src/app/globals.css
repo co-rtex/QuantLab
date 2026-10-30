@@ -1,0 +1,130 @@
+@import "tailwindcss";
+
+@theme {
+  --color-paper: #eef1f4;
+  --color-surface: #ffffff;
+  --color-sunken: #e4e8ed;
+  --color-ink: #17202b;
+  --color-ink-2: #5a6675;
+  --color-ink-3: #8a94a3;
+  --color-rule: #d3d9e0;
+  --color-cobalt: #2747c8;
+  --color-cobalt-soft: #e3e8fa;
+  --color-gain: #1f7a5a;
+  --color-gain-soft: #dcefe7;
+  --color-loss: #b4372f;
+  --color-loss-soft: #f6e0de;
+  --color-caution: #9a6a00;
+  --color-caution-soft: #f7ecd2;
+  --font-sans: var(--font-plex-sans), ui-sans-serif, system-ui, sans-serif;
+  --font-serif: var(--font-plex-serif), ui-serif, Georgia, serif;
+  --radius-panel: 6px;
+}
+
+:root {
+  color-scheme: light;
+}
+
+html,
+body {
+  background: var(--color-paper);
+  color: var(--color-ink);
+}
+
+body {
+  font-family: var(--font-sans);
+  font-feature-settings: "tnum" 1, "lnum" 1;
+  -webkit-font-smoothing: antialiased;
+}
+
+:focus-visible {
+  outline: 2px solid var(--color-cobalt);
+  outline-offset: 2px;
+  border-radius: 2px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+.num {
+  font-variant-numeric: tabular-nums lining-nums;
+}
+
+.panel {
+  background: var(--color-surface);
+  border: 1px solid var(--color-rule);
+  border-radius: var(--radius-panel);
+}
+
+.field {
+  width: 100%;
+  border: 1px solid var(--color-rule);
+  border-radius: 4px;
+  background: var(--color-surface);
+  padding: 0.45rem 0.6rem;
+  font-size: 0.875rem;
+}
+.field:focus {
+  outline: 2px solid var(--color-cobalt);
+  outline-offset: -1px;
+}
+
+.btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  border-radius: 4px;
+  padding: 0.45rem 0.85rem;
+  font-size: 0.875rem;
+  font-weight: 500;
+  border: 1px solid transparent;
+  cursor: pointer;
+}
+.btn:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+.btn-primary {
+  background: var(--color-cobalt);
+  color: white;
+}
+.btn-primary:hover:not(:disabled) {
+  background: #1f3aa8;
+}
+.btn-quiet {
+  background: var(--color-surface);
+  border-color: var(--color-rule);
+  color: var(--color-ink);
+}
+.btn-quiet:hover:not(:disabled) {
+  background: var(--color-sunken);
+}
+
+table.data {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.8125rem;
+}
+table.data th {
+  text-align: left;
+  font-weight: 500;
+  color: var(--color-ink-2);
+  border-bottom: 1px solid var(--color-rule);
+  padding: 0.45rem 0.6rem;
+  white-space: nowrap;
+}
+table.data td {
+  border-bottom: 1px solid var(--color-sunken);
+  padding: 0.4rem 0.6rem;
+  white-space: nowrap;
+}
+table.data td.r,
+table.data th.r {
+  text-align: right;
+}

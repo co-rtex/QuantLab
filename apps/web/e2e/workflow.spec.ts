@@ -1,0 +1,48 @@
+import { expect, test } from "@playwright/test";
+
+const unique = Date.now().toString(36);
+const email = `e2e-${unique}@example.com`;
+const password = "E2e-research-2026";
+
+test("research workflow: data -> backtest -> results -> reproduction", async ({ page }) => {
+  await page.goto("/");
+  await expect(page).toHaveURL(/\/login/);
+
+  await page.getByRole("link", { name: "Create an account" }).click();
+  await page.getByLabel("Name").fill("E2E Researcher");
+  await page.getByLabel("Email").fill(email);
+  await page.getByLabel("Password").fill(password);
+  await page.getByRole("button", { name: "Create account" }).click();
+  await expect(page.getByText("This workspace has no market data yet")).toBeVisible();
+
+  await page.getByRole("link", { name: "Add market data" }).click();
+  await page.getByLabel("Assets").fill("20");
+  await page.getByLabel("Identifier").fill(`e2e-${unique}`);
+  await page.getByRole("button", { name: "Generate dataset version" }).click();
+  await expect(page.getByRole("cell", { name: "Passed" }).or(page.getByText("Passed")).first()).toBeVisible();
+  await expect(page.getByText("Synthetic data").first()).toBeVisible();
+
+  await page.getByRole("link", { name: "Experiments" }).click();
+  await page.getByRole("link", { name: "New experiment" }).first().click();
+  await page.getByText("Equal Weight", { exact: true }).click();
+  await page.getByLabel("Experiment name").fill(`EW ${unique}`);
+  await page.getByLabel("Hypothesis and notes").fill("Baseline for comparison.");
+  await page.getByRole("button", { name: "Run backtest" }).click();
+
+  await expect(page).toHaveURL(/\/experiments\/[0-9a-f-]{36}$/);
+  await expect(page.getByRole("heading", { name: "Largest drawdowns" })).toBeVisible({ timeout: 60_000 });
+  const evidence = page.getByRole("region", { name: "Evidence" });
+  await expect(evidence.getByText("Synthetic data")).toBeVisible();
+  await expect(evidence.getByText("Next open")).toBeVisible();
+  await expect(page.getByRole("table").filter({ hasText: "Sharpe ratio" })).toBeVisible();
+  await expect(page.getByText(/fills$/)).toBeVisible();
+
+  // Trades are always filled after the decision date.
+  const firstRow = page.getByRole("table").filter({ hasText: "Fill price" }).getByRole("row").nth(1);
+  const [decided, filled] = await Promise.all([firstRow.getByRole("cell").nth(0).innerText(), firstRow.getByRole("cell").nth(1).innerText()]);
+  expect(filled > decided).toBeTruthy();
+
+  await page.getByRole("button", { name: "Reproduce" }).click();
+  await expect(page.getByText("(reproduction)").first()).toBeVisible();
+  await expect(page.getByText("outputs match this run exactly")).toBeVisible({ timeout: 60_000 });
+});

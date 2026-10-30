@@ -42,3 +42,6 @@ mlruns/
 
 # Supervisor logs
 logs/
+
+# Browser automation artifacts
+.playwright-mcp/
