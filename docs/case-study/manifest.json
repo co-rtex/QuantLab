@@ -1,0 +1,69 @@
+{
+  "schema": "quantlab.experiment-manifest/v1",
+  "experiment": {
+    "id": "922a7c21-6ca4-4e75-94eb-3c0ec649e2e8",
+    "name": "Momentum 12-1, top 20",
+    "created_at": "2026-10-30T20:07:02.034572Z"
+  },
+  "dataset": {
+    "slug": "case-7a4df4",
+    "version_hash": "cffdee8b64476209a3ee0f59c1653c08d8d952124ca54196a58ec873737e3e7a",
+    "provider": "synthetic",
+    "is_synthetic": true,
+    "provenance": {
+      "spec": {
+        "end": "2023-12-29",
+        "seed": 2026,
+        "start": "2014-01-02",
+        "n_assets": 200,
+        "calm_daily_vol": 0.008,
+        "p_calm_to_stress": 0.01,
+        "p_stress_to_calm": 0.05,
+        "include_benchmark": true,
+        "split_probability": 0.0006,
+        "delisting_fraction": 0.08,
+        "stressed_daily_vol": 0.022,
+        "annual_market_drift": 0.07,
+        "late_listing_fraction": 0.1,
+        "quarterly_dividend_yield_range": [
+          0.0,
+          0.009
+        ]
+      },
+      "provider": "synthetic",
+      "generator": "quantlab.data.synthetic.generate_market",
+      "disclaimer": "Synthetic data generated for testing and demonstration. Not real market observations.",
+      "is_synthetic": true
+    }
+  },
+  "strategy": {
+    "key": "momentum",
+    "params": {
+      "skip": 21,
+      "top_n": 20,
+      "lookback": 252
+    }
+  },
+  "config": {
+    "end": null,
+    "start": "2015-01-02",
+    "universe": null,
+    "benchmark": "SYNIDX",
+    "execution": "next_open",
+    "rebalance": "monthly",
+    "max_weight": 0.1,
+    "slippage_bps": 10.0,
+    "commission_bps": 5.0,
+    "commission_min": 0.0,
+    "risk_free_rate": 0.0,
+    "initial_capital": 1000000.0,
+    "min_trade_value": 0.0,
+    "fractional_shares": false,
+    "max_gross_exposure": 1.0,
+    "delist_after_missing": 5
+  },
+  "engine_version": "1.1.0",
+  "code_version": "unknown",
+  "input_hash": "3d738dd9fea8d1df5d1ef7742852eaecbe876bfc55d38b90307f2eba4043ede5",
+  "result_fingerprint": "65fb40d834df89cae1184490f2c766f94f30537fe432d12f7f4044e4d9d40bd7"
+}

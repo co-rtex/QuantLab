@@ -19,8 +19,13 @@ assumptions and are never investment advice.
 | Platform | FastAPI with OpenAPI docs, Argon2id auth, JWT plus httpOnly cookie sessions, workspace roles, audit log, durable Postgres-backed jobs (leases, fencing, retries, cancellation, timeouts, reaper), Prometheus metrics, structured logs with request correlation |
 | Frontend | Next.js research workspace: market-data explorer, quality report, strategy builder, live job progress, results explorer (equity and drawdown, benchmark table, tail risk, attribution, monthly returns, trade blotter, holdings by date), comparison, workspace administration |
 
-The roadmap (validation suite, Research Integrity Report, ML, grounded assistant, reports,
-benchmarks) is tracked in [ROADMAP.md](ROADMAP.md); current state is in [STATUS.md](STATUS.md).
+| Validation | Walk-forward with in-sample parameter selection, parameter and cost sweeps, bootstrap confidence intervals, deflated Sharpe, regime breakdown, engine-level look-ahead check, and a Research Integrity Report |
+| ML research | Point-in-time features, purged and embargoed chronological CV, baselines against logistic regression, random forest and gradient boosting |
+| Assistant and reports | Evidence-grounded assistant with verified citations and a deterministic fallback ([eval](docs/AI_EVAL.md)); HTML and Markdown report export |
+
+See the [case study](docs/CASE_STUDY.md) for the whole workflow on one research question,
+[benchmarks](docs/BENCHMARKS.md) for measured performance, [ROADMAP.md](ROADMAP.md) for what
+remains, and [STATUS.md](STATUS.md) for the current state.
 
 ## Architecture
 

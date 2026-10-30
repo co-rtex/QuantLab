@@ -1,0 +1,630 @@
+{
+  "dataset": {
+    "version_hash": "cffdee8b64476209a3ee0f59c1653c08d8d952124ca54196a58ec873737e3e7a",
+    "rows": 482281,
+    "symbol_count": 201,
+    "start_date": "2014-01-02",
+    "end_date": "2023-12-29",
+    "is_synthetic": true,
+    "quality_status": "pass"
+  },
+  "quality_checks": [
+    [
+      "duplicate_bars",
+      "pass",
+      0
+    ],
+    [
+      "non_finite_values",
+      "pass",
+      0
+    ],
+    [
+      "non_positive_prices",
+      "pass",
+      0
+    ],
+    [
+      "negative_volume",
+      "pass",
+      0
+    ],
+    [
+      "ohlc_inconsistent",
+      "pass",
+      0
+    ],
+    [
+      "non_trading_day",
+      "pass",
+      0
+    ],
+    [
+      "missing_sessions",
+      "pass",
+      0
+    ],
+    [
+      "extreme_returns",
+      "pass",
+      0
+    ],
+    [
+      "stale_prices",
+      "pass",
+      0
+    ],
+    [
+      "orphan_corporate_actions",
+      "pass",
+      0
+    ]
+  ],
+  "config": {
+    "start": "2015-01-02",
+    "rebalance": "monthly",
+    "benchmark": "SYNIDX",
+    "max_weight": 0.1,
+    "commission_bps": 5,
+    "slippage_bps": 10
+  },
+  "experiments": {
+    "momentum": {
+      "name": "Momentum 12-1, top 20",
+      "summary": {
+        "beta": 0.9973468368099657,
+        "cagr": 0.03269393777801044,
+        "alpha": -0.033467555615907876,
+        "calmar": 0.08827480308050577,
+        "sharpe": 0.2610396650086197,
+        "sortino": 0.3675269941349863,
+        "sessions": 2265,
+        "win_rate": 0.6604892512972572,
+        "volatility": 0.1998423713858415,
+        "round_trips": 1349,
+        "total_costs": 113457.0781327239,
+        "max_drawdown": -0.3703654569265239,
+        "total_return": 0.33512791551727705,
+        "cost_drag_cagr": 0.009417732544936053,
+        "tracking_error": 0.07330172588680106,
+        "annual_turnover": 3.736394472590669,
+        "historical_es_95": 0.02927746250817353,
+        "historical_var_95": 0.01945919832361165,
+        "information_ratio": -0.4596803349123963,
+        "excess_total_return": -0.5144694444829612,
+        "benchmark_total_return": 0.8495973600002382
+      },
+      "fingerprint": "65fb40d834df89cae1184490f2c766f94f30537fe432d12f7f4044e4d9d40bd7"
+    },
+    "equal_weight": {
+      "name": "Equal weight (all names)",
+      "summary": {
+        "beta": 0.9849488918404453,
+        "cagr": 0.06912741556248347,
+        "alpha": -0.0002338533174958764,
+        "calmar": 0.2200502710058007,
+        "sharpe": 0.4513598961756614,
+        "sortino": 0.6383898748972252,
+        "sessions": 2265,
+        "win_rate": 0.6704557875177615,
+        "volatility": 0.18684862016615061,
+        "round_trips": 9149,
+        "total_costs": 14527.997001471336,
+        "max_drawdown": -0.3141437420027591,
+        "total_return": 0.8230744781985273,
+        "cost_drag_cagr": 0.000944978783548267,
+        "tracking_error": 0.034787776708950696,
+        "annual_turnover": 0.3993281011653217,
+        "historical_es_95": 0.027781589806627555,
+        "historical_var_95": 0.017546879130439397,
+        "information_ratio": -0.043870978027681765,
+        "excess_total_return": -0.026522881801710918,
+        "benchmark_total_return": 0.8495973600002382
+      },
+      "fingerprint": "5930e23bcf91652a500bf4688860aae53fef40a261e2f29a1efbdf778cb8678a"
+    }
+  },
+  "benchmark": {
+    "observations": 2265,
+    "total_return": 0.8495973600002382,
+    "cagr": 0.07084761525555305,
+    "annualized_mean_return": 0.0858621475863896,
+    "annualized_log_return": 0.06845049866791811,
+    "volatility": 0.18640873304935285,
+    "sharpe": 0.46061225878112205,
+    "sortino": 0.6515312405098368,
+    "max_drawdown": -0.3052563736456013,
+    "max_drawdown_sessions": 378,
+    "max_drawdown_recovery_sessions": 142,
+    "longest_drawdown_sessions": 378,
+    "calmar": 0.23209217357016176,
+    "best_day": 0.05871503705846326,
+    "worst_day": -0.07470395060054047,
+    "hit_rate": 0.526060070671378,
+    "skewness": -0.2469331884600052,
+    "excess_kurtosis": 4.372721824011251
+  },
+  "costs": {
+    "total_traded_notional": 75696740.92695604,
+    "annual_turnover": 3.736394472590669,
+    "total_commission": 37819.37473957808,
+    "total_slippage": 75637.70339314581,
+    "total_costs": 113457.0781327239,
+    "total_dividends": 102634.11999999995,
+    "costs_pct_initial_capital": 0.11345707813272389,
+    "gross_cagr": 0.04211167032294649,
+    "net_cagr": 0.03269393777801044,
+    "cost_drag_cagr": 0.009417732544936053
+  },
+  "risk": {
+    "confidence": 0.95,
+    "observations": 2264,
+    "historical_var": 0.01945919832361165,
+    "historical_es": 0.02927746250817353,
+    "gaussian_var": 0.020499863902671205,
+    "gaussian_es": 0.02576024553153801,
+    "cornish_fisher_var": 0.02047107671398407,
+    "daily_volatility": 0.012588886097627308,
+    "annualized_volatility": 0.1998423713858415
+  },
+  "drawdowns": [
+    {
+      "peak": "2015-03-24T00:00:00",
+      "trough": "2017-01-20T00:00:00",
+      "recovery": "2018-06-07T00:00:00",
+      "depth": -0.3703654569265239,
+      "decline_sessions": 461,
+      "recovery_sessions": 347.0,
+      "total_sessions": 808
+    },
+    {
+      "peak": "2019-12-03T00:00:00",
+      "trough": "2021-01-12T00:00:00",
+      "recovery": "2022-05-05T00:00:00",
+      "depth": -0.2411123481023668,
+      "decline_sessions": 279,
+      "recovery_sessions": 331.0,
+      "total_sessions": 610
+    },
+    {
+      "peak": "2023-02-23T00:00:00",
+      "trough": "2023-11-29T00:00:00",
+      "recovery": null,
+      "depth": -0.23896379065189832,
+      "decline_sessions": 193,
+      "recovery_sessions": null,
+      "total_sessions": 214
+    }
+  ],
+  "validation": {
+    "walk_forward": {
+      "method": "rolling",
+      "train_sessions": 504,
+      "test_sessions": 252,
+      "mean_in_sample_sharpe": 0.5451453659926075,
+      "mean_oos_sharpe": 0.34907689627123956,
+      "distinct_params_selected": 4
+    },
+    "folds": [
+      {
+        "fold": 1,
+        "test": [
+          "2017-01-10",
+          "2018-01-09"
+        ],
+        "selected_params": {
+          "skip": 21,
+          "top_n": 20,
+          "lookback": 126
+        },
+        "in_sample_sharpe": -0.4413195632049236,
+        "oos_sharpe": 1.5302136532501274,
+        "oos_return": 0.3322606319287431,
+        "oos_benchmark_return": 0.3486107001137222
+      },
+      {
+        "fold": 2,
+        "test": [
+          "2018-01-10",
+          "2019-01-09"
+        ],
+        "selected_params": {
+          "skip": 21,
+          "top_n": 20,
+          "lookback": 126
+        },
+        "in_sample_sharpe": 0.434950853380789,
+        "oos_sharpe": -0.23990290594789,
+        "oos_return": -0.0687663656924753,
+        "oos_benchmark_return": -0.03021834465502693
+      },
+      {
+        "fold": 3,
+        "test": [
+          "2019-01-10",
+          "2020-01-09"
+        ],
+        "selected_params": {
+          "skip": 21,
+          "top_n": 10,
+          "lookback": 252
+        },
+        "in_sample_sharpe": 0.9705211349922536,
+        "oos_sharpe": 0.6236209045948944,
+        "oos_return": 0.10660963910112509,
+        "oos_benchmark_return": 0.2751170349780654
+      },
+      {
+        "fold": 4,
+        "test": [
+          "2020-01-10",
+          "2021-01-08"
+        ],
+        "selected_params": {
+          "skip": 21,
+          "top_n": 20,
+          "lookback": 252
+        },
+        "in_sample_sharpe": 0.752764925262704,
+        "oos_sharpe": -0.5080008040958881,
+        "oos_return": -0.08961414266478751,
+        "oos_benchmark_return": 0.061651030189859846
+      },
+      {
+        "fold": 5,
+        "test": [
+          "2021-01-11",
+          "2022-01-07"
+        ],
+        "selected_params": {
+          "skip": 21,
+          "top_n": 20,
+          "lookback": 126
+        },
+        "in_sample_sharpe": 0.6865306228486291,
+        "oos_sharpe": 0.6857783072953136,
+        "oos_return": 0.10702903743597703,
+        "oos_benchmark_return": 0.13840968915934693
+      },
+      {
+        "fold": 6,
+        "test": [
+          "2022-01-10",
+          "2023-01-10"
+        ],
+        "selected_params": {
+          "skip": 21,
+          "top_n": 5,
+          "lookback": 252
+        },
+        "in_sample_sharpe": 0.3993373474293695,
+        "oos_sharpe": 1.0979542172207077,
+        "oos_return": 0.13382283801193395,
+        "oos_benchmark_return": 0.2668501400857335
+      },
+      {
+        "fold": 7,
+        "test": [
+          "2023-01-11",
+          "2023-12-29"
+        ],
+        "selected_params": {
+          "skip": 21,
+          "top_n": 5,
+          "lookback": 252
+        },
+        "in_sample_sharpe": 1.0132322412394312,
+        "oos_sharpe": -0.7461250984185881,
+        "oos_return": -0.07676799895305919,
+        "oos_benchmark_return": -0.12395578884520075
+      }
+    ],
+    "cost": {
+      "note": "underperforms the benchmark even with zero costs",
+      "rows": [
+        {
+          "cagr": 0.044390482096220873,
+          "sharpe": 0.31740229977576967,
+          "multiplier": 0.0,
+          "round_trip_bps": 0.0,
+          "excess_total_return": -0.37230403200023754
+        },
+        {
+          "cagr": 0.038541797019864266,
+          "sharpe": 0.28929909078659277,
+          "multiplier": 0.5,
+          "round_trip_bps": 15.0,
+          "excess_total_return": -0.4449894171651134
+        },
+        {
+          "cagr": 0.03269393777801044,
+          "sharpe": 0.2610396650086197,
+          "multiplier": 1.0,
+          "round_trip_bps": 30.0,
+          "excess_total_return": -0.5144694444829612
+        },
+        {
+          "cagr": 0.021132534586443263,
+          "sharpe": 0.2047008038265052,
+          "multiplier": 2.0,
+          "round_trip_bps": 60.0,
+          "excess_total_return": -0.6429097270642614
+        },
+        {
+          "cagr": -0.0015093923886724259,
+          "sharpe": 0.09256180802454676,
+          "multiplier": 4.0,
+          "round_trip_bps": 120.0,
+          "excess_total_return": -0.8630765089105523
+        },
+        {
+          "cagr": -0.04506772112026902,
+          "sharpe": -0.1290294824286687,
+          "multiplier": 8.0,
+          "round_trip_bps": 240.0,
+          "excess_total_return": -1.1887958005636559
+        }
+      ],
+      "base_costs_bps": {
+        "slippage": 10.0,
+        "commission": 5.0
+      },
+      "breakeven_multiplier": null
+    },
+    "bootstrap": {
+      "cagr": {
+        "lower": -0.09160948271682871,
+        "upper": 0.1849113835014745
+      },
+      "seed": 0,
+      "method": "stationary_bootstrap",
+      "sharpe": {
+        "lower": -0.3728775219003714,
+        "upper": 0.9389361051018928,
+        "estimate": 0.2610396650086197,
+        "p_le_zero": 0.197
+      },
+      "samples": 1000,
+      "confidence": 0.95,
+      "observations": 2264,
+      "excess_return": {
+        "lower": -0.07568515544606576,
+        "upper": 0.01306562259229258,
+        "estimate": -0.03369536190530138,
+        "p_le_zero": 0.928
+      },
+      "mean_block_length": 10.0
+    },
+    "deflated": {
+      "trials": 6,
+      "psr_vs_zero": 0.7825921033826921,
+      "deflated_sharpe": 0.6280777213937946,
+      "expected_max_sharpe_per_period": 0.009563687753077211
+    },
+    "leakage": {
+      "method": "engine decisions on full data vs data truncated after each cut date",
+      "status": "verified",
+      "mismatches": [],
+      "dates_tested": [
+        "2017-05-31",
+        "2019-06-28",
+        "2020-07-31",
+        "2022-04-29"
+      ]
+    },
+    "sensitivity": {
+      "base_rank": 1,
+      "grid_size": 6,
+      "sharpe_std": 0.11677107424609907,
+      "sharpe_range": [
+        -0.032650580246294476,
+        0.2610396650086197
+      ],
+      "positive_sharpe_fraction": 0.8333333333333334
+    }
+  },
+  "integrity": {
+    "schema": "quantlab.integrity-report/v1",
+    "summary": {
+      "verified": 10,
+      "warning": 3,
+      "failed": 0,
+      "unassessed": 0
+    },
+    "checks": [
+      {
+        "key": "dataset_provenance",
+        "title": "Dataset source and version",
+        "status": "warning",
+        "finding": "Exact dataset version recorded, but the data is synthetic. Results describe the generator, not real markets.",
+        "evidence": {
+          "version_hash": "cffdee8b64476209a3ee0f59c1653c08d8d952124ca54196a58ec873737e3e7a",
+          "provider": "synthetic"
+        }
+      },
+      {
+        "key": "data_quality",
+        "title": "Data quality checks",
+        "status": "verified",
+        "finding": "All automated quality checks passed.",
+        "evidence": {
+          "quality_status": "pass"
+        }
+      },
+      {
+        "key": "universe",
+        "title": "Universe definition and survivorship",
+        "status": "verified",
+        "finding": "Universe of 200 symbols recorded, including 12 that were delisted in-sample.",
+        "evidence": {
+          "universe_size": 200,
+          "delisted_included": 12
+        }
+      },
+      {
+        "key": "execution_timing",
+        "title": "Execution timing",
+        "status": "verified",
+        "finding": "Signals use data up to the decision close; fills occur at the next session's open (engine v1.1.0).",
+        "evidence": {
+          "execution": "next_open",
+          "rebalance": "monthly"
+        }
+      },
+      {
+        "key": "transaction_costs",
+        "title": "Trading costs",
+        "status": "verified",
+        "finding": "Costs modelled: 5 bps commission and 10 bps slippage per trade. Cost sweep: the strategy underperforms the benchmark even with zero costs.",
+        "evidence": {
+          "commission_bps": 5.0,
+          "slippage_bps": 10.0,
+          "breakeven_multiplier": null,
+          "cost_drag_cagr": 0.009417732544936053
+        }
+      },
+      {
+        "key": "lookahead",
+        "title": "Look-ahead leakage",
+        "status": "verified",
+        "finding": "Signals on 4 sampled dates were identical when all later data was removed.",
+        "evidence": {
+          "dates_tested": [
+            "2017-05-31",
+            "2019-06-28",
+            "2020-07-31",
+            "2022-04-29"
+          ]
+        }
+      },
+      {
+        "key": "out_of_sample",
+        "title": "Out-of-sample evaluation",
+        "status": "verified",
+        "finding": "7 walk-forward folds with parameters chosen in-sample. Mean Sharpe in-sample 0.55, out-of-sample 0.35.",
+        "evidence": {
+          "folds": 7,
+          "mean_in_sample_sharpe": 0.5451453659926075,
+          "mean_oos_sharpe": 0.34907689627123956,
+          "combined_oos_sharpe": 0.39936606203247127
+        }
+      },
+      {
+        "key": "parameter_stability",
+        "title": "Parameter stability",
+        "status": "verified",
+        "finding": "6 parameter sets evaluated. 83% have a positive Sharpe ratio.",
+        "evidence": {
+          "base_rank": 1,
+          "grid_size": 6,
+          "sharpe_std": 0.11677107424609907,
+          "sharpe_range": [
+            -0.032650580246294476,
+            0.2610396650086197
+          ],
+          "positive_sharpe_fraction": 0.8333333333333334
+        }
+      },
+      {
+        "key": "statistical_uncertainty",
+        "title": "Statistical uncertainty",
+        "status": "warning",
+        "finding": "95% bootstrap interval for the Sharpe ratio: -0.37 to 0.94. The interval includes zero; skill is not distinguishable from luck. Annualized excess return versus the benchmark: -7.6% to 1.3%.",
+        "evidence": {
+          "sharpe": {
+            "lower": -0.3728775219003714,
+            "upper": 0.9389361051018928,
+            "estimate": 0.2610396650086197,
+            "p_le_zero": 0.197
+          },
+          "excess_return": {
+            "lower": -0.07568515544606576,
+            "upper": 0.01306562259229258,
+            "estimate": -0.03369536190530138,
+            "p_le_zero": 0.928
+          }
+        }
+      },
+      {
+        "key": "multiple_testing",
+        "title": "Selection bias from multiple trials",
+        "status": "warning",
+        "finding": "Deflated Sharpe ratio 0.63 after 6 parameter trials (3 experiments on this dataset version in the workspace). Below 0.95, the best result is plausibly a product of search.",
+        "evidence": {
+          "trials": 6,
+          "psr_vs_zero": 0.7825921033826921,
+          "deflated_sharpe": 0.6280777213937946,
+          "expected_max_sharpe_per_period": 0.009563687753077211,
+          "workspace_trials": 3
+        }
+      },
+      {
+        "key": "benchmark",
+        "title": "Benchmark comparison",
+        "status": "verified",
+        "finding": "Compared against SYNIDX on a total-return basis.",
+        "evidence": {
+          "benchmark": "SYNIDX"
+        }
+      },
+      {
+        "key": "sample_length",
+        "title": "Sample length",
+        "status": "verified",
+        "finding": "9.0 years of daily data traded.",
+        "evidence": {
+          "sessions": 2265
+        }
+      },
+      {
+        "key": "reproducibility",
+        "title": "Reproducibility",
+        "status": "verified",
+        "finding": "1 independent re-run(s) produced byte-identical results.",
+        "evidence": {
+          "fingerprint": "65fb40d834df89cae1184490f2c766f94f30537fe432d12f7f4044e4d9d40bd7"
+        }
+      }
+    ],
+    "disclaimer": "This report checks documentation, methodology and statistical uncertainty. It does not establish that the strategy will be profitable, and nothing in it is investment advice.",
+    "experiment_id": "922a7c21-6ca4-4e75-94eb-3c0ec649e2e8"
+  },
+  "assistant": [
+    {
+      "question": "Did the strategy beat the benchmark after costs?",
+      "answer": "From this experiment's computed results:\n- Total return (net of costs): 33.51% [F3]\n- SYNIDX total return: 84.96% [F15]\n- Total trading costs: $113,457 [F17]\n- CAGR lost to costs: 0.94% [F19]\n- Annual one-way turnover (x equity): 3.74 [F18]\n- Dividends received: $102,634 [F20]\n- Beta to SYNIDX: 1.00 [F11]\n- Annualized Jensen alpha: -3.35% [F12]\n- Information ratio: -0.46 [F13]\n- Tracking error: 7.33% [F14]\n- Total return minus SYNIDX: -51.45% [F16]",
+      "provider": "deterministic",
+      "grounded": true,
+      "declined": false
+    },
+    {
+      "question": "Is the result robust out-of-sample or just luck?",
+      "answer": "From this experiment's computed results:\n- Sample period: 2015-01-02 to 2023-12-29 [F1]\n- Walk-forward mean in-sample Sharpe: 0.55 [F36]\n- Walk-forward mean out-of-sample Sharpe: 0.35 [F37]\n- Dataset source and version (warning): Exact dataset version recorded, but the data is synthetic. Results describe the generator, not real markets. [F33]\n- Statistical uncertainty (warning): 95% bootstrap interval for the Sharpe ratio: -0.37 to 0.94. The interval includes zero; skill is not distinguishable from luck. Annualized excess return versus the benchmark: -7.6% to 1.3%. [F34]\n- Selection bias from multiple trials (warning): Deflated Sharpe ratio 0.63 after 6 parameter trials (3 experiments on this dataset version in the workspace). Below 0.95, the best result is plausibly a product of search. [F35]\n- Walk-forward folds: 7 [F38]\n- Sharpe 95% bootstrap lower bound: -0.37 [F39]\n- Sharpe 95% bootstrap upper bound: 0.94 [F40]\n- Deflated Sharpe ratio (probability): 0.63 [F41]\n\nThese figures describe a simulation under stated assumptions and carry statistical uncertainty; they do not predict future returns.",
+      "provider": "deterministic",
+      "grounded": true,
+      "declined": false
+    },
+    {
+      "question": "Should I invest in this strategy?",
+      "answer": "I can't tell you whether to buy, sell or allocate money. QuantLab reports what this experiment did under its stated assumptions; it is not investment advice, and past simulated performance does not predict future results. I can explain the experiment's measured performance, risk, costs and validation results instead.",
+      "provider": "deterministic",
+      "grounded": true,
+      "declined": true
+    }
+  ],
+  "reproduction": {
+    "experiment_id": "922a7c21-6ca4-4e75-94eb-3c0ec649e2e8",
+    "input_hash": "3d738dd9fea8d1df5d1ef7742852eaecbe876bfc55d38b90307f2eba4043ede5",
+    "fingerprint": "65fb40d834df89cae1184490f2c766f94f30537fe432d12f7f4044e4d9d40bd7",
+    "comparisons": [
+      {
+        "experiment_id": "78c0b113-8281-449b-bd73-696b25c65655",
+        "name": "Momentum 12-1, top 20 (reproduction)",
+        "same_inputs": true,
+        "same_code_version": true,
+        "fingerprint_match": true,
+        "status": "completed"
+      }
+    ]
+  }
+}

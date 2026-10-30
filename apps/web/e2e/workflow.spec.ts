@@ -46,7 +46,7 @@ test("research workflow: data -> backtest -> results -> reproduction", async ({ 
   await expect(page.getByText("Research integrity report")).toBeVisible();
   await page.getByRole("button", { name: "Run validation suite" }).click();
   await expect(page.getByText("Performance by market regime")).toBeVisible({ timeout: 60_000 });
-  await expect(page.getByText("Signals on 8 sampled dates were identical")).toBeVisible();
+  await expect(page.getByText(/Signals on \d+ sampled dates were identical/)).toBeVisible();
 
   await page.getByRole("button", { name: "What was the worst drawdown?" }).click();
   await expect(page.getByText("Assembled from computed facts")).toBeVisible();

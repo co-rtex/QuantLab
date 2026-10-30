@@ -7,7 +7,9 @@ Phases 0–6 complete; Phase 8 assistant and report export complete. **Next: ben
 harness, ML pipeline, portfolio workspace UI, optimization/stress UI, case study.**
 
 ## Latest verified milestone
-ML research pipeline (point-in-time features, purged/embargoed
+Acceptance case study (docs/CASE_STUDY.md) executed end to end through the API, including
+reproduction by a second researcher; independent review of the financial core with all
+findings fixed (engine 1.1.0). Earlier: ML research pipeline (point-in-time features, purged/embargoed
 chronological CV, baselines vs logistic/RF/GBM, IC and quintile spreads; API, UI, E2E),
 benchmark harness with measured results (docs/BENCHMARKS.md), grounded research assistant (deterministic engine + optional Claude phrasing with
 numeric verification; eval suite in docs/AI_EVAL.md) and HTML/Markdown report export.
@@ -28,9 +30,9 @@ run as a background job and rendered in the experiment page. Playwright 10/10 (w
 * Lint: ruff clean; mypy --strict clean.
 
 ## In progress / immediate next steps
-1. Address findings from the fresh-context review of the financial core (in progress).
-2. Case study write-up (docs/CASE_STUDY.md) using the full workflow.
-3. Observability: OpenTelemetry tracing, Grafana dashboard, runbook; Terraform (validated).
+1. Observability: OpenTelemetry tracing, Grafana dashboard, runbook; Terraform (validated).
+2. Portfolio workspace (manual ledger + valuation) and optimization/stress UI.
+3. CSV dataset import endpoint; accessibility audit; load testing.
 4. Portfolio workspace (manual ledger + valuation), optimization/stress UI.
 
 ## Known blockers

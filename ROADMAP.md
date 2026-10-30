@@ -23,5 +23,6 @@ Dependency-ordered. ✅ done and verified · 🔶 partial · ⬜ not started.
 | 8 | Report export (HTML/Markdown) | ✅ |
 | 9 | OpenTelemetry tracing, Grafana dashboards, runbook, Terraform (validated, not applied) | ⬜ |
 | 9 | Benchmarks harness and BENCHMARKS.md measurements | ✅ (load testing and worker scaling pending) |
-| 10 | Case study: momentum vs passive after costs, out of sample | ⬜ |
-| 10 | Fresh-context architecture and security reviews, accessibility audit | ⬜ |
+| 10 | Case study: momentum vs passive after costs, out of sample (docs/CASE_STUDY.md) | ✅ |
+| 10 | Fresh-context financial-core review (10 findings, fixed with regression tests) | ✅ |
+| 10 | Accessibility audit, architecture review of service layer | ⬜ |
