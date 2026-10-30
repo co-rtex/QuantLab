@@ -72,6 +72,25 @@ class HallucinatingProvider:
         return "The strategy returned 87.3% with a Sharpe ratio of 4.12 [F1]."
 
 
+class MisattributingProvider:
+    """Reuses a real figure with the wrong sign and the wrong citation, e.g. a -39.4%
+    drawdown restated as "gained 39.4%" and cited to the Sharpe fact. Every number in it
+    exists among the facts, so a magnitude-only check accepts it."""
+
+    name = "fake:misattributing"
+
+    def complete(self, system: str, question: str) -> str:
+        data = json.loads(system.split("<facts>\n", 1)[1].split("\n</facts>", 1)[0])
+        pct = [d for d in data if str(d["value"]).endswith("%")]
+        neg = [d for d in pct if str(d["value"]).startswith("-")]
+        if neg:
+            src = neg[0]
+            other = next(d for d in data if d["id"] != src["id"])
+            return f"The strategy gained {str(src['value']).lstrip('-')} in total [{other['id']}]."
+        src = pct[0] if pct else data[0]
+        return f"The strategy lost -{src['value']} [{src['id']}]."
+
+
 class AdviceProvider:
     name = "fake:advice"
 
@@ -137,6 +156,7 @@ PROVIDERS = [
     None,
     FaithfulProvider(),
     HallucinatingProvider(),
+    MisattributingProvider(),
     AdviceProvider(),
     MalformedProvider(),
     FailingProvider(),
