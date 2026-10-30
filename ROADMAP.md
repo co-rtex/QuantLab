@@ -29,3 +29,6 @@ Dependency-ordered. ✅ done and verified · 🔶 partial · ⬜ not started.
 | 10 | Fresh-context financial-core review (10 findings, fixed with regression tests) | ✅ |
 | 10 | Accessibility: axe WCAG 2.1 AA audit in E2E, zero violations on 11 pages | ✅ |
 | 10 | Independent service-layer review (9 findings fixed with regression tests) | ✅ |
+| 10 | Independent audit (docs/AUDIT_2026-10-30.md): 18 defects fixed with regression tests; per-worktree stacks and test databases | ✅ |
+| 11 | Audit backlog P0: per-user job quota, auth before multipart parsing, invitations, licensed real-data adapter | ⬜ |
+| 11 | Audit backlog P1: hosted-LLM eval with independent judge, Terraform, external load test, idempotency phantom rows, CSV retry, storage cleanup, frontend error surfacing, DSR inputs | ⬜ |
