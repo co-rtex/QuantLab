@@ -163,3 +163,43 @@ def test_validating_an_older_engines_experiment_labels_the_mismatch(client, seed
         "experiment_engine_version": "1.3.0",
         "comparable_engine": False,
     }
+
+
+def test_a_validation_from_before_155_is_not_reused_and_can_be_reassessed(client, seeded):
+    """#156 review (a): a completed run of suite version 1 records no engine, and the
+    per-experiment dedupe used to return it for good. The suite version is part of the
+    run's params hash, so a new request now runs a fresh suite that records both."""
+    import uuid
+
+    from quantlab_api.db import SessionLocal
+    from quantlab_api.jobs import payload_hash
+    from quantlab_api.models import ResearchRun
+    from quantlab_api.routes.research import SUITE, SUITE_VERSION
+
+    assert SUITE_VERSION >= 2
+    h = seeded["headers"]
+    exp_id = _completed_experiment(client, seeded)
+    old = client.post(f"/api/v1/experiments/{exp_id}/validation", headers=h).json()
+    assert run_pending_jobs() == ["completed"]
+    old_params = {"suite_version": 1, "seed": 0}
+    with SessionLocal() as db:  # rewrite it as a completed run recorded before #155
+        row = db.get(ResearchRun, uuid.UUID(old["id"]))
+        row.params, row.params_hash = old_params, payload_hash(SUITE, old_params)
+        row.result = {
+            k: v
+            for k, v in row.result.items()
+            if k not in ("engine_version", "experiment_engine_version", "comparable_engine")
+        }
+        db.commit()
+    rep = client.get(f"/api/v1/experiments/{exp_id}/integrity", headers=h).json()
+    check = {c["key"]: c for c in rep["checks"]}["validation_engine"]
+    assert check["status"] == "unassessed" and "before #155" in check["finding"]
+
+    new = client.post(f"/api/v1/experiments/{exp_id}/validation", headers=h)
+    assert new.status_code == 202
+    assert new.json()["id"] != old["id"] and new.json()["status"] == "queued"  # not reused
+    assert run_pending_jobs() == ["completed"]
+    current = client.get(f"/api/v1/experiments/{exp_id}/validation", headers=h).json()
+    assert current["id"] == new.json()["id"] and current["comparable_engine"] is True
+    rep = client.get(f"/api/v1/experiments/{exp_id}/integrity", headers=h).json()
+    assert {c["key"]: c for c in rep["checks"]}["validation_engine"]["status"] == "verified"

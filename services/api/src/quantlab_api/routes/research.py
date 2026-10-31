@@ -34,7 +34,10 @@ from quantlab_api.security import DB, CurrentUser, audit
 
 router = APIRouter(tags=["research"])
 SUITE = "validation"
-SUITE_VERSION = 1
+# 2: results record the engine the suite ran on and whether it matches the experiment's
+# (#155), so a request after the upgrade runs a fresh suite instead of returning a
+# completed run that cannot say which engine it used.
+SUITE_VERSION = 2
 
 
 def _run_out(db: DB, run: ResearchRun) -> dict[str, Any]:

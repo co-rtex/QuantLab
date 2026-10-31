@@ -317,13 +317,24 @@ def build_integrity_report(ev: dict[str, Any]) -> dict[str, Any]:
             "comparable_engine": comparable,
         }
         if comparable is None:
+            if ran is None and not computed:
+                missing = "Neither the validation run nor the experiment records an engine"
+            elif ran is None:
+                missing = (
+                    "The validation run does not record the engine it ran on (a run from "
+                    "before #155; request validation again to record it)"
+                )
+            else:
+                missing = (
+                    f"The experiment does not record the engine that computed it, so the "
+                    f"validation's engine ({ran}) has nothing to be compared with"
+                )
             checks.append(
                 Check(
                     "validation_engine",
                     "Validation engine",
                     "unassessed",
-                    "The engine of the validation run or of the experiment is not recorded "
-                    "(a run from before #155), so they cannot be compared.",
+                    missing + "; the two cannot be compared under identical engine rules.",
                     engines,
                 )
             )

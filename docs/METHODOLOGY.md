@@ -399,8 +399,10 @@ names changed-input re-runs and leaves the check "not assessed" if they are the 
   integrity report's `validation_engine` check warns: "The validation ran on engine X;
   the experiment was computed on engine Y. These results are not directly comparable
   under identical engine rules. Reproduce the experiment on engine X and validate the
-  reproduction for a like-for-like comparison." A run recorded before #155 is "not
-  assessed".
+  reproduction for a like-for-like comparison." The check is "not assessed" when either
+  version is unrecorded, and its finding names which side is missing. A run recorded
+  before #155 belongs to suite version 1. Requesting validation again runs a fresh suite
+  (version 2) that records both versions, instead of returning the old run.
 * A mismatch is flagged rather than refused. The suite is internally consistent on one
   engine, and refusing would leave every older experiment unvalidatable until it was
   reproduced.

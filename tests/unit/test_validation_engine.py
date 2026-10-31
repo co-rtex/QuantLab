@@ -47,5 +47,24 @@ def test_a_mismatch_is_flagged_as_not_directly_comparable():
     assert check["evidence"]["comparable_engine"] is False
 
 
+@pytest.mark.parametrize(
+    ("validation", "experiment_engine", "names"),
+    [
+        ({"walk_forward": {}}, "1.4.0", "The validation run does not record"),
+        ({"engine_version": "1.4.0"}, "", "The experiment does not record"),
+        ({"walk_forward": {}}, "", "Neither the validation run nor the experiment"),
+    ],
+)
+def test_an_unassessed_check_names_the_side_that_is_unrecorded(
+    validation, experiment_engine, names
+):
+    finding = _check(validation, experiment_engine)["finding"]
+    assert finding.startswith(names)
+    if experiment_engine:  # only the run is unrecorded: it is an old run
+        assert "before #155" in finding
+    else:
+        assert "before #155" not in finding
+
+
 def test_there_is_no_check_without_a_validation_run():
     assert _check(None) is None
