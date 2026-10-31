@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import os
+import subprocess
 import tempfile
 from collections.abc import Iterator
 from pathlib import Path
@@ -19,8 +20,26 @@ def _default_test_database() -> str:
     name = "quantlab_test"
     if (root / ".git").is_file():
         name += "_" + hashlib.sha256(str(root).encode()).hexdigest()[:10]
-    port = os.environ.get("QUANTLAB_PG_PORT", "5433")
+    port = os.environ.get("QUANTLAB_PG_PORT") or _stack_pg_port(root)
     return f"postgresql+psycopg://quantlab:quantlab@localhost:{port}/{name}"
+
+
+def _stack_pg_port(root: Path) -> str:
+    """This checkout's Postgres port from ``scripts/stack-env.sh`` (which honours
+    QUANTLAB_SLOT). A bare ``uv run pytest`` in a linked worktree used to fall back to the
+    main checkout's server on 5433 instead of its own stack."""
+    out = subprocess.run(
+        ["sh", str(root / "scripts" / "stack-env.sh")],
+        cwd=root,
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout
+    for line in out.splitlines():
+        key, _, value = line.partition("=")
+        if key == "QUANTLAB_PG_PORT":
+            return value
+    raise RuntimeError("scripts/stack-env.sh printed no QUANTLAB_PG_PORT")
 
 
 BASE_URL = os.environ.get("QUANTLAB_TEST_DATABASE_URL") or _default_test_database()
