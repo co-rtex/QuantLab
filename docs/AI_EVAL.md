@@ -121,13 +121,37 @@ negatives). Each one fails on main's verifier, on the first draft,
 or on both. The one exception is "The strategy earned 2.1% of alpha [F4]" for -2.1% alpha,
 which every version rejects; it stays as a guard.
 
-Known limits: the verifier reads words, not grammar. A loss word before a figure states
-a loss even when it describes something else ("After losing streaks, total return was
-15.2%" is a false reject), negation is not understood ("did not lose 15.2%"), and "minus"
-is not read as a sign. Words bind to the nearest figure by character distance, so a
-sentence that names two kinds near one figure ("The probability that the Sharpe ratio is
-real is 62%") is a false reject. A spaced dash between two figures ("10 - 15%") reads the
-second as negative. These false rejects fall back to the deterministic answer.
+False rejects after #74 (#79), each fixed with a regression test that keeps the matching
+misattribution rejected (`test_issue_79_*`):
+* Clauses. Commas, semicolons, "and", "but", "while" and "whereas" separate clauses. A
+  figure is read with the words of its own clause when that clause names anything, and
+  only its own clause's direction words count. So "Although the benchmark fell, the
+  strategy returned 15.2%" and "After the drawdown, the strategy returned 15.2%" pass,
+  and in "Volatility was 18.3% and costs were $12,345" each figure has its own kind. A
+  figure whose clause names nothing still takes the nearest name ("During the drawdown,
+  equity rose 28.3%" stays rejected).
+* "of" attaches: in "The expected shortfall exceeded the VaR of 2.13%" the figure is the
+  VaR's. Without "of", every name in the clause must agree ("Total return during the
+  drawdown was 28.3%" stays rejected).
+* Cost drag: "Costs reduced CAGR by 0.8%" (also "dragged", "cut", "lowered", "a drag on
+  CAGR") names a cost, not a return; "CAGR was 0.8%" for the cost drag stays rejected.
+* A fall word right after the figure states a loss ("a 4.12% drop"), as does "below zero".
+* Drawdown phrasing: "deepest/largest/worst decline, fall, drop or loss" and "underwater".
+* A semicolon no longer ends a sentence, so "Total return: 15.2%; maximum drawdown:
+  -28.3% [F3][F2]" keeps its citations for both halves.
+* "Total return (15.2%)": parentheses right after a name are an aside, not accounting
+  notation. "Total return was (15.2%)" still reads as negative.
+* Percentage points are a unit of their own, allowed only for differences between rates
+  (cost drag, excess return, alpha): "Total return was 15.2 percentage points" is rejected.
+
+Known limits: the verifier reads words, not grammar. A loss word in the same clause as a
+figure states a loss even when it describes something else ("After losing streaks total
+return was 15.2%", without a comma, is a false reject), negation is not understood ("did
+not lose 15.2%"), and "minus" is not read as a sign. Within a clause, words bind to the
+nearest figure by character distance, so a clause that names two kinds near one figure
+("The probability that the Sharpe ratio is real is 62%") is a false reject. A spaced dash
+between two figures ("10 - 15%") reads the second as negative. These false rejects fall
+back to the deterministic answer.
 
 Adversarial stand-ins (`LabelBypassProvider` in `assistant/evals.py`) write each bypass
 with real figures from the evidence. Every number they state is some fact's magnitude,

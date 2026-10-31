@@ -418,3 +418,77 @@ def test_review_74_second_round_rejections(text, facts):
 )
 def test_review_74_second_round_legitimate(text, facts):
     assert verify_answer(text, facts)["grounded"], text
+
+
+# #79: the lead's fact set for the false rejects found after #74.
+FACTS_79 = [
+    Fact("F2", "max_drawdown", "Maximum drawdown", -0.283, "pct", "d"),
+    Fact("F3", "total_return", "Total return (net of costs)", 0.152, "pct", "t"),
+    Fact("F5", "volatility", "Annualized volatility", 0.183, "pct", "v"),
+    Fact("F7", "total_costs", "Total trading costs", 12345.0, "usd", "c"),
+    Fact("F10", "alpha", "Annualized Jensen alpha", -0.021, "pct", "a"),
+    Fact("F12", "historical_var", "One-day historical VaR (95%)", 0.0213, "pct", "r", (), (95.0,)),
+    Fact("F14", "worst_day", "Worst single-day return", -0.0412, "pct", "w"),
+    Fact("F18", "cost_drag_cagr", "CAGR lost to costs", 0.008, "pct", "k"),
+    Fact("F19", "annual_turnover", "Annual one-way turnover (x equity)", 3.2, "ratio", "o"),
+]
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        # A loss word in another clause is about something else.
+        "Although the benchmark fell, the strategy returned 15.2% [F3].",
+        "Despite losses elsewhere, the strategy returned 15.2% [F3].",
+        "After the drawdown, the strategy returned 15.2% [F3].",
+        # Two quantities, each bound to the figure of its own clause.
+        "Volatility was 18.3% and costs were $12,345 [F5][F7].",
+        "Turnover was 3.2x and costs dragged CAGR by 0.8% [F19][F18].",
+        # What costs take from CAGR is a cost.
+        "Costs reduced CAGR by 0.8% a year [F18].",
+        "Costs reduced CAGR by 0.8 percentage points [F18].",
+        "Costs reduced CAGR by 80 bps [F18].",
+        # A fall word right after the figure.
+        "The worst day was a 4.12% drop [F14].",
+        "Jensen alpha was 2.1% below zero [F10].",
+        # Drawdown phrasing.
+        "The deepest decline was 28.3% [F2].",
+        "The strategy was underwater by as much as 28.3% [F2].",
+        # "of" attaches the figure to the quantity named right before it.
+        "The expected shortfall exceeded the VaR of 2.13% [F12].",
+        # A semicolon joins clauses that share the citations.
+        "Total return: 15.2%; maximum drawdown: −28.3% [F3][F2].",
+        # Parentheses right after a name are an aside, not accounting notation.
+        "Total return (15.2%) [F3].",
+    ],
+)
+def test_issue_79_legitimate_phrasings_pass(text):
+    assert verify_answer(text, FACTS_79)["grounded"], text
+
+
+@pytest.mark.parametrize(
+    ("text", "facts"),
+    [
+        # The same shapes, misattributed: each must stay rejected.
+        ("Although the benchmark rose, the strategy lost 15.2% [F3].", FACTS_79),
+        ("Despite gains elsewhere, the strategy lost 15.2% [F3].", FACTS_79),
+        ("After the rally, the drawdown was 15.2% [F3].", FACTS_79),
+        ("Total return during the drawdown was 28.3% [F2].", FACTS_79),
+        ("Volatility was $12,345 and costs were 18.3% [F5][F7].", FACTS_79),
+        ("Turnover was 0.8x and costs dragged CAGR by 3.2% [F19][F18].", FACTS_79),
+        ("CAGR was 0.8% [F18].", FACTS_79),
+        ("Costs reduced CAGR by 15.2% [F3].", FACTS_79),
+        ("Total return was 15.2 percentage points [F3].", FACTS_79),
+        ("The worst day was a 4.12% gain [F14].", FACTS_79),
+        ("The best day was 4.12% [F14].", FACTS_79),
+        ("Jensen alpha was 2.1% above zero [F10].", FACTS_79),
+        ("The deepest decline was 15.2% [F3].", FACTS_79),
+        ("The VaR exceeded the expected shortfall of 2.13% [F12].", FACTS_79),
+        ("Total return: 28.3%; maximum drawdown: −15.2% [F3][F2].", FACTS_79),
+        ("Total return (28.3%) [F2].", FACTS_79),
+        ("Total return (15.2%) [F3].", SIGNED_FACTS),
+        ("Total return was (15.2%) [F3].", ISSUE_15_FACTS),
+    ],
+)
+def test_issue_79_misattributions_stay_rejected(text, facts):
+    assert not verify_answer(text, facts)["grounded"], text
