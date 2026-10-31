@@ -265,7 +265,13 @@ class DatasetStore:
                     # A filesystem without hard links: an exclusive create still refuses
                     # an existing name, though a reader may briefly see a partial file.
                     with open(path, "x") as out:
-                        out.write(text)
+                        try:
+                            out.write(text)
+                        except BaseException:
+                            # A partial report (a full disk, say) would block the rerun
+                            # and read as invalid; it is ours, so remove it.
+                            path.unlink(missing_ok=True)
+                            raise
                 Path(tmp).unlink()
         except BaseException:
             Path(tmp).unlink(missing_ok=True)

@@ -544,9 +544,10 @@ def _ratio_classes(
             "ratios": [round(x, 8) for x in distinct],
         }
         acts = primary_actions[primary_actions["symbol"] == iid]
-        if _steps_follow_actions(runs, ex, acts, v, segment, precision, tol):
+        verdict = _steps_follow_actions(runs, ex, acts, v, segment, precision, tol)
+        if verdict == "adjusted":
             adjusted.append({**row, "segments": int(levels.size)})
-        elif len(distinct) == 1 and abs(distinct[0] - 1) > tol.close_rel:
+        elif verdict == "scale" or (len(distinct) == 1 and abs(distinct[0] - 1) > tol.close_rel):
             scale.append(row)
         else:
             continue
@@ -579,11 +580,16 @@ def _steps_follow_actions(
     segment: np.ndarray,
     precision: pd.Series,
     tol: Tolerances,
-) -> bool:
+) -> Literal["adjusted", "scale"] | None:
     """Whether the ratio levels are a back-adjustment for the actions between them.
 
     The levels must end at 1 (back-adjustment leaves the latest prices raw); a last step
     to 1 across ex-dates in the final, too-short segments is checked like the others.
+    That last step can lie after the window (a vendor adjusted through a later split):
+    with no compared bar after it, its continuity cannot be observed and is not checked,
+    but its factor must still match the primary's actions there. If the primary has no
+    such action, the steps inside the window can be explained while the last level is an
+    unexplained constant; that is ``"scale"`` (a scale mismatch), as for one level.
     Across the ex-dates between two levels the adjustment factor ``F`` is, per date with
     split ``s`` and cash ``d``, ``s / (1 - d / c_prev)`` or ``s + d / c_ex`` (both forms
     are in use; ``c`` are the *raw* side's closes before and on the ex-date), or ``s``
@@ -595,20 +601,30 @@ def _steps_follow_actions(
     """
     dates = v["date"].to_numpy()
     last = len(ex) + 1  # a virtual segment after every ex-date, at ratio 1
-    bounds = [*pairwise(runs), (runs[-1], [1.0, last, last])]
-    moves = [
-        abs(np.log(hi / lo)) > tol.close_rel + precision[end] + precision.get(start, 0.0)
-        for (lo, _, end), (hi, start, _) in bounds
-    ]
-    if not any(moves):
-        return False  # one level at 1: nothing to explain
+    inner = list(pairwise(runs))
+    tail = (runs[-1], [1.0, last, last])
+
+    def moves(lo: float, hi: float, end: int, start: int) -> bool:
+        return bool(
+            abs(np.log(hi / lo)) > tol.close_rel + precision[end] + precision.get(start, 0.0)
+        )
+
+    inner_moves = any(moves(lo, hi, end, start) for (lo, _, end), (hi, start, _) in inner)
+    if not inner_moves and not moves(runs[-1][0], 1.0, runs[-1][2], last):
+        return None  # one level at 1: nothing to explain
+    tail_seen = bool(np.any(segment > runs[-1][2]))  # bars after the last level
+    partial = False
     for orient in (1, -1):
         raw = v["close_p" if orient == 1 else "close_s"].to_numpy(dtype=float)
-        if all(
-            _step_ok(b, orient, raw, ex, actions, dates, segment, precision, tol) for b in bounds
-        ):
-            return True
-    return False
+
+        def ok(b: tuple[list[Any], list[Any]], raw: np.ndarray = raw, o: int = orient) -> bool:
+            return _step_ok(b, o, raw, ex, actions, dates, segment, precision, tol)
+
+        if all(ok(b) for b in inner):
+            if ok(tail):
+                return "adjusted"
+            partial = partial or (inner_moves and not tail_seen)
+    return "scale" if partial else None
 
 
 def _step_ok(
@@ -638,7 +654,8 @@ def _step_ok(
         after = np.flatnonzero(segment == start)
         i1 = int(after[0]) if after.size else len(raw) - 1
         total = float(np.log(raw[i1] / raw[i0])) + step  # the raw side's total return
-        if abs(total) > abs(step) / 2:
+        # With no bar after the step (it lies after the window) the jump is unobservable.
+        if i1 > i0 and abs(total) > abs(step) / 2:
             return False
     return True
 
