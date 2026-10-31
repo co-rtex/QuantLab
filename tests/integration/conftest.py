@@ -26,6 +26,8 @@ def _default_test_database() -> str:
 BASE_URL = os.environ.get("QUANTLAB_TEST_DATABASE_URL") or _default_test_database()
 # Arbitrary constant: sessions using the same database take this lock and run one at a time.
 SESSION_LOCK_KEY = 0x51AB_7E57
+# duplicate_database, or unique_violation on pg_database when two CREATEs race
+DATABASE_ALREADY_EXISTS = {"42P04", "23505"}
 os.environ["QUANTLAB_DATABASE_URL"] = BASE_URL
 os.environ["QUANTLAB_ENVIRONMENT"] = "test"
 os.environ.setdefault("QUANTLAB_DATA_DIR", tempfile.mkdtemp(prefix="quantlab-it-"))
@@ -35,6 +37,7 @@ os.environ["QUANTLAB_JOB_LEASE_SECONDS"] = "30"
 import fakeredis  # noqa: E402
 from sqlalchemy import create_engine, text  # noqa: E402
 from sqlalchemy.engine import make_url  # noqa: E402
+from sqlalchemy.exc import DBAPIError, OperationalError  # noqa: E402
 from sqlalchemy.pool import NullPool  # noqa: E402
 
 TABLES = [
@@ -65,9 +68,22 @@ def _ensure_database() -> None:
                 text("SELECT 1 FROM pg_database WHERE datname=:n"), {"n": url.database}
             )
             if not exists:
-                c.execute(text(f'CREATE DATABASE "{url.database}"'))
-    except Exception as exc:  # pragma: no cover
-        pytest.skip(f"PostgreSQL unavailable: {exc}")
+                try:
+                    c.execute(text(f'CREATE DATABASE "{url.database}"'))
+                except DBAPIError as exc:
+                    # Another session created it between our check and CREATE.
+                    if getattr(exc.orig, "sqlstate", None) not in DATABASE_ALREADY_EXISTS:
+                        raise
+    except OperationalError as exc:  # pragma: no cover
+        # A skipped suite reports success, which hid missing coverage more than once:
+        # fail unless skipping was asked for explicitly.
+        if os.environ.get("QUANTLAB_ALLOW_SKIP_INTEGRATION") == "1":
+            pytest.skip(f"PostgreSQL unavailable: {exc}")
+        pytest.fail(
+            f"PostgreSQL unavailable at {url.render_as_string(hide_password=True)}: run "
+            "`make up`, or set QUANTLAB_ALLOW_SKIP_INTEGRATION=1 to skip integration tests",
+            pytrace=False,
+        )
     finally:
         admin.dispose()
 
