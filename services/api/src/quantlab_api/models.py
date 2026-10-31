@@ -309,6 +309,9 @@ class Job(Base):
     cancel_requested: Mapped[bool] = mapped_column(Boolean, default=False)
     worker_id: Mapped[str | None] = mapped_column(String(128))
     lease_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # A queued retry may not be claimed before this (#123): the backoff lives in the row,
+    # not only in the queue's delay. NULL: as soon as possible.
+    not_before: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     heartbeat_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     error: Mapped[dict[str, Any] | None] = mapped_column(JSONType)
     request_id: Mapped[str | None] = mapped_column(String(64))

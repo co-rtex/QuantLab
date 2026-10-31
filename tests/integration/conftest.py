@@ -190,7 +190,7 @@ def workspace_id(client, headers) -> str:  # type: ignore[no-untyped-def]
 
 def run_pending_jobs(max_jobs: int = 20) -> list[str]:
     """Execute queued jobs synchronously, as a worker would."""
-    from sqlalchemy import select
+    from sqlalchemy import select, update
 
     from quantlab_api.db import SessionLocal
     from quantlab_api.jobs import execute_job
@@ -204,6 +204,12 @@ def run_pending_jobs(max_jobs: int = 20) -> list[str]:
             )
         if job is None:
             break
+        if job.not_before is not None:
+            # Tests skip a retry's backoff wait, as they always skipped the queue's delay;
+            # claim() itself refuses an early delivery (#123, tested there).
+            with SessionLocal() as db:
+                db.execute(update(Job).where(Job.id == job.id).values(not_before=None))
+                db.commit()
         outcomes.append(execute_job(str(job.id), worker_id="test-worker"))
     return outcomes
 
