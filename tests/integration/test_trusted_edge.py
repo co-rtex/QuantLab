@@ -47,7 +47,8 @@ def proxies(monkeypatch: pytest.MonkeyPatch):  # type: ignore[no-untyped-def]
     tp.RETRY = 0.05
     monkeypatch.setattr(security, "trusted_proxies", tp)
     monkeypatch.setattr(get_settings(), "trusted_proxies", ["web"])
-    return tp
+    yield tp
+    tp.stop()
 
 
 def _wait_for(cond: Any, timeout: float = 3.0) -> bool:
@@ -232,3 +233,57 @@ def test_development_caps_anonymous_registrations_without_locking_logins(monkeyp
             "/api/v1/auth/login", json={"email": "r0@example.com", "password": "Correct-horse-9"}
         )
         assert ok.status_code == 200, ok.text
+
+
+def test_ipv6_clients_are_throttled_per_slash_64(proxies, monkeypatch):
+    """One IPv6 host normally owns a /64: per-/128 buckets would be unlimited."""
+    from quantlab_api import security
+
+    monkeypatch.setattr(socket, "getaddrinfo", FakeDNS({"web": "10.9.0.2"}))
+    a = security.rate_limit_address(_request("10.9.0.2", "2001:db8:1:2::1"))
+    b = security.rate_limit_address(_request("10.9.0.2", "2001:db8:1:2:ffff::9"))
+    c = security.rate_limit_address(_request("10.9.0.2", "2001:db8:1:3::1"))
+    assert a == b == "2001:db8:1:2::/64"
+    assert c != a
+    mapped = security.rate_limit_address(_request("10.9.0.2", "::ffff:198.51.100.7"))
+    assert mapped == "198.51.100.7"
+    # Audit keeps the exact address.
+    assert security.client_ip(_request("10.9.0.2", "2001:db8:1:2::1")) == "2001:db8:1:2::1"
+
+
+def test_loopback_peers_do_not_wake_the_resolver(proxies, monkeypatch):
+    from quantlab_api import security
+
+    dns = FakeDNS({"web": "10.9.0.2"})
+    monkeypatch.setattr(socket, "getaddrinfo", dns)
+    security.rate_limit_address(_request("10.9.0.2", "198.51.100.7"))
+    assert _wait_for(lambda: len(dns.threads) >= 2)  # inline + background first pass
+    time.sleep(0.2)
+    calls = len(dns.threads)
+    for _ in range(20):  # e.g. the container health check, every few seconds
+        security.rate_limit_address(_request("127.0.0.1"))
+        time.sleep(0.01)
+    time.sleep(0.2)
+    assert len(dns.threads) == calls
+
+
+def test_inline_cold_resolution_runs_on_one_thread_at_a_time(proxies, monkeypatch):
+    """A dead resolver must not tie up every worker thread in getaddrinfo."""
+    from quantlab_api import security
+
+    dns = FakeDNS({}, delay=0.5)  # every lookup fails slowly
+    monkeypatch.setattr(socket, "getaddrinfo", dns)
+    proxies.REFRESH = proxies.RETRY = 60.0  # keep the background thread out of the count
+    results: list[str | None] = []
+
+    def login_thread() -> None:
+        results.append(security.rate_limit_address(_request("10.9.0.2", "198.51.100.7")))
+
+    threads = [threading.Thread(target=login_thread) for _ in range(8)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    inline = [n for n in dns.threads if n != "trusted-proxy-resolver"]
+    assert len(inline) == 1
+    assert results == ["10.9.0.2"] * 8  # unresolved: the peer is throttled as itself

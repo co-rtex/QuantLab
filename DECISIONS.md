@@ -96,9 +96,12 @@ reaches the web tier choose its address. The earlier claim here that such a clie
 lock anyone else out" was wrong: it could send a victim's address to exhaust the victim's
 bucket, and rotate addresses to spend a victim account's failed-login budget, because the
 account limit is reserved before the password is checked.
-**Consequences.** Public exposure requires the edge and `infra/edge/verify.sh` passing
-(docs/RUNBOOK.md, "Exposing a deployment"). Without the edge, development has no
-per-address login throttling, which is acceptable only on 127.0.0.1. A client with many real addresses can
-still delay one account's login by spending its failure budget; addresses can no longer
-be forged, so this needs a real botnet, and the fix (per-device login credentials) is
-future work.
+**Consequences.** Public exposure requires three things (docs/RUNBOOK.md, "Exposing a
+deployment"): the edge, `infra/edge/verify.sh` passing, and a Docker host that preserves
+client source addresses. Docker Desktop, rootless Docker and docker-proxy replace them with
+a gateway address. The remote probe in `verify.sh` checks this. IPv6 clients are throttled
+per /64. Without the edge, development has no
+per-address login throttling, which is acceptable only on 127.0.0.1. A client can still delay one account's
+login by spending its failure budget (30 per minute). It needs only about three real
+addresses to do so, because each address allows 10 attempts a minute. Addresses can no
+longer be forged. Per-device login credentials would fix this; that is future work.

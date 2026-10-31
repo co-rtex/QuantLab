@@ -26,9 +26,10 @@
 	# an ACME email (or remove the directive) to get a publicly trusted certificate.
 	tls {$QUANTLAB_EDGE_TLS:internal}
 
-	# Largest API body (two 50 MB CSV files + multipart overhead; limits.py).
+	# Largest API body: 110 MiB, as in limits.py and route.ts (two 50 MiB CSV files plus
+	# multipart overhead). MiB, not MB: Caddy's MB is decimal.
 	request_body {
-		max_size 110MB
+		max_size 110MiB
 	}
 
 	header {

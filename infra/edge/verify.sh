@@ -7,6 +7,16 @@
 # The victim and the attacker are separate long-lived containers with their own addresses,
 # because every connection from the host arrives from one Docker gateway address. Exits
 # non-zero on any failure. Expects the default login limit (10 per minute per address).
+#
+# Those checks cover the edge itself. Whether clients that reach the *published port* keep
+# their own source address depends on the Docker host: rootful Linux Docker with iptables
+# NAT keeps it for remote clients; Docker Desktop, rootless Docker's default port driver
+# and docker-proxy (loopback) replace it with a gateway address, which would put every user
+# in one bucket again. That needs a request from another machine:
+#
+#   (remote)  curl -sk https://HOST:PORT/api/v1/auth/login -H 'content-type: application/json' \
+#               -d '{"email":"remote@MARKER.example.com","password":"probe-pass-1"}'
+#   (here)    infra/edge/verify.sh --check-remote-probe MARKER
 set -eu
 
 project=${COMPOSE_PROJECT_NAME:?set COMPOSE_PROJECT_NAME (eval "$(scripts/stack-env.sh)")}
@@ -20,6 +30,34 @@ fail=0
 check() { # name expected actual
   if [ "$2" = "$3" ]; then echo "PASS  $1 ($3)"; else echo "FAIL  $1: expected $2, got $3"; fail=1; fi
 }
+sql() { $compose exec -T postgres psql -U quantlab -tAc "$1"; }
+# Exit 0 when the address lies in a Docker network of the edge or the default bridge:
+# the edge then saw Docker's address, not the client's.
+docker_addr() {
+  python3 -c '
+import ipaddress, sys
+ip = ipaddress.ip_address(sys.argv[1])
+sys.exit(0 if any(ip in ipaddress.ip_network(n, strict=False) for n in sys.argv[2:] if n) else 1)
+' "$1" $(docker network inspect -f '{{range .IPAM.Config}}{{.Subnet}} {{end}}' "$net" bridge)
+}
+probe_ip() { # marker -> address the API recorded for that probe's failed login
+  sql "select ip from audit_events where action='user.login_failed'
+       and details->>'email_domain' = '$1.example.com' order by created_at desc limit 1"
+}
+
+if [ "${1:-}" = "--check-remote-probe" ]; then
+  marker=$(printf '%s' "${2:?usage: verify.sh --check-remote-probe MARKER}" | tr -cd 'a-z0-9-')
+  ip=$(probe_ip "$marker")
+  if [ -z "$ip" ]; then echo "FAIL  no failed login for remote@$marker.example.com reached the API"; exit 1; fi
+  if docker_addr "$ip"; then
+    echo "FAIL  the remote client was recorded as $ip, a Docker address: this host replaces"
+    echo "      client addresses (Docker Desktop, rootless Docker or docker-proxy). Do not expose it."
+    exit 1
+  fi
+  echo "PASS  the remote client was recorded with its own address ($ip)"
+  exit 0
+fi
+
 cleanup() { docker rm -f "$victim_c" "$attacker_c" >/dev/null 2>&1 || true; }
 trap cleanup EXIT
 
@@ -43,8 +81,6 @@ json() { # container path body [curl args...]
   shift 3
   edge "$c" "$path" -X POST -H 'content-type: application/json' -d "$body" "$@"
 }
-sql() { $compose exec -T postgres psql -U quantlab -tAc "$1"; }
-
 started=$(sql "select now()")
 stamp=$(date +%s)
 victim="victim$stamp@example.com"
@@ -106,4 +142,21 @@ echo "== only the edge publishes a host port"
 check "services other than the edge publishing ports" 0 \
   "$($compose ps --format '{{.Service}} {{.Ports}}' | grep -v '^edge ' | grep -c -- '->' || true)"
 
-if [ "$fail" -eq 0 ]; then echo "ALL CHECKS PASSED"; else echo "SOME CHECKS FAILED"; exit 1; fi
+echo "== a client of the published port (from this host)"
+marker="local-$stamp"
+port=${QUANTLAB_EDGE_PORT:-8443}
+curl -sk -o /dev/null "https://localhost:$port/api/v1/auth/login" -H 'content-type: application/json' \
+  -d "{\"email\":\"local@$marker.example.com\",\"password\":\"probe-pass-1\"}" || true
+local_ip=$(probe_ip "$marker")
+if [ -n "$local_ip" ] && docker_addr "$local_ip"; then
+  echo "INFO  recorded as $local_ip, a Docker address: expected for a connection from this host,"
+  echo "      so it proves nothing about remote clients. Run the remote probe (header comment)."
+else
+  echo "INFO  recorded as ${local_ip:-nothing}"
+fi
+
+if [ "$fail" -eq 0 ]; then
+  echo "ALL EDGE CHECKS PASSED. Before exposing, also pass: verify.sh --check-remote-probe MARKER"
+else
+  echo "SOME CHECKS FAILED"; exit 1
+fi

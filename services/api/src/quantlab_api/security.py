@@ -138,13 +138,15 @@ class TrustedProxies:
     change when a container is recreated) are resolved by a background thread, because
     ``client_ip`` is also reached from async routes, where a slow ``getaddrinfo`` stalled
     the event loop for every request. Only a cold start in a worker thread (sync routes
-    such as login) resolves inline, so the first logins are attributed correctly.
+    such as login) resolves inline, so the first logins are attributed correctly; one
+    thread at a time, at most once per ``RETRY``, so a dead resolver cannot tie up the
+    thread pool.
 
     Fail-safe rules, since losing the list puts every user behind the proxy into one
     rate-limit bucket: a failed lookup keeps that name's last good addresses and is retried
     after ``RETRY`` seconds, not ``REFRESH``; and a request from a peer outside every
-    network wakes the resolver early (at most once per ``RETRY``), so a recreated proxy
-    is trusted again within about a second.
+    network wakes the resolver early (at most once per ``RETRY``; loopback peers such as
+    health checks do not), so a recreated proxy is trusted again within about a second.
     """
 
     REFRESH = 30.0
@@ -158,6 +160,9 @@ class TrustedProxies:
         self._names: tuple[str, ...] = ()
         self._resolved: dict[str, list[Network]] = {}
         self._last_wake = 0.0
+        self._last_inline = 0.0
+        self._inline = threading.Lock()
+        self._stopped = threading.Event()
         self._owner: tuple[int, threading.Thread] | None = None
 
     def networks(self) -> list[Network]:
@@ -168,13 +173,23 @@ class TrustedProxies:
             cold = bool(self._names) and not self._resolved
             if self._names:
                 self._ensure_thread()
-        if cold and not _in_event_loop():
-            self.resolve_now()
+        if cold and not _in_event_loop() and self._inline.acquire(blocking=False):
+            try:
+                if time.monotonic() - self._last_inline >= self.RETRY:
+                    self._last_inline = time.monotonic()
+                    self.resolve_now()
+            finally:
+                self._inline.release()
         with self._lock:
             return self._static + [n for nets in self._resolved.values() for n in nets]
 
-    def missed(self) -> None:
+    def missed(self, peer: str) -> None:
         """A peer was not trusted: re-resolve soon in case a proxy moved."""
+        try:
+            if ipaddress.ip_address(peer).is_loopback:
+                return  # health checks and local tools, never a proxy that moved
+        except ValueError:
+            return
         now = time.monotonic()
         if self._names and now - self._last_wake >= self.RETRY:
             self._last_wake = now
@@ -217,8 +232,13 @@ class TrustedProxies:
                     self._resolved[name] = nets
         return ok
 
+    def stop(self) -> None:
+        """End the resolver thread (tests)."""
+        self._stopped.set()
+        self._wake.set()
+
     def _run(self) -> None:
-        while True:
+        while not self._stopped.is_set():
             self._wake.clear()
             ok = self.resolve_now()
             self._wake.wait(self.REFRESH if ok else self.RETRY)
@@ -245,7 +265,7 @@ def _forwarded_client(request: Request) -> tuple[str, str | None]:
     peer = request.client.host if request.client else "unknown"
     nets = trusted_proxies.networks()
     if not _in(nets, peer):
-        trusted_proxies.missed()
+        trusted_proxies.missed(peer)
         return peer, peer
     hops = [h.strip() for h in request.headers.get("x-forwarded-for", "").split(",")]
     for hop in reversed([h for h in hops if h]):
@@ -255,6 +275,23 @@ def _forwarded_client(request: Request) -> tuple[str, str | None]:
             except ValueError:
                 return peer, None
     return peer, None
+
+
+def _bucket(address: str) -> str:
+    """One rate-limit bucket per IPv4 address or IPv6 /64.
+
+    An IPv6 host is normally given a whole /64, so per-/128 buckets would give one client
+    about 2**64 of them. IPv4-mapped IPv6 addresses count as the IPv4 address.
+    """
+    try:
+        ip = ipaddress.ip_address(address)
+    except ValueError:
+        return address
+    if isinstance(ip, ipaddress.IPv6Address):
+        if ip.ipv4_mapped is not None:
+            return str(ip.ipv4_mapped)
+        return str(ipaddress.IPv6Network((ip, 64), strict=False))
+    return str(ip)
 
 
 def client_ip(request: Request) -> str:
@@ -270,9 +307,10 @@ def rate_limit_address(request: Request) -> str | None:
     (the web tier without a TLS edge never forwards one; ADR-0008). Throttling on the
     proxy's own address would put every user into one bucket, so that ten failed logins
     anywhere lock everyone out; callers skip the per-address limit instead and rely on
-    the per-account limit.
+    the per-account limit. IPv6 addresses are returned as their /64 (``_bucket``).
     """
-    return _forwarded_client(request)[1]
+    address = _forwarded_client(request)[1]
+    return None if address is None else _bucket(address)
 
 
 def audit(

@@ -49,9 +49,10 @@ Redis. Behind the TLS edge the client address is the edge's TCP peer, which the 
 writes into `X-Forwarded-For`; the web tier forwards it only with a valid edge secret, and
 the API accepts it only from `QUANTLAB_TRUSTED_PROXIES` (compose: `["web"]`). Without an
 edge (local development) no address is forwarded and only the per-account limit applies
-(ADR-0008). If `audit_events.ip` shows one address for all users behind the edge, the API
-is not trusting the web tier: check that setting and that `web` resolves from the API
-container. A 403 `edge_required` from the web tier means a request reached it without
+(ADR-0008). If `audit_events.ip` shows one address for all users behind the edge, either
+the Docker host replaces client source addresses (the address is a Docker gateway; see
+"Exposing a deployment", host requirement), or the API is not trusting the web tier (the
+address is the web container's; check that setting and that `web` resolves from the API). A 403 `edge_required` from the web tier means a request reached it without
 passing through the edge. During a Redis outage limits are per process (ADR-0007).
 
 ### Disk usage
@@ -85,25 +86,41 @@ reason. A client that reaches the web tier without the edge would choose the add
 API throttles on: it could exhaust a victim's per-address bucket and, by rotating
 addresses, spend a victim account's failed-login budget (#3).
 
-1. Start the stack with the edge overlay, which publishes only the edge:
+**Host requirement.** The edge must see each client's real source address. Rootful
+Linux Docker with iptables NAT (the default) preserves it for remote clients. Docker
+Desktop, rootless Docker with its default port driver, and docker-proxy (connections from
+the same host) replace it with a gateway address. Every user would then share one bucket,
+and ten failed logins would lock everyone out. Step 3 checks this.
+
+1. Start the stack with the edge overlay, which publishes only the edge and runs the API
+   in production mode:
    ```
    export QUANTLAB_EDGE_SECRET=$(openssl rand -hex 32)   # store it like the JWT secret
+   export QUANTLAB_JWT_SECRET=$(openssl rand -hex 32) QUANTLAB_METRICS_TOKEN=$(openssl rand -hex 24)
    docker compose -f docker-compose.yml -f infra/edge/compose.yml --profile app up -d --build
    ```
    For a public domain also set `QUANTLAB_EDGE_SITE=quantlab.example.com` and
-   `QUANTLAB_EDGE_TLS=<ACME contact email>` (Caddy obtains a certificate; the default
-   `internal` uses Caddy's local CA, which browsers do not trust).
-2. Run `infra/edge/verify.sh` with `COMPOSE_PROJECT_NAME` set and keep its output. Every
-   check must pass: a spoofed `X-Forwarded-For` is ignored, a victim is not throttled by
-   an attacker claiming its address, the web tier refuses requests without the edge
-   secret, the API is unreachable from the edge network, and only the edge publishes a port.
-3. Only then bind the edge publicly: `QUANTLAB_EDGE_BIND=0.0.0.0 QUANTLAB_EDGE_PORT=443`.
+   `QUANTLAB_EDGE_TLS=<ACME contact email>`. Caddy then obtains a certificate; the default
+   `internal` uses Caddy's local CA, which browsers do not trust.
+2. Run `infra/edge/verify.sh` with `COMPOSE_PROJECT_NAME` set, and keep its output. Every
+   check must pass:
+   * a spoofed `X-Forwarded-For` is ignored;
+   * a victim is not throttled by an attacker claiming its address;
+   * the web tier refuses requests without the edge secret;
+   * the API is unreachable from the edge network;
+   * only the edge publishes a port.
+3. From a machine outside the host, send the probe in the script's header comment, then
+   run `infra/edge/verify.sh --check-remote-probe MARKER` on the host. It fails if the API
+   recorded a Docker address instead of the remote machine's.
+4. Only then bind the edge publicly: `QUANTLAB_EDGE_BIND=0.0.0.0 QUANTLAB_EDGE_PORT=443`.
 
 Behind a CDN or load balancer, the hop that faces the internet must overwrite
 `X-Forwarded-For` with its TCP peer. Configure Caddy's `trusted_proxies` with only that
-hop's ranges and use `{client_ip}` instead of `{remote_host}` (comments in
-`infra/edge/Caddyfile`); never trust a header because it is present.
+hop's ranges, and use `{client_ip}` instead of `{remote_host}` (see the comments in
+`infra/edge/Caddyfile`). Never trust a header just because it is present.
 
-Residual risk: a client with many real addresses (a botnet) can still spend one
-account's failed-login budget (30 per minute) and delay that user's login; the edge only
-guarantees that addresses cannot be forged.
+**Residual risk.** A failed login counts against both the address (10 per minute) and the
+account (30 per minute). A client with as few as three real addresses can therefore keep
+one account's login throttled. IPv6 clients are throttled per /64, so one IPv6 host counts
+once. The edge guarantees only that addresses cannot be forged. Per-device login
+credentials would close this; that is future work.
