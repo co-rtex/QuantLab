@@ -10,7 +10,7 @@ from fastapi import APIRouter, Header, Query, Request
 from pydantic import BaseModel, Field, ValidationError
 from sqlalchemy import select
 
-from quantlab.ml.pipeline import MODELS, MLConfig
+from quantlab.ml.pipeline import ML_PIPELINE_VERSION, MODELS, MLConfig
 from quantlab_api import artifacts, provenance
 from quantlab_api.config import get_settings
 from quantlab_api.errors import ApiError
@@ -94,7 +94,12 @@ def create_ml_run(
         raise ApiError(422, "invalid_config", f"models must be among {list(MODELS)}")
     doc = cfg.model_dump(mode="json")
     ihash = hashlib.sha256(
-        json.dumps({"dataset": dv.version_hash, "config": doc}, sort_keys=True).encode()
+        # The pipeline version too: the same dataset and config give a different panel
+        # under a new pipeline (#120), so they must not share an input hash.
+        json.dumps(
+            {"dataset": dv.version_hash, "config": doc, "pipeline": ML_PIPELINE_VERSION},
+            sort_keys=True,
+        ).encode()
     ).hexdigest()
     fingerprint = request_fingerprint(
         f"ml.create:{workspace_id}", user.id, body.model_dump(mode="json")
@@ -107,6 +112,9 @@ def create_ml_run(
         return linked or (db.get(MLRun, uuid.UUID(run_id)) if run_id else None)
 
     def legacy_match(job: Job) -> bool:  # jobs from before request fingerprints
+        # The hash includes the pipeline version (#120), so replaying a pre-fingerprint
+        # idempotency key from before pipeline 2 conflicts (409) instead of returning that
+        # older run. Accepted: such keys are rare and the conflict is explicit.
         prev = previous(job)
         return prev is not None and prev.input_hash == ihash
 

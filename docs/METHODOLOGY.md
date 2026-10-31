@@ -427,6 +427,69 @@ objective; risk parity uses Spinu's convex formulation. Every result is validate
 sums to 1, within bounds) or an error is raised; infeasible bounds are rejected before
 solving.
 
+## ML features (`quantlab.ml.pipeline`)
+* Features at `t` use only bars dated on or before `t`. Momentum and reversal are ratios
+  of fully adjusted closes; volatility uses total returns; `dist_high_252` measures the
+  distance to the 252-bar high; `volume_z_21` is the z-score of log volume.
+* **Windows count the instrument's own bars, not calendar sessions** (#120, pipeline
+  version 2). They are trade-time measures: `mom_21` is the return over the last 21 bars
+  and `rev_5` over the last 5, however many sessions those took. A 21-bar window ending just after a halt spans the bars before the halt,
+  so it covers more calendar sessions. The first bar after a gap carries the return over
+  the whole gap. Rows exist only on sessions with a bar, so a halted security leaves the
+  panel for the halt's sessions alone. Before version 2, any window containing a halt day
+  was NaN for the window's length, which dropped a recently halted security, a selection
+  correlated with distress, for up to 252 sessions.
+* **Staleness is described, not excluded.** Trade-time windows can reach far back in
+  calendar time, after a halt or for a thinly traded name. Two model inputs say how far
+  (s is a bar's position on the session calendar):
+  * `bars_span_21 = (s[t] − s[t−21]) / 21`: the calendar span of `mom_21`'s 21 returns,
+    per return. It is 1 for a bar every session and 2 for every other session.
+  * `log1p_max_gap_252 = log(1 + max_gap_252)`. `max_gap_252` is the largest number of
+    sessions without a bar between consecutive bars over the last 252 returns (bars
+    t−252 … t, so including the gap between t−252 and t−251). The raw count is unbounded,
+    so the model sees its log; the panel keeps the raw value as `max_gap_252`, which is
+    not a model input.
+
+  A halt shows as one long gap (a 40-session halt gives `max_gap_252 = 40`). Thin trading
+  shows many short ones: every other session gives `bars_span_21 = 2` with
+  `max_gap_252 = 1`, and random 50% trading gives about 2.05 with a maximum gap near 9.
+  An earlier rule excluded a feature whose oldest bar lay more than 2·L sessions back. It
+  was retracted because it selects against illiquid names: a sparsely traded name is not
+  halted, but its gaps add up over a window. Measured by
+  `benchmarks/ml_liquidity_selection.py`, the share of each name's candidate rows kept:
+  * Market: synthetic, `generate_market` with 30 assets over 2018-01-02 to 2022-12-30,
+    seed 11, `split_probability` 0.002.
+  * Thinning: random keep with `numpy.random.default_rng(1)`; the halt covers sessions
+    600–639.
+  * Sampling: every session (`sample_every = 1`).
+  * Candidate row: a date the panel samples (at least 10 tradable names) on which the
+    name has a bar, complete features apart from staleness, and a defined label.
+
+
+  | name | sessions traded | 2·L cap (retracted) | covariates (pipeline 2) |
+  |---|---|---|---|
+  | random 80% | 81% | 100% | 100% |
+  | random 60% | 59% | 67% | 100% |
+  | random 50% | 50% | 10% | 100% |
+  | random 45% | 46% | 0% (drops out) | 100% |
+  | every other session | 50% | 100% (exactly at the bound) | 100% |
+  | 40-session halt | 97% | 98% | 100% |
+  | dense, never halted | 100% | 100% | 100% |
+
+  The residual liquidity effect is the warm-up. A name enters once it has 252 bars of its
+  own, so at 50% trading it needs about two years of calendar history instead of one.
+* **No trading vs flat volume.** A row whose last 21 bars have zero total volume (a
+  quote that never trades) is excluded. `panel.excluded_rows.untraded_21` counts the rows
+  that would otherwise have been kept, on dates that make the panel.
+  `dates_below_10_after_untraded` counts dates skipped because that removal left fewer
+  than ten names.
+  Constant non-zero volume (21-bar log-volume standard deviation at or below 1e-12)
+  deviates from its mean by exactly zero, so `volume_z_21` is 0, not 0/0. Then
+  `volume_flat_21 = 1`, which is a **model input**, so a model can tell "no dispersion"
+  from "average volume". Results report the count as `panel.volume_flat_rows`.
+* `ML_PIPELINE_VERSION` is recorded in every result (`pipeline_version`) and changes
+  whenever the same dataset and config could produce a different panel.
+
 ## Known limitations
 
 * No survivorship-free real data source is configured; the synthetic generator includes
