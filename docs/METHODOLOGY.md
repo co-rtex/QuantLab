@@ -16,7 +16,7 @@ the source of truth; tests in `tests/unit` pin each definition to a golden examp
   ex-date. If the ex-date is a non-session day, or a session where the symbol printed no
   bar, the action applies at the symbol's next bar: nothing traded in between, so the
   holders and the price discontinuity are the same. Actions dated before a symbol's first
-  bar or after its last bar are outside its history, are not applied, and fail ingestion.
+  bar or after its last bar are outside its history and are not applied (a warning).
 * **Ordering**: actions placed on one bar are composed in ex-date order into one
   equivalent event per share held before the bar: `S = Π s_i` and `D = Σ (Π_{j<i} s_j) d_i`,
   where a split multiplies the running share count and a dividend pays `d_i` per share held
@@ -36,19 +36,20 @@ the source of truth; tests in `tests/unit` pin each definition to a golden examp
   dataset (`enforce_gates` raises `QualityGateError` with a per-check report). Gates are
   reserved for input that is malformed by construction, so that legitimate market data
   never blocks a dataset. The gates are:
-  * Invalid bars: non-finite, non-positive, negative volume, OHLC inconsistent, or
-    duplicate rows.
+  * Invalid bars: non-finite, non-positive, negative volume, duplicate rows, or OHLC
+    inconsistent by more than half a tick (Reg NMS Rule 612 increments: $0.005 for prices
+    of $1 or more, $0.00005 below). These checks existed before #10 and were reported but
+    not enforced; they now block.
   * Duplicate corporate actions: an identical repeated row, or two splits on one ex-date.
     A same-amount regular and special dividend must be supplied as one row.
-  * Actions for a symbol without bars, or dated before its first bar.
   * Split ratios equal to 1 or outside `[1/10000, 10000]`.
   * A dividend of at least the previous close.
-  * A dividend of at least 10% of the previous close where the price falls by less than
-    half the dividend (for example, cents entered as dollars).
-  * A declared date after the ex, record or pay date, or a pay date before the record
-    date.
-  * A split bar whose gross total return is still about 2x or 1/2x or worse (wrong ratio,
-    wrong ex-date or a phantom split).
+  * A dividend of at least 10% of the previous close, less than half reflected in the
+    price, that the price rose through or that is at least half the price (for example,
+    cents entered as dollars).
+  * A split bar whose gross total return is still 2x or 1/2x or worse (3x or 1/3x for a
+    reverse split, which distressed issuers often do on −30% to −60% days): a wrong ratio,
+    a wrong ex-date or a phantom split.
 
   Pay or record dates *before* the ex-date are allowed: for distributions of 25% or more
   the ex-date is the first business day after the payable date (FINRA Rule 11140(b)).
@@ -56,9 +57,13 @@ the source of truth; tests in `tests/unit` pin each definition to a golden examp
   The following are warnings only:
   * Missing sessions, a bar dated on a non-session day, stale prices.
   * An ex-date without a bar (the action applies at the next bar).
-  * Actions after a symbol's last bar: announced future actions or terminal distributions,
-    which are not applied.
-  * A split bar moving more than 25%.
+  * Actions the engine never applies: for a symbol without bars, or dated before its first
+    or after its last bar. Full-history vendor action files with windowed bars, announced
+    future actions and terminal distributions all look like this.
+  * Impossible action dates (declared after the ex, record or pay date, or paid before the
+    record date): they are provenance only.
+  * A dividend of 2% or more less than half reflected in the price, below the gate.
+  * A split bar moving more than 25%, below the gate.
   * Other moves above 50%.
   * A move within 2.5% of a k-for-1 or 1-for-k split signature (k ≥ 2) on a bar without a
     split.
@@ -145,6 +150,17 @@ its last bar; not applied).
 No leverage or shorting is modelled. Cash earns nothing (the risk-free rate is used only in
 risk-adjusted ratios).
 
+**Dividends: strategy vs benchmark.** The two use different reinvestment conventions:
+* The ledger credits dividends as cash, and that cash is only reinvested when the
+  strategy next rebalances.
+* The benchmark series is the compounded total return of the benchmark's own bars, so its
+  dividends are reinvested at the ex-date close.
+
+So a buy-and-hold of the benchmark itself trails the benchmark by exactly the
+reinvestment effect. For example, $20 of dividend cash that misses a later +10% move costs
+$2 (pinned in `tests/unit/test_research_correctness.py`). Excess returns and tracking error
+include this cash drag, which is real for a strategy that does not reinvest.
+
 **Invariants verified by tests**: cash equals the sum of transaction cash flows (ledger
 replay); equity equals cash plus marked positions every day; cash never negative;
 positions never negative; deterministic fingerprints for identical inputs; truncating
@@ -171,7 +187,15 @@ data after a decision date leaves that decision unchanged (no look-ahead).
 | Gross ("before costs") | equity plus cumulative commissions and slippage paid; an approximation that ignores compounding of the saved costs |
 
 Undefined statistics (zero variance, fewer than two observations, no drawdown, no losing
-trades) are reported as `null` with a reason, never as `0`.
+trades) are reported as `null` with a reason, never as `0`. "Zero variance" means a
+per-period standard deviation at or below `1e-12`, so floating-point residue is never
+annualized into a statistic: an exact index tracker has tracking error `0` and an
+undefined information ratio. When there are fewer than two observations or the initial
+wealth is not positive, *every* metric (and every benchmark metric) is undefined with
+that reason. Rolling volatility and Sharpe (`analytics.summary.rolling_metrics`) use the
+same risk-free and annualization conventions, and the same zero-dispersion rule per
+window. A walk-forward whose every out-of-sample fold fails returns
+`error: "every out-of-sample fold failed"` with all OOS statistics undefined.
 
 Trade statistics use FIFO lot matching with commissions allocated per share; open lots
 are restated at each split (shares times ratio, cost divided by ratio). Sells that match
@@ -180,7 +204,21 @@ no open lot are not counted as round trips.
 Parameter selection (walk-forward in-sample scoring) and the sensitivity grid score each
 run from the session before its first holding, so strategies with long look-backs are not
 penalised for warm-up time spent in cash. Reported experiment statistics still cover the
-whole requested window, as that is what the account experienced.
+whole requested window, as that is what the account experienced. The selected parameter
+set is always one of the grid points; parameter sets are compared with every default
+filled in.
+
+**Probabilistic and deflated Sharpe** (`quantlab.research.stats`, Bailey and López de
+Prado). The statistic is the per-period Sharpe of excess returns,
+`mean(r - rf_p) / std(r - rf_p)`, which is the annualized Sharpe divided by `sqrt(252)`.
+`PSR(SR*) = Φ((SR - SR*) sqrt(n - 1) / sqrt(1 - γ3 SR + (γ4 - 1)/4 SR²))`, where γ3 and
+γ4 are the sample skewness and (non-excess) kurtosis. The DSR is the PSR against
+`SR* = E[max SR]` of the N grid trials under the null. Every trial Sharpe *and* the
+selected strategy's PSR/DSR use the same inputs: each run's invested window (as above)
+and the configured risk-free rate. Before #14 the selected strategy used its full window,
+including warm-up cash, with no risk-free rate, which overstated both probabilities.
+`psr_vs_zero` is the probability that the true excess Sharpe is positive. The output
+records `observations` and `selected_sharpe_per_period`, so the inputs can be audited.
 
 Regime analysis classifies each day using trailing benchmark volatility and trend, with
 volatility cut points taken from expanding quantiles, so no day's regime depends on later

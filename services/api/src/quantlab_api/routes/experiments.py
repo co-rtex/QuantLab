@@ -15,7 +15,7 @@ from quantlab.backtest.engine import ENGINE_VERSION, BacktestConfig
 from quantlab_api import artifacts
 from quantlab_api.config import get_settings
 from quantlab_api.errors import ApiError
-from quantlab_api.jobs import submit_job
+from quantlab_api.jobs import lock_idempotency_key, submit_job
 from quantlab_api.models import (
     Experiment,
     ExperimentResult,
@@ -143,6 +143,7 @@ def create_experiment(
         created_by=user.id,
         status=JobStatus.queued,
     )
+    lock_idempotency_key(db, workspace_id, idempotency_key)
     if idempotency_key:
         prior = db.scalar(
             select(Job).where(

@@ -21,7 +21,7 @@ import numpy as np
 import pandas as pd
 from scipy import stats
 
-from quantlab.analytics.performance import ZERO_DISPERSION
+from quantlab.analytics.performance import PERIODS_PER_YEAR, ZERO_DISPERSION
 from quantlab.optimize.allocators import risk_contributions
 
 
@@ -222,9 +222,17 @@ def monte_carlo(
     }
 
 
-def risk_summary(returns: pd.Series, confidence: float = 0.95) -> dict[str, Any]:
+def risk_summary(
+    returns: pd.Series, confidence: float = 0.95, *, periods_per_year: int = PERIODS_PER_YEAR
+) -> dict[str, Any]:
+    """One-period VaR/ES and volatility. These are loss and dispersion measures of raw
+    returns, so the risk-free rate does not enter (it shifts the mean, not the spread)."""
     r = returns.dropna()
-    out: dict[str, Any] = {"confidence": confidence, "observations": len(r)}
+    out: dict[str, Any] = {
+        "confidence": confidence,
+        "observations": len(r),
+        "periods_per_year": periods_per_year,
+    }
     try:
         out.update(
             historical_var=historical_var(r, confidence),
@@ -233,7 +241,7 @@ def risk_summary(returns: pd.Series, confidence: float = 0.95) -> dict[str, Any]
             gaussian_es=gaussian_es(r, confidence),
             cornish_fisher_var=cornish_fisher_var(r, confidence),
             daily_volatility=float(r.std(ddof=1)),
-            annualized_volatility=float(r.std(ddof=1) * math.sqrt(252)),
+            annualized_volatility=float(r.std(ddof=1) * math.sqrt(periods_per_year)),
         )
     except RiskError as exc:
         out["error"] = str(exc)

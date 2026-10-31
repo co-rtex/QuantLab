@@ -81,11 +81,8 @@ def test_retry_mirrors_queued_status(client, seeded, monkeypatch):
 def test_sole_owner_cannot_demote_themselves(client):
     h = register(client, "solo@example.com")
     ws = client.get("/api/v1/workspaces", headers=h).json()[0]["id"]
-    r = client.post(
-        f"/api/v1/workspaces/{ws}/members",
-        headers=h,
-        json={"email": "solo@example.com", "role": "viewer"},
-    )
+    me = client.get("/api/v1/auth/me", headers=h).json()["id"]
+    r = client.patch(f"/api/v1/workspaces/{ws}/members/{me}", headers=h, json={"role": "viewer"})
     assert r.status_code == 409
     assert r.json()["error"]["code"] == "last_owner"
 

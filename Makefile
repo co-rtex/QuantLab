@@ -1,4 +1,4 @@
-.PHONY: setup lint format typecheck test test-unit test-integration coverage up down app-up web-dev api-dev worker reaper bench e2e check stack-env
+.PHONY: setup lint format typecheck test test-unit test-integration coverage up down app-up web-dev api-dev worker reaper bench e2e e2e-serial check stack-env
 
 # Per-checkout compose project, ports and database URLs (see scripts/stack-env.sh), so
 # several git worktrees can run their stacks and test suites at the same time.
@@ -37,7 +37,7 @@ up:
 	docker compose up -d --wait postgres redis
 
 down:
-	docker compose down
+	docker compose --profile app down
 
 app-up:
 	docker compose --profile app up -d --build --wait
@@ -60,5 +60,13 @@ bench:
 
 e2e:
 	cd apps/web && npx playwright test
+
+# Full stack + Playwright under the machine-wide lock (docs/COORDINATION.md): one worker,
+# two API processes, and the stack is torn down afterwards whatever the result.
+e2e-serial:
+	scripts/fullstack-lock.sh run sh -c '\
+	  QUANTLAB_API_WORKERS=$${QUANTLAB_API_WORKERS:-2} docker compose --profile app up -d --build --wait && \
+	  (cd apps/web && npx playwright test --workers=$${E2E_WORKERS:-1}); status=$$?; \
+	  docker compose --profile app down; exit $$status'
 
 check: lint typecheck test

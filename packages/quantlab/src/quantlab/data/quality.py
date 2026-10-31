@@ -5,17 +5,20 @@ offending rows, so the report remains useful for large datasets.
 
 A ``fail`` is an **ingestion gate**: :func:`enforce_gates` raises
 :class:`QualityGateError` and the dataset must not be registered. Gates are reserved for
-input that is malformed *by construction*, so that legitimate real-market data never
-blocks a dataset: invalid or duplicate bars, duplicate actions, actions for symbols
-without bars or dated before a symbol's first bar, impossible split ratios, dates or
-dividends, a split bar whose price change the ratio cannot explain, and a large dividend
-that the price does not reflect.
+input that is malformed *by construction* and would corrupt results, so that legitimate
+real-market data never blocks a dataset: non-finite, non-positive or negative-volume bars,
+OHLC inconsistent by more than half a tick, duplicate bars or actions, impossible split
+ratios or dividends, a split bar whose price change the ratio cannot explain, and a large
+dividend the price plainly does not reflect.
 
 A ``warn`` marks something a researcher should look at but that prices alone cannot
 settle, or that the pipeline handles correctly: missing sessions, an ex-date without a
-bar, actions after a symbol's last bar, stale prices, large moves, and moves matching a
-split ratio on a bar without a split. The last can be an unrecorded split or a genuine
--50% / +100% day; telling them apart needs a second source (reconciliation).
+bar, actions the engine never applies (for symbols without bars, or dated outside a
+symbol's bars, as full-history vendor action files often are), impossible but
+provenance-only action dates, stale prices, large moves, a smaller dividend the price does
+not reflect, and moves matching a split ratio on a bar without a split. The last can be an
+unrecorded split or a genuine -50% / +100% day; telling them apart needs a second source
+(reconciliation).
 """
 
 from __future__ import annotations
@@ -109,6 +112,7 @@ def assess_quality(
     split_tolerance: float = 0.025,
     max_split_ratio: float = 10_000.0,
     dividend_yield_check: float = 0.10,
+    dividend_yield_warn: float = 0.02,
     stale_run: int = 5,
     as_of: pd.Timestamp | None = None,
 ) -> QualityReport:
@@ -116,13 +120,15 @@ def assess_quality(
 
     * ``extreme_return``: |total return| above this is reported (warning).
     * ``split_mismatch``: |total return| above this on a bar carrying a split is reported
-      (warning); a gross return of about 2x or 1/2x or worse there is a gate, because the
-      ratio or the ex-date cannot be right.
+      (warning). A gross return of 2x or 1/2x or worse there (3x or 1/3x for a reverse
+      split) is a gate, because the ratio or the ex-date cannot be right.
     * ``split_tolerance``: relative distance from a split signature (``SPLIT_SIGNATURES``)
       within which a gross return counts as split-like.
     * ``max_split_ratio``: a split ratio equal to 1 or outside ``[1/max, max]`` is invalid.
-    * ``dividend_yield_check``: a dividend of at least this fraction of the previous close
-      must be matched by a price drop of at least half the dividend (gate).
+    * ``dividend_yield_warn`` / ``dividend_yield_check``: a dividend of at least the warn
+      fraction of the previous close whose price falls by less than half of it is reported.
+      It is a gate at the check fraction or more when the price rose through it, or when
+      it is half the price or more.
     """
     actions = normalize_actions(actions)
     cols = ["symbol", "date"]
@@ -143,7 +149,9 @@ def assess_quality(
     neg_vol = bars[bars["volume"] < 0]
     checks.append(_check("negative_volume", neg_vol[cols], "Volume < 0", True))
 
-    eps = 1e-9
+    # Half a minimum tick (Reg NMS Rule 612: $0.01 at or above $1, $0.0001 below), so
+    # vendor rounding of one field never blocks, but a real inconsistency does.
+    eps = np.where(bars[price_cols].max(axis=1) >= 1.0, 0.005, 0.00005)
     ohlc_bad = bars[
         (bars["high"] + eps < bars[["open", "close", "low"]].max(axis=1))
         | (bars["low"] - eps > bars[["open", "close", "high"]].min(axis=1))
@@ -152,7 +160,7 @@ def assess_quality(
         _check(
             "ohlc_inconsistent",
             ohlc_bad[[*cols, *price_cols]],
-            "High below open/close/low or low above open/close/high",
+            "High below open/close/low or low above open/close/high by more than half a tick",
             True,
         )
     )
@@ -208,6 +216,7 @@ def assess_quality(
             split_mismatch=split_mismatch,
             split_tolerance=split_tolerance,
             dividend_yield_check=dividend_yield_check,
+            dividend_yield_warn=dividend_yield_warn,
         )
     )
 
@@ -269,6 +278,9 @@ def _action_checks(
     def placed_as(*kinds: str) -> pd.DataFrame:
         return placed.loc[placed["placement"].isin(kinds), show]
 
+    # Actions the adjuster and the engine never apply (no bars for the symbol, or outside
+    # its bars) only warn: full-history vendor action files routinely cover more symbols
+    # and dates than a windowed bars file.
     return [
         _check(
             "duplicate_corporate_actions",
@@ -279,14 +291,14 @@ def _action_checks(
         _check(
             "orphan_corporate_actions",
             placed_as("no_bars"),
-            "Corporate actions for a symbol with no bars",
-            True,
+            "Corporate actions for a symbol with no bars; not applied",
+            False,
         ),
         _check(
             "corporate_actions_before_history",
             placed_as("before_history"),
-            "Corporate actions dated before the symbol's first bar",
-            True,
+            "Corporate actions dated before the symbol's first bar; not applied",
+            False,
         ),
         _check(
             "corporate_actions_after_history",
@@ -310,8 +322,9 @@ def _action_checks(
         _check(
             "corporate_action_date_order",
             actions.loc[misordered, [*show, *ACTION_DATE_COLUMNS]],
-            "Declared after its ex, record or pay date, or paid before its record date",
-            True,
+            "Declared after its ex, record or pay date, or paid before its record date "
+            "(provenance only: the engine acts on the ex-date)",
+            False,
         ),
     ]
 
@@ -324,6 +337,7 @@ def _return_checks(
     split_mismatch: float,
     split_tolerance: float,
     dividend_yield_check: float,
+    dividend_yield_warn: float,
 ) -> list[QualityCheck]:
     """Checks on bar-to-bar total returns, computed exactly as ``adjust.total_returns``."""
     splits, divs = _matrices(close.shape, placed)
@@ -334,6 +348,7 @@ def _return_checks(
         log_gross = np.abs(np.log1p(ret))
         # Price drop explained per share held before the bar (split-neutral).
         drop = prev - splits * c
+        yld = divs / prev
     defined = np.isfinite(ret)
     has_split = splits != 1.0
     has_div = (divs > 0) & np.isfinite(prev)
@@ -342,14 +357,21 @@ def _return_checks(
     for k in SPLIT_SIGNATURES:
         near |= np.abs(log_gross - np.log(k)) <= tol
     split_like = defined & ~has_split & near
-    split_wrong = defined & has_split & (log_gross >= np.log(2.0) - tol)
+    # A ratio error multiplies the true gross return by a ratio of split factors. Forward
+    # splits rarely coincide with large moves, so 2x already blocks; reverse splits are
+    # often done by distressed issuers on -30% to -60% days, so they block only at 3x.
+    limit = np.where(splits < 1.0, np.log(3.0), np.log(2.0)) - tol
+    split_wrong = defined & has_split & (log_gross >= limit)
     split_large = defined & has_split & (np.abs(ret) > split_mismatch) & ~split_wrong
     with np.errstate(invalid="ignore"):
         div_too_big = has_div & (divs >= prev)
-        div_no_drop = (
-            has_div & ~div_too_big & (divs >= dividend_yield_check * prev) & (drop < 0.5 * divs)
-        )
-    explained = split_like | split_wrong | split_large | div_no_drop
+        # The price fails to fall by at least half the dividend.
+        unreflected = has_div & ~div_too_big & (yld >= dividend_yield_warn) & (drop < 0.5 * divs)
+        # Block only where a genuine move cannot explain it: a large dividend the price
+        # rose through, or one of half the price or more.
+        div_wrong = unreflected & (yld >= dividend_yield_check) & ((drop < 0) | (yld >= 0.5))
+        div_unreflected = unreflected & ~div_wrong
+    explained = split_like | split_wrong | split_large | div_wrong | div_unreflected
     extreme = defined & (np.abs(ret) > extreme_return) & ~explained
 
     def cells(mask: np.ndarray, **extra: np.ndarray) -> pd.DataFrame:
@@ -370,7 +392,8 @@ def _return_checks(
         _check(
             "split_price_mismatch",
             cells(split_wrong, split=splits),
-            "Total return of 2x or 1/2x or worse on a split bar: the ratio or ex-date is wrong",
+            "Total return on a split bar of 2x or 1/2x or worse (3x or 1/3x for reverse "
+            "splits): the ratio or ex-date is wrong",
             True,
         ),
         _check(
@@ -381,10 +404,18 @@ def _return_checks(
         ),
         _check(
             "dividend_price_mismatch",
-            cells(div_no_drop, dividend=divs),
-            f"Dividend of >= {dividend_yield_check:.0%} of the previous close with less than "
-            "half of it reflected in the price (amount in the wrong unit?)",
+            cells(div_wrong, dividend=divs),
+            f"Dividend of >= {dividend_yield_check:.0%} of the previous close that the price "
+            "rose through, or of half the price or more, with less than half of it reflected "
+            "(amount in the wrong unit?)",
             True,
+        ),
+        _check(
+            "dividend_not_reflected",
+            cells(div_unreflected, dividend=divs),
+            f"Dividend of >= {dividend_yield_warn:.0%} of the previous close with less than "
+            "half of it reflected in the price (check the amount)",
+            False,
         ),
         _check(
             "split_like_returns",

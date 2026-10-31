@@ -15,7 +15,7 @@ non-session day, or on a session where the symbol printed no bar, it is the symb
 bar: nothing traded in between, so the holders and the price discontinuity are the same,
 and the factor uses a close that really is the first post-event price. Actions dated
 before a symbol's first bar or after its last bar are outside its history and are not
-applied (``quantlab.data.quality`` rejects the former and warns about the latter).
+applied (``quantlab.data.quality`` reports them as warnings).
 
 **Ordering.** Several actions placed on one bar are composed in ex-date order into one
 equivalent event ``(S, D)`` per share held before the bar: a split multiplies the running
