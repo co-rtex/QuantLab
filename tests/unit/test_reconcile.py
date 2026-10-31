@@ -694,3 +694,56 @@ def test_pairing_prefers_the_agreeing_amount_over_the_same_date():
     assert [x["issue"] for x in r.samples["action_mismatch"]] == ["ex_date differs"]
     assert r.counts["action_missing"] == 1
     assert r.samples["action_missing"][0]["value_s"] == 0.52
+
+
+# ------------------------------------- adversarial review of the ratio-step rule
+def test_a_zero_close_is_never_on_level():
+    bars, acts = _raw_series()
+    p = bars.copy()
+    p.loc[p.index[[5, 25, 45]], "close"] = 0.0
+    r = _ratio_run(p, acts, _adjusted_copy(bars, acts))
+    assert r.counts["adjusted_series"] == 1
+    assert r.counts["price_mismatch"] == 3  # was 0: inf <= inf put them on level
+
+
+@pytest.mark.parametrize(
+    ("true", "applied"),
+    [(10.0, 9.0), (0.1, 1 / 9), (2.0, 2.0 / 1.03), (50.0, 50.0 / 1.2)],
+)
+def test_a_split_adjusted_by_the_wrong_factor_is_not_explained(true, applied):
+    bars, acts = _raw_series(events=((20, "split", true),))
+    wrong = acts.assign(value=applied)
+    for p, s in ((bars, _adjusted_copy(bars, wrong)), (_adjusted_copy(bars, wrong), bars)):
+        r = _ratio_run(p, acts, s)
+        assert r.counts["adjusted_series"] == 0 and r.counts["price_mismatch"] == 20
+
+
+def test_a_split_applied_the_wrong_way_is_not_explained():
+    # The secondary multiplies pre-split prices by 2 instead of dividing: the ratio is
+    # [2, 1], which a primary-adjusted series would also give, but the "raw" secondary
+    # would then fall 75% on a 2:1 split.
+    bars, acts = _raw_series(events=((20, "split", 2.0),))
+    s = bars.copy()
+    s.loc[s.index[:20], "close"] *= 2.0
+    r = _ratio_run(bars, acts, s)
+    assert r.counts["adjusted_series"] == 0 and r.counts["price_mismatch"] == 20
+
+
+@pytest.mark.parametrize(
+    "events",
+    [
+        ((20, "dividend", 1.0), (40, "split", 10.0)),  # the primary's adjusted c_prev is tiny
+        ((20, "dividend", 60.0),),  # a 60% special dividend
+        ((20, "dividend", 10.0), (20, "dividend", 9.0)),  # two on one day
+        ((58, "dividend", 1.0),),  # an ex-date in the last, too-short segment
+        ((20, "dividend", 1.0), (59, "dividend", 1.0)),
+    ],
+)
+@pytest.mark.parametrize("adjusted_side", ["secondary", "primary"])
+def test_genuine_adjusted_series_the_first_rule_missed(events, adjusted_side):
+    bars, acts = _raw_series(events=events)
+    adj = _adjusted_copy(bars, acts)
+    p, s = (bars, adj) if adjusted_side == "secondary" else (adj, bars)
+    r = _ratio_run(p, acts, s)
+    assert r.counts["adjusted_series"] == 1, r.counts
+    assert r.counts["scale_mismatch"] == 0

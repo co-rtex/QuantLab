@@ -158,14 +158,30 @@ the source of truth; tests in `tests/unit` pin each definition to a golden examp
     above $1, $0.00005 below)
   * `adjusted_series`: the close ratio sits on two or more levels that step at the
     primary's ex-dates, the signature of an adjusted series compared with raw prices.
-    Reported once per instrument; reconcile raw data. A level needs a segment of at
-    least 3 bars, the last level must be 1 (back-adjustment leaves the latest prices
-    raw), and every step must be the factor the primary's actions imply: the split
-    ratio, the dividend factor `1 - d/c_prev` or `1/(1 + d/c_ex)`, or the split-only
-    factor, all in one direction. Ten bad prints between two dividends are therefore
-    price mismatches, not a level. A one-session segment between consecutive ex-dates
-    defines no level, so its bars stay price mismatches even in a genuine adjusted
-    series.
+    Reported once per instrument; reconcile raw data. The rules:
+    * A level needs a segment of at least 3 bars with positive closes.
+    * The levels must end at 1, because back-adjustment leaves the latest prices raw.
+      A final step to 1 across ex-dates in a too-short last segment is checked like
+      the others.
+    * Every step must be the factor the primary's actions imply, all in one
+      orientation. Per ex-date with split `s` and cash `d` that factor is
+      `s / (1 - d/c_prev)` or `s + d/c_ex`, both computed from the raw side's closes,
+      or `s` alone for split-only adjustment.
+    * The tolerance is the bar tolerance plus both segments' rounding (half a tick
+      over price on each side), so a 10:1 split adjusted as 9:1, or a level 3% off
+      around a split, is not explained.
+    * For steps above about 10% the raw side must also show the jump, so a split
+      applied the wrong way is not explained.
+
+    Ten bad prints between two dividends are therefore price mismatches, not a level.
+    Known limits:
+    * A one-session segment between consecutive ex-dates defines no level, so its bars
+      stay price mismatches even in a genuine adjusted series.
+    * For dividend-sized steps the orientation cannot be checked against daily moves,
+      so a series adjusted the wrong way for a dividend is still labelled
+      `adjusted_series`. The class fails by default either way.
+    * Secondary bars that equal the raw primary inside an adjusted segment are not
+      mismatches and are not listed.
   * `scale_mismatch`: one constant close ratio other than 1 (pence vs pounds, a
     currency, a fixed offset), which is not an adjustment. A series adjusted only for
     an action outside the compared window also has one constant ratio and lands here.

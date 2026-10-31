@@ -215,9 +215,9 @@ def _records(frame: pd.DataFrame) -> list[dict[str, Any]]:
     return [{k: _plain(v) for k, v in r.items()} for r in rows]
 
 
-def _half_tick(price: pd.Series) -> np.ndarray:
+def _half_tick(price: pd.Series | np.ndarray) -> np.ndarray:
     """Half of the Reg NMS Rule 612 minimum increment at each price."""
-    return np.where(price.abs() >= 1.0, 0.005, 0.00005)
+    return np.where(np.abs(price) >= 1.0, 0.005, 0.00005)
 
 
 def _describe(src: Source, bars: pd.DataFrame, actions: pd.DataFrame) -> dict[str, Any]:
@@ -490,17 +490,16 @@ def _ratio_classes(
     ratio (secondary / primary) is taken per segment between the primary's ex-dates. A bar
     is *on level* when its ratio is within the ordinary close tolerance of its segment's
     median. Only segments of at least ``adjusted_min_segment`` bars define a level; bars
-    in shorter segments are off level. If at least ``adjusted_share`` of the bars are on
-    level:
+    in shorter segments, and bars with a close that is not positive, are off level. If at
+    least ``adjusted_share`` of the bars are on level:
 
-    * two or more distinct levels are an **adjusted series** (one source split/dividend
-      back-adjusted, the other raw) only if the last level is 1 and every step between
-      levels is the factor the primary's actions at the ex-dates in between imply (see
+    * levels that step only by the factors the primary's actions imply, ending at 1, are
+      an **adjusted series** (one source split/dividend back-adjusted, the other raw; see
       :func:`_steps_follow_actions`). Levels that move any other way (a run of bad prints
       between two dividends) are not explained;
-    * a single level other than 1 is a **scale mismatch** (units, currency, or a constant
-      offset), not an adjustment. A series adjusted for an action outside the compared
-      window also shows one constant level, so it is reported as a scale mismatch too.
+    * otherwise a single level other than 1 is a **scale mismatch** (units, currency, or a
+      constant offset), not an adjustment. A series adjusted only for an action outside
+      the compared window also shows one constant level, so it is reported here too.
 
     On-level bars of an explained instrument are no longer reported one by one; off-level
     bars stay price mismatches, so a bad print inside an adjusted series is never absorbed.
@@ -509,11 +508,13 @@ def _ratio_classes(
     adjusted, scale, explained = [], [], []
     counts = off["instrument_id"].value_counts()
     for iid in counts[counts >= tol.adjusted_min_bars].index:
-        v = valid[valid["instrument_id"] == iid].sort_values("date")
-        ratio = (v["close_s"] / v["close_p"]).to_numpy()
-        price = v["close_p"].abs()
+        every = valid[valid["instrument_id"] == iid]
+        # A zero or negative close has no meaningful ratio and never sits on a level.
+        v = every[(every["close_p"] > 0) & (every["close_s"] > 0)].sort_values("date")
+        ratio = (v["close_s"] / v["close_p"]).to_numpy(dtype=float)
+        price = v["close_p"].to_numpy(dtype=float)
         floor = _half_tick(price) if tol.close_abs is None else np.full(len(v), tol.close_abs)
-        band = np.maximum(tol.close_rel, floor / price.to_numpy())
+        band = np.maximum(tol.close_rel, floor / price)
         ex = np.sort(primary_actions.loc[primary_actions["symbol"] == iid, "ex_date"].unique())
         segment = np.searchsorted(ex, v["date"].to_numpy(), side="right")
         sizes = pd.Series(segment).value_counts()
@@ -524,12 +525,15 @@ def _ratio_classes(
         level_of = pd.Series(segment).map(levels).to_numpy(dtype=float)  # NaN: short
         with np.errstate(invalid="ignore"):
             on_level = np.abs(ratio / level_of - 1) <= band
-        if on_level.mean() < tol.adjusted_share:
+        if on_level.sum() < tol.adjusted_share * len(every):
             continue
-        # Runs of equal levels: (level, first segment, last segment).
+        # How far a segment's median can sit from its true level through rounding alone.
+        rounding = pd.Series(_rounding(v["close_p"], tol) + _rounding(v["close_s"], tol))
+        precision = rounding.groupby(segment).max()
         runs = [[float(levels.iloc[0]), int(long[0]), int(long[0])]]
         for seg, x in zip(long[1:], levels.iloc[1:], strict=True):
-            if abs(x / runs[-1][0] - 1) > tol.close_rel:
+            near = tol.close_rel + precision[runs[-1][2]] + precision[seg]
+            if abs(np.log(x / runs[-1][0])) > near:
                 runs.append([float(x), int(seg), int(seg)])
             else:
                 runs[-1][2] = int(seg)
@@ -539,13 +543,10 @@ def _ratio_classes(
             "price_mismatches": int(counts[iid]),
             "ratios": [round(x, 8) for x in distinct],
         }
-        if len(distinct) >= 2:
-            if abs(distinct[-1] - 1) > tol.close_rel or not _steps_follow_actions(
-                runs, ex, primary_actions[primary_actions["symbol"] == iid], v, tol
-            ):
-                continue
+        acts = primary_actions[primary_actions["symbol"] == iid]
+        if _steps_follow_actions(runs, ex, acts, v, segment, precision, tol):
             adjusted.append({**row, "segments": int(levels.size)})
-        elif abs(distinct[0] - 1) > tol.close_rel:
+        elif len(distinct) == 1 and abs(distinct[0] - 1) > tol.close_rel:
             scale.append(row)
         else:
             continue
@@ -559,54 +560,112 @@ def _ratio_classes(
     )
 
 
+# A step this large (in log terms, about 10%) must also show as a jump in the raw side.
+_CONTINUITY_STEP = 0.1
+
+
+def _rounding(close: pd.Series, tol: Tolerances) -> np.ndarray:
+    """Relative rounding error of each close: half a tick (or ``close_abs``) over price."""
+    c = close.to_numpy(dtype=float)
+    floor = _half_tick(c) if tol.close_abs is None else np.full(len(c), tol.close_abs)
+    return np.asarray(floor / c, dtype=float)
+
+
 def _steps_follow_actions(
     runs: list[list[Any]],
     ex: np.ndarray,
     actions: pd.DataFrame,
     v: pd.DataFrame,
+    segment: np.ndarray,
+    precision: pd.Series,
     tol: Tolerances,
 ) -> bool:
-    """Whether every step between ratio levels is an adjustment for the actions in between.
+    """Whether the ratio levels are a back-adjustment for the actions between them.
 
-    Back-adjusting for a split of ratio ``r`` divides earlier prices by ``r``. For a cash
-    dividend ``d`` vendors use either ``1 - d / c_prev`` (the close before the ex-date) or
-    the total-return form ``1 / (1 + d / c_ex)`` (the ex-date close), so both are
-    accepted. With the adjusted series as the secondary, the ratio rises by the factor
-    ``F`` across those ex-dates; with it as the primary, it falls by ``F``. A step must
-    equal ``F`` or the split-only factor (a vendor adjusting splits only) within
-    tolerance, with every step in the same orientation.
+    The levels must end at 1 (back-adjustment leaves the latest prices raw); a last step
+    to 1 across ex-dates in the final, too-short segments is checked like the others.
+    Across the ex-dates between two levels the adjustment factor ``F`` is, per date with
+    split ``s`` and cash ``d``, ``s / (1 - d / c_prev)`` or ``s + d / c_ex`` (both forms
+    are in use; ``c`` are the *raw* side's closes before and on the ex-date), or ``s``
+    alone (a vendor adjusting splits only). With the secondary adjusted, the ratio rises
+    by ``F``; with the primary adjusted, it falls by ``F``. One orientation must explain
+    every step, within the bar tolerance plus both medians' rounding. For a step above
+    about 10% the raw side must also show the jump: its total return across the ex-dates
+    must be small next to ``F``, so a series adjusted the wrong way is not explained.
     """
     dates = v["date"].to_numpy()
-    closes = v["close_p"].to_numpy()
-    orientations = set()
-    for (lo, _, end), (hi, start, _) in pairwise(runs):
-        between = actions[actions["ex_date"].isin(ex[end:start])]
-        splits = between[between["kind"] == "split"]["value"].to_numpy(dtype=float)
-        divs = between[between["kind"] == "dividend"]
-        log_split = float(np.log(splits).sum()) if splits.size else 0.0
-        log_prev = log_ex = 0.0
-        for e, d in zip(divs["ex_date"], divs["value"], strict=True):
-            i = int(np.searchsorted(dates, np.datetime64(e), side="left"))
-            c_prev = closes[i - 1] if i >= 1 else np.nan
-            c_ex = closes[i] if i < len(closes) else np.nan
-            if not (np.isfinite(c_prev) and np.isfinite(c_ex)) or c_prev <= d or c_ex <= 0:
-                return False  # the factor is unknown, so the step cannot be explained
-            log_prev -= float(np.log1p(-d / c_prev))
-            log_ex += float(np.log1p(d / c_ex))
-        step = float(np.log(hi / lo))
-        candidates = {log_split + log_prev, log_split + log_ex, log_split}
-        near = max(2 * tol.close_rel, 0.05 * max(abs(x) for x in candidates))
-        for orient in (1, -1):
-            for expected in candidates:
-                if expected and abs(step - orient * expected) <= near:
-                    orientations.add(orient)
-                    break
-            else:
-                continue
-            break
-        else:
+    last = len(ex) + 1  # a virtual segment after every ex-date, at ratio 1
+    bounds = [*pairwise(runs), (runs[-1], [1.0, last, last])]
+    moves = [
+        abs(np.log(hi / lo)) > tol.close_rel + precision[end] + precision.get(start, 0.0)
+        for (lo, _, end), (hi, start, _) in bounds
+    ]
+    if not any(moves):
+        return False  # one level at 1: nothing to explain
+    for orient in (1, -1):
+        raw = v["close_p" if orient == 1 else "close_s"].to_numpy(dtype=float)
+        if all(
+            _step_ok(b, orient, raw, ex, actions, dates, segment, precision, tol) for b in bounds
+        ):
+            return True
+    return False
+
+
+def _step_ok(
+    bound: tuple[list[Any], list[Any]],
+    orient: int,
+    raw: np.ndarray,
+    ex: np.ndarray,
+    actions: pd.DataFrame,
+    dates: np.ndarray,
+    segment: np.ndarray,
+    precision: pd.Series,
+    tol: Tolerances,
+) -> bool:
+    (lo, _, end), (hi, start, _) = bound
+    step = orient * float(np.log(hi / lo))
+    near = tol.close_rel + float(precision[end]) + float(precision.get(start, 0.0))
+    if abs(step) <= near:
+        return True  # no adjustment across these ex-dates
+    factors = _factor_range(actions[actions["ex_date"].isin(ex[end:start])], dates, raw)
+    if factors is None:
+        return False
+    low, high, split_only = factors
+    if not (low - near <= step <= high + near or (split_only and abs(step - split_only) <= near)):
+        return False
+    if abs(step) > _CONTINUITY_STEP:
+        i0 = int(np.flatnonzero(segment == end)[-1])
+        after = np.flatnonzero(segment == start)
+        i1 = int(after[0]) if after.size else len(raw) - 1
+        total = float(np.log(raw[i1] / raw[i0])) + step  # the raw side's total return
+        if abs(total) > abs(step) / 2:
             return False
-    return len(orientations) == 1
+    return True
+
+
+def _factor_range(
+    actions: pd.DataFrame, dates: np.ndarray, raw: np.ndarray
+) -> tuple[float, float, float] | None:
+    """(low, high, split-only) log adjustment factor over ``actions``; None if unknown."""
+    low = high = split_only = 0.0
+    for e, g in actions.groupby("ex_date"):
+        s = float(g.loc[g["kind"] == "split", "value"].prod())
+        d = float(g.loc[g["kind"] == "dividend", "value"].sum())
+        split_only += float(np.log(s))
+        if d == 0:
+            low += float(np.log(s))
+            high += float(np.log(s))
+            continue
+        i = int(np.searchsorted(dates, np.datetime64(e), side="left"))
+        if i < 1 or i >= len(raw):
+            return None  # no raw close on one side of the ex-date
+        c_prev, c_ex = raw[i - 1], raw[i]
+        if not (np.isfinite(c_prev) and np.isfinite(c_ex)) or c_prev <= d or c_ex <= 0:
+            return None
+        forms = (float(np.log(s) - np.log1p(-d / c_prev)), float(np.log(s + d / c_ex)))
+        low += min(forms)
+        high += max(forms)
+    return low, high, split_only
 
 
 def _compose(actions: pd.DataFrame) -> pd.DataFrame:
