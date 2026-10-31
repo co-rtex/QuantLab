@@ -82,6 +82,11 @@ Deleting a workspace removes its files after the database commit (#21,
   the same slug and content. One is removed only when no version row references it any
   more. That is decided under the directory's advisory lock (`dataset-dir:<slug>/<hash>`),
   which `register_version` also holds from before its write through its commit.
+* Reports live per version row under `datasets/.reports/<row id>/` (#96). A deleted
+  workspace's report folders are removed with it, and the sweep collects folders whose
+  row is gone, with the same refusal rules. Files at the old shared location
+  (`<slug>/_reports/<hash>/`) are no longer served; they go when their version
+  directory does.
 * If the process dies between the commit and the deletion, only unreferenced files
   remain. The reaper's `sweep_orphans` (at most once per
   `QUANTLAB_STORAGE_SWEEP_INTERVAL_SECONDS`, default an hour) collects unreferenced

@@ -16,7 +16,10 @@ interface Loaded<T> {
 
 /**
  * Fetch-on-mount hook with optional polling. `path=null` skips the request.
- * Previous data stays visible while a new path loads (no flash of empty content).
+ * While a new path loads, the previous data stays visible only if it is the same resource
+ * with another query string (a page, a filter, a refresh): no flash of empty content. Data
+ * from another resource is never shown as this one's (#23, B7): switching workspace used
+ * to show the old workspace's lists until the new ones arrived.
  */
 export function useApi<T>(path: string | null, opts: { poll?: Poll<T> } = {}) {
   const [state, setState] = useState<Loaded<T>>({ path: null });
@@ -65,10 +68,15 @@ export function useApi<T>(path: string | null, opts: { poll?: Poll<T> } = {}) {
 
   const reload = useCallback(() => setNonce((n) => n + 1), []);
   const current = state.path === path;
+  const sameResource = path !== null && state.path !== null && resource(state.path) === resource(path);
   return {
-    data: path === null ? undefined : state.data,
+    data: current || sameResource ? state.data : undefined,
     error: current ? state.error : undefined,
     loading: path !== null && !current,
     reload,
   };
+}
+
+function resource(path: string): string {
+  return path.split("?", 1)[0];
 }

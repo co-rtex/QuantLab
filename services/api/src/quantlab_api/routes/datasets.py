@@ -207,7 +207,10 @@ def instruments(
     if sector:
         stmt = stmt.where(Instrument.sector == sector)
     total = db.scalar(select(func.count()).select_from(stmt.subquery())) or 0
-    rows = db.scalars(stmt.order_by(Instrument.symbol).limit(limit).offset(offset)).all()
+    # A total order: since #87 a reused ticker has one row per instrument, so the symbol
+    # alone ties and a page boundary could repeat or skip a row.
+    order = (Instrument.symbol, Instrument.instrument_id.asc().nulls_last(), Instrument.id)
+    rows = db.scalars(stmt.order_by(*order).limit(limit).offset(offset)).all()
     return Page(
         items=[InstrumentOut.model_validate(r) for r in rows],
         total=total,

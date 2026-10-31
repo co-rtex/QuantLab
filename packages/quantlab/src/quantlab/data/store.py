@@ -54,7 +54,9 @@ FORMAT_VERSION = 1
 ROW_GROUP_ROWS = 50_000
 # link() errors meaning the filesystem has no hard links (some network and FUSE mounts).
 _NO_HARD_LINKS = {errno.EPERM, errno.EOPNOTSUPP, errno.ENOTSUP, errno.EXDEV, errno.EMLINK}
-REPORTS_DIR = "_reports"
+REPORTS_DIR = "_reports"  # before #96: beside the shared version (legacy, not read)
+REPORTS_ROOT = ".reports"  # since #96: one directory per owner
+OWNER = re.compile(r"[0-9A-Za-z][0-9A-Za-z_-]{0,63}")
 _VERSION = re.compile(r"[0-9a-f]{64}")
 REPORT_NAME = re.compile(r"[a-z0-9][a-z0-9_-]{0,63}")
 
@@ -177,6 +179,12 @@ class DatasetStore:
         """
         cutoff = time.time() - older_than_seconds
         out = []
+        for d in _glob(self.root / REPORTS_ROOT, "*/*/.tmp-*"):  # per-owner reports (#96)
+            try:
+                if d.stat().st_mtime < cutoff:
+                    out.append(d)
+            except FileNotFoundError:
+                continue
         for slug_dir in _listing(self.root):
             if slug_dir.name.startswith("."):
                 continue
@@ -297,14 +305,31 @@ class DatasetStore:
             df = df[df["symbol"].isin([s.upper() for s in symbols])]
         return normalize_actions(df)
 
-    def _reports_dir(self, dv: DatasetVersion) -> Path:
-        # Beside the version, never inside it: a version directory is immutable.
-        return self._dir(dv.slug, dv.version).parent / REPORTS_DIR / dv.version
+    def reports_dir(self, owner: str, version: str) -> Path:
+        """Where ``owner``'s reports for ``version`` live: ``<root>/.reports/<owner>/<version>/``.
+
+        Reports belong to whoever holds the version, not to its content: a version
+        directory is shared by everyone with the same slug and content, so reports kept
+        beside it would be readable by every holder (#96). ``owner`` is an opaque id (in
+        the API, the ``DatasetVersion`` row id, unique to one workspace). The dot keeps it
+        apart from slugs, which cannot start with one.
+        """
+        if not OWNER.fullmatch(owner):
+            raise ValueError("invalid report owner")
+        if not _VERSION.fullmatch(version):
+            raise ValueError("invalid version hash")
+        return self.root / REPORTS_ROOT / owner / version
 
     def write_report(
-        self, dv: DatasetVersion, name: str, payload: dict[str, Any], *, replace: bool = False
+        self,
+        dv: DatasetVersion,
+        name: str,
+        payload: dict[str, Any],
+        *,
+        owner: str,
+        replace: bool = False,
     ) -> Path:
-        """Attach a JSON report (e.g. a reconciliation) to a version.
+        """Attach a JSON report (e.g. a reconciliation) to ``owner``'s holding of a version.
 
         An existing report of the same name is kept unless ``replace`` is True, so a
         rerun never silently overwrites the evidence of an earlier one. The payload must
@@ -312,7 +337,7 @@ class DatasetStore:
         """
         if not REPORT_NAME.fullmatch(name):
             raise ValueError(f"invalid report name {name!r}")
-        target = self._reports_dir(dv)
+        target = self.reports_dir(owner, dv.version)
         path = target / f"{name}.json"
         if path.exists() and not replace:
             raise FileExistsError(f"report {name!r} already exists for {dv.short}")
@@ -352,14 +377,15 @@ class DatasetStore:
         return path
 
     def load_reports(
-        self, dv: DatasetVersion, *, unreadable: list[str] | None = None
+        self, dv: DatasetVersion, *, owner: str, unreadable: list[str] | None = None
     ) -> dict[str, dict[str, Any]]:
-        """The version's reports by name.
+        """``owner``'s reports for the version, by name. Nobody else's are ever read.
 
         A file that is not a JSON object raises, unless ``unreadable`` is given: then it is
         skipped and its name appended there, so one corrupt file cannot hide the others.
+        Reports stored beside the shared version directory before #96 are not read.
         """
-        d = self._reports_dir(dv)
+        d = self.reports_dir(owner, dv.version)
         if not d.exists():
             return {}
         out: dict[str, dict[str, Any]] = {}
