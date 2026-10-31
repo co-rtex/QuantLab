@@ -300,8 +300,9 @@ resources and needs the user's account and approval. What differs from compose:
 * **Edge:** an NLB terminates TLS (ACM) and sends PROXY protocol v2 to Caddy, which
   accepts that header only from the NLB's subnets and overwrites `X-Forwarded-For` with the
   stated client (`infra/terraform/edge/Caddyfile`). Run `infra/edge/verify.sh` against the
-  public name before announcing it. That Caddyfile has not been checked with
-  `caddy adapt` yet; do that before building the edge image.
+  public name before announcing it. That Caddyfile passes local checks
+  (`infra/terraform/edge/check-proxy-protocol.sh`: adapt, validate, PROXY v1/v2), but it
+  has not been verified behind a real NLB (#39).
 * **Trusted proxies:** the web tier runs in its own subnets, and
   `QUANTLAB_TRUSTED_PROXIES` is exactly those CIDRs. Never schedule other tasks there.
 * **Data directory:** EFS, mounted by api, worker **and reaper** (the reaper's sweeps and

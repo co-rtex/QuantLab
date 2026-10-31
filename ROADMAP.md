@@ -23,7 +23,7 @@ Dependency-ordered. ✅ done and verified · 🔶 partial · ⬜ not started.
 | 8 | Grounded research assistant + deterministic fallback + eval suite | ✅ (hosted-model eval pending credentials) |
 | 8 | Report export (HTML/Markdown) | ✅ |
 | 9 | OpenTelemetry tracing (request → job, verified in Jaeger), Prometheus/Grafana dashboard, runbook | ✅ |
-| 9 | Terraform for a cloud deployment (validated, not applied) | ⬜ |
+| 9 | Terraform for a cloud deployment (validated, not applied) | 🔶 validated (#113); Caddyfiles checked locally (#158); never applied |
 | 9 | Benchmarks harness: engine, retrieval, cache, API, concurrent load, worker scaling | ✅ |
 | 10 | Case study: momentum vs passive after costs, out of sample (docs/CASE_STUDY.md) | ✅ |
 | 10 | Fresh-context financial-core review (10 findings, fixed with regression tests) | ✅ |
@@ -58,14 +58,14 @@ Owners, file ownership and migration slots: [docs/COORDINATION.md](docs/COORDINA
 | P1 | ✅ #35 Research-correctness suite (#36) | Agent 3 | — |
 | P2 | #41 Review follow-ups for #29, #30, #31, #36 | Agent 3 | — |
 | P1 | ✅ #16 E2E flake: the root cause was a `useApi` poll stopping on a transient error (#99) | Agent 2 | — |
-| P1 | #17 Playwright E2E in CI | Lead | #16 |
+| P1 | 🔶 #17 Playwright E2E in CI: runs on relevant PRs (#159); not yet required | Lead | user |
 | P1 | #15 Assistant: ✅ verifier (#74); hosted eval blocked on key; false rejects #79 | Agent 2 | key |
 | P1 | ✅ #18 Frontend error surfacing (#83) | Agent 2 | — |
-| P1 | ✅ #19 Terraform, validated and never applied (#113); the Caddyfile is not validated | Agent 3 | — |
+| P1 | ✅ #19 Terraform, validated and never applied (#113); Caddyfiles checked locally only (#158) | Agent 3 | — |
 | P1 | #20 External load test (needs a separate host) | Unassigned | — |
 | P1 | ✅ #21 Storage lifecycle on workspace deletion (#97) | Agent 3 | — |
 | P2 | ✅ #8 Security hardening (#38, #64, #65, #70, #75) | Agent 2 | — |
 | P2 | ✅ #22 Per-worktree isolation hardening (#44, #71, #81) | Lead | — |
 | P2 | ✅ #23 Frontend completeness and synthetic labels (#100–#114) | Agent 2 | — |
-| P2 | #24 Benchmark methodology, golden tests | Unassigned | — |
+| P2 | ✅ #24 Benchmark methodology (#110) and quiet-window figures for small and medium (#161); large waits on #160 | Agent 3 | — |
 | P2 | ✅ #25 Job-deletion semantics: ADR-0011 plus a guard test (#78) | Lead | — |
