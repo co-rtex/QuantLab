@@ -627,7 +627,7 @@ def _redeliver_when_due(job_id: uuid.UUID) -> None:
         job = db.get(Job, job_id)
         if job is None or job.status != JobStatus.queued or job.cancel_requested:
             return
-        t = db.scalar(select(func.now()))
+        t = db.scalar(select(db_now()))
         if job.not_before is not None and t is not None and job.not_before > t:
             # One delivery per due time: k early (or forged) deliveries reschedule it once.
             due = job.not_before
@@ -635,8 +635,10 @@ def _redeliver_when_due(job_id: uuid.UUID) -> None:
             delivery = f"{job.id}-{round(due.timestamp() * 1_000_000)}"
             running = get_current_job()
             if running is not None and running.id == delivery:
-                # This entry is that delivery, arriving early: rescheduling under its own
-                # name would overwrite the entry being run, which RQ then marks finished.
+                # This entry is that delivery, arriving early. Under its own name the
+                # reschedule shares the hash of the entry being run: RQ 3.0 still delivers
+                # it when due, but the worker marks it finished in the meantime, so the
+                # queue shows a pending delivery as done. Another name keeps them apart.
                 delivery += "-again"
             enqueue(job, delay_seconds=(due - t).total_seconds(), delivery_id=delivery)
 
@@ -836,8 +838,9 @@ def reap(redeliver_after_seconds: int = 120) -> dict[str, int]:
     with SessionLocal() as db:
         # The database's time, not this host's (#130): leases and backoffs were written in
         # it, and a reaper with a fast clock would otherwise requeue live jobs.
-        t = db.scalar(select(func.now()))
-        assert t is not None
+        t = db.scalar(select(db_now()))
+        if t is None:  # not an assert: those are stripped under -O
+            raise RuntimeError("the database returned no time")
         stale = db.scalars(
             select(Job)
             .where(Job.status == JobStatus.running, Job.lease_expires_at < t)
