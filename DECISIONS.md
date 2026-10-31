@@ -132,6 +132,8 @@ verification, and that needs a way to deliver mail.
 **Decision (2026-10-31, #55).** Keep the 409 for now (option B). Revisit with option A,
 uniform registration plus email verification through the `Notifier` interface, once a real
 email adapter exists; the lead takes A to the user as a product decision.
+**User decision (2026-10-31): option A is deferred.** The 409 and the bounds below remain
+the accepted risk until the user reopens it.
 **Why.** Without a mail adapter, option A has no production delivery path: it needs a
 development-only token outbox, the kind of plaintext store removed from #37. It would also
 change every sign-up flow and test.
