@@ -1,7 +1,7 @@
 "use client";
 
 import { useRouter, useSearchParams } from "next/navigation";
-import { Suspense, useMemo, useState, type FormEvent } from "react";
+import { Suspense, useMemo, useRef, useState, type FormEvent } from "react";
 import { PageHeader } from "@/components/Shell";
 import { ErrorNote, Panel, QueryError, Skeleton } from "@/components/ui";
 import {
@@ -14,10 +14,15 @@ import {
   type JsonSchemaProp,
   type StrategyCatalogEntry,
 } from "@/lib/api";
-import { shortHash } from "@/lib/format";
+import { dateTime, shortHash } from "@/lib/format";
 import { useInstruments } from "@/lib/instruments";
 import { useApi } from "@/lib/useApi";
 import { useWorkspace } from "@/lib/workspace";
+
+/** Whether the builder can show and edit a parameter (enumerations and numbers). */
+function editable(prop: JsonSchemaProp): boolean {
+  return !!prop.enum || prop.type === "integer" || prop.type === "number";
+}
 
 function ParamField({ name, prop, value, onChange }: { name: string; prop: JsonSchemaProp; value: unknown; onChange: (v: unknown) => void }) {
   const label = prop.title ?? name.replaceAll("_", " ");
@@ -83,25 +88,69 @@ function Builder() {
   const [values, setValues] = useState<Record<string, unknown>>({});
   // Saved strategies (#23): a named strategy and parameters, to start experiments from.
   const saved = useApi<SavedStrategy[]>(ws ? `/workspaces/${ws}/strategies` : null);
-  const [savedId, setSavedId] = useState("");
+  // The chosen saved strategy belongs to the workspace it was chosen in.
+  const [pick, setPick] = useState<{ ws?: string; id: string }>({ id: "" });
+  const savedId = pick.ws === ws ? pick.id : "";
+  const setSavedId = (id: string) => setPick({ ws, id });
+  const [loadErr, setLoadErr] = useState<Error>();
+  const [deleting, setDeleting] = useState(false);
+  // In flight, synchronously: a second click handled before React re-renders still sees it.
+  const deletingNow = useRef(false);
+  const savingNow = useRef(false);
   const [saveName, setSaveName] = useState("");
   const [saving, setSaving] = useState(false);
   const [savedMsg, setSavedMsg] = useState<string>();
   const canEdit = workspace?.role === "owner" || workspace?.role === "editor";
 
+  /**
+   * Load a saved strategy into the form, but only what the form can show (#111): every
+   * parameter that is sent must be visible. A strategy kind that no longer exists, or a
+   * parameter the form cannot render, refuses the load; a parameter the strategy no
+   * longer has is dropped, and the user is told.
+   */
   function load(id: string) {
-    setSavedId(id);
+    setLoadErr(undefined);
+    setSavedMsg(undefined);
     const s = saved.data?.find((x) => x.id === id);
-    if (!s) return;
+    if (!s) {
+      setSavedId("");
+      return;
+    }
+    const entry = catalog.data?.find((c) => c.key === s.strategy_key);
+    if (!entry) {
+      setSavedId("");
+      setLoadErr(new Error(`${s.name} uses a strategy (${s.strategy_key}) that is no longer available, so it was not loaded.`));
+      return;
+    }
+    const props = entry.params_schema.properties ?? {};
+    const kept: Record<string, unknown> = {};
+    const dropped: string[] = [];
+    for (const [name, value] of Object.entries(s.params)) {
+      const prop = props[name];
+      if (!prop) {
+        dropped.push(name);
+      } else if (!editable(prop)) {
+        setSavedId("");
+        setLoadErr(new Error(`${s.name} sets ${name}, which cannot be shown or edited here, so it was not loaded. Nothing that would be sent can be hidden from you.`));
+        return;
+      } else {
+        kept[name] = value;
+      }
+    }
+    setSavedId(id);
     setKey(s.strategy_key);
-    setValues({ ...s.params });
-    setSavedMsg(`Loaded ${s.name}. Change anything before running it.`);
+    setValues(kept);
+    const note = dropped.length
+      ? ` Saved parameter${dropped.length > 1 ? "s" : ""} ${dropped.join(", ")} ${dropped.length > 1 ? "are" : "is"} no longer supported and ${dropped.length > 1 ? "were" : "was"} not loaded.`
+      : "";
+    setSavedMsg(`Loaded ${s.name}.${note} Change anything before running it.`);
   }
 
   async function saveStrategy() {
     const name = saveName.trim();
-    if (!ws || !name || saving) return;
+    if (!ws || !name || savingNow.current) return;
     setErr(undefined);
+    savingNow.current = true;
     setSaving(true);
     try {
       const params = Object.fromEntries(Object.entries(values).filter(([, v]) => v !== undefined));
@@ -113,13 +162,16 @@ function Builder() {
     } catch (e) {
       setErr(e as ApiError);
     }
+    savingNow.current = false;
     setSaving(false);
   }
 
   async function deleteSaved() {
     const s = saved.data?.find((x) => x.id === savedId);
-    if (!ws || !s || !window.confirm(`Delete the saved strategy ${s.name}? Experiments already run from it are kept.`)) return;
+    if (deletingNow.current || !ws || !s || !window.confirm(`Delete the saved strategy ${s.name}? Experiments already run from it are kept.`)) return;
     setErr(undefined);
+    deletingNow.current = true; // a second click must not send another DELETE (and show its 404)
+    setDeleting(true);
     try {
       await api(`/workspaces/${ws}/strategies/${s.id}`, { method: "DELETE" });
       setSavedId("");
@@ -127,6 +179,9 @@ function Builder() {
       setSavedMsg(`Deleted ${s.name}.`);
     } catch (e) {
       setErr(e as ApiError);
+    } finally {
+      deletingNow.current = false;
+      setDeleting(false);
     }
   }
   const [err, setErr] = useState<ApiError>();
@@ -197,6 +252,7 @@ function Builder() {
         <Panel title="Strategy">
           <div className="mb-4 space-y-2 rounded border border-rule p-3">
             <QueryError q={saved} what="saved strategies" />
+            <ErrorNote error={loadErr} />
             <div className="flex flex-wrap items-end gap-2">
               <label className="min-w-56 flex-1">
                 <span className="mb-1 block">Start from a saved strategy</span>
@@ -205,13 +261,15 @@ function Builder() {
                   {saved.data?.map((s) => (
                     <option key={s.id} value={s.id}>
                       {s.name} · {catalog.data?.find((c) => c.key === s.strategy_key)?.name ?? s.strategy_key}
+                      {/* Same name twice: tell them apart by when they were saved. */}
+                      {saved.data && saved.data.filter((x) => x.name === s.name).length > 1 ? ` · saved ${dateTime(s.created_at)}` : ""}
                     </option>
                   ))}
                 </select>
               </label>
               {canEdit && savedId && (
-                <button type="button" className="btn btn-quiet" onClick={deleteSaved}>
-                  Delete saved strategy
+                <button type="button" className="btn btn-quiet" onClick={deleteSaved} aria-busy={deleting} aria-disabled={deleting}>
+                  {deleting ? "Deleting…" : "Delete saved strategy"}
                 </button>
               )}
             </div>
@@ -226,7 +284,7 @@ function Builder() {
                     onChange={(e) => setSaveName(e.target.value)}
                     onKeyDown={(e) => {
                       // Inside the backtest form: Enter saves, it does not run the backtest.
-                      if (e.key === "Enter") {
+                      if (e.key === "Enter" && !e.nativeEvent.isComposing) {
                         e.preventDefault();
                         void saveStrategy();
                       }
