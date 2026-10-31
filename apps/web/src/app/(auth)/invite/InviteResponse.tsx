@@ -53,6 +53,7 @@ function explain(e: unknown): string {
   if (e instanceof ApiError) {
     if (e.code === "invitation_expired") return "This invitation has expired. Ask the workspace owner to send a new one.";
     if (e.code === "invitation_used") return "This invitation has already been used, declined or withdrawn.";
+    if (e.code === "invitation_withdrawn") return "This invitation was withdrawn. Ask a workspace owner for a new one.";
     if (e.code === "invitation_not_found")
       return "This invitation is not valid for the account you are signed in with. Sign in with the invited email address.";
     return e.message;
@@ -83,6 +84,7 @@ export function InviteResponse() {
         const preview = await api<Preview>("/auth/invitations/preview", { method: "POST", json: { token } });
         setState({ kind: "ready", user, preview, token });
       } catch (e) {
+        if (e instanceof ApiError && e.status >= 400 && e.status < 500) forget(); // final answer
         setState({ kind: "error", message: explain(e), user });
       }
     })();
@@ -100,6 +102,7 @@ export function InviteResponse() {
           : { kind: "done", message: "Invitation declined." },
       );
     } catch (e) {
+      if (e instanceof ApiError && e.status >= 400 && e.status < 500) forget(); // final answer
       setState({ kind: "error", message: explain(e), user: state.user });
     } finally {
       setBusy(false);

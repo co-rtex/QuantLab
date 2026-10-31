@@ -106,11 +106,6 @@ def clean(database: None) -> Iterator[None]:
         c.execute(text("TRUNCATE " + ", ".join(TABLES) + " RESTART IDENTITY CASCADE"))
     set_redis(fakeredis.FakeRedis())
     login_limiter.reset()
-    import shutil
-
-    from quantlab_api.config import get_settings
-
-    shutil.rmtree(get_settings().data_dir / "outbox", ignore_errors=True)
     yield
 
 
@@ -135,11 +130,9 @@ def register(client, email: str = "alice@example.com", password: str = "Correct-
     return {"Authorization": f"Bearer {token}"}
 
 
-def invitation_token(client, invitee) -> str:  # type: ignore[no-untyped-def]
-    """The newest invitation token delivered to the invitee (development mailbox)."""
-    mail = client.get("/api/v1/auth/invitations/dev-mailbox", headers=invitee)
-    assert mail.status_code == 200, mail.text
-    return str(mail.json()[-1]["accept_path"].split("#token=", 1)[1])
+def accept_token(response) -> str:  # type: ignore[no-untyped-def]
+    """The token in a created invitation's accept link (shown once, to the owner)."""
+    return str(response.json()["accept_path"].split("#token=", 1)[1])
 
 
 def join_workspace(client, owner, ws, invitee, email, role="viewer"):  # type: ignore[no-untyped-def]
@@ -148,7 +141,7 @@ def join_workspace(client, owner, ws, invitee, email, role="viewer"):  # type: i
         f"/api/v1/workspaces/{ws}/invitations", headers=owner, json={"email": email, "role": role}
     )
     assert r.status_code == 201, r.text
-    token = invitation_token(client, invitee)
+    token = accept_token(r)
     r = client.post("/api/v1/auth/invitations/accept", headers=invitee, json={"token": token})
     assert r.status_code == 200, r.text
     return r.json()

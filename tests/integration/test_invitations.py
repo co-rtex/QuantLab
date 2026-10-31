@@ -12,7 +12,7 @@ from typing import Any
 import pytest
 from sqlalchemy import event, select
 
-from tests.integration.conftest import invitation_token, join_workspace, register, workspace_id
+from tests.integration.conftest import accept_token, join_workspace, register, workspace_id
 
 ACCEPT = "/api/v1/auth/invitations/accept"
 DECLINE = "/api/v1/auth/invitations/decline"
@@ -25,9 +25,19 @@ def _invite(client, owner, ws, email, role="viewer"):  # type: ignore[no-untyped
     )
 
 
+def _token(client, owner, ws, email, role="viewer") -> str:  # type: ignore[no-untyped-def]
+    r = _invite(client, owner, ws, email, role)
+    assert r.status_code == 201, r.text
+    return accept_token(r)
+
+
 def _members(client, owner, ws) -> dict[str, str]:  # type: ignore[no-untyped-def]
     r = client.get(f"/api/v1/workspaces/{ws}/members", headers=owner)
     return {m["email"]: m["role"] for m in r.json()}
+
+
+def _uid(client, headers) -> str:  # type: ignore[no-untyped-def]
+    return str(client.get("/api/v1/auth/me", headers=headers).json()["id"])
 
 
 @pytest.fixture
@@ -38,17 +48,27 @@ def team(client):  # type: ignore[no-untyped-def]
     return {"owner": owner, "ws": ws, "bob": bob}
 
 
+@pytest.fixture
+def no_invite_limits(monkeypatch):  # type: ignore[no-untyped-def]
+    from quantlab_api.routes import invitations as routes
+
+    for name in (
+        "INVITES_PER_HOUR_PER_INVITER",
+        "INVITES_PER_HOUR_PER_WORKSPACE",
+        "INVITES_PER_HOUR_PER_ADDRESS",
+    ):
+        monkeypatch.setattr(routes, name, 10_000)
+
+
 # ------------------------------------------------------------------- enumeration
 def test_invite_response_is_identical_for_registered_and_unknown_addresses(client, team):
     known = _invite(client, team["owner"], team["ws"], "bob@example.com")
     unknown = _invite(client, team["owner"], team["ws"], "nobody@example.com")
     assert known.status_code == unknown.status_code == 201
+    varying = {"id", "email", "created_at", "expires_at", "accept_path"}
 
     def shape(r):  # type: ignore[no-untyped-def]
-        body = r.json()
-        return {
-            k: v for k, v in body.items() if k not in {"id", "email", "created_at", "expires_at"}
-        }
+        return {k: v for k, v in r.json().items() if k not in varying}
 
     assert shape(known) == shape(unknown) == {"role": "viewer", "status": "pending"}
     assert set(known.json()) == set(unknown.json())
@@ -56,66 +76,51 @@ def test_invite_response_is_identical_for_registered_and_unknown_addresses(clien
 
 
 def test_creating_an_invitation_never_reads_the_users_table(client, team):
-    """The structural guarantee behind uniform timing: no query depends on whether the
-    address has an account."""
+    """The structural guarantee behind uniform timing: the same statements run whether or
+    not the address has an account, and none of them looks it up."""
     from quantlab_api.db import SessionLocal
 
     with SessionLocal() as probe:
         engine = probe.get_bind()
-    statements: list[str] = []
+    sequences: list[list[str]] = []
 
     def record(conn: Any, cursor: Any, statement: str, *args: Any) -> None:
-        statements.append(statement)
+        sequences[-1].append(statement)
 
     event.listen(engine, "before_cursor_execute", record)
-    sequences = []
     try:
         for email in ("bob@example.com", "nobody@example.com"):
-            statements.clear()
-            sequences.append(statements)
+            sequences.append([])
             assert _invite(client, team["owner"], team["ws"], email).status_code == 201
-            # Authentication reads the *inviter's* row by primary key; nothing else may.
-            users = [" ".join(s.split()) for s in statements if "users" in s]
-            assert len(users) == 1, users
-            assert users[0].endswith("FROM users WHERE users.id = %(pk_1)s::UUID"), users
-            statements = []
     finally:
         event.remove(engine, "before_cursor_execute", record)
-    # Same statements, in the same order, for a registered and an unknown address.
+    for statements in sequences:
+        # Authentication reads the *inviter's* row by primary key; nothing else may.
+        users = [" ".join(s.split()) for s in statements if "users" in s]
+        assert len(users) == 1, users
+        assert users[0].endswith("FROM users WHERE users.id = %(pk_1)s::UUID"), users
     assert sequences[0] == sequences[1]
 
 
-def test_invite_timing_does_not_depend_on_registration(client, team, monkeypatch):
-    from quantlab_api.routes import invitations as routes
-
-    monkeypatch.setattr(routes, "INVITES_PER_HOUR_PER_INVITER", 1000)
-    monkeypatch.setattr(routes, "INVITES_PER_HOUR_PER_WORKSPACE", 1000)
-
-    def median_ms(email_for) -> float:  # type: ignore[no-untyped-def]
-        samples = []
-        for i in range(15):
-            t0 = time.perf_counter()
-            assert _invite(client, team["owner"], team["ws"], email_for(i)).status_code == 201
-            samples.append((time.perf_counter() - t0) * 1000)
-        return statistics.median(samples)
-
-    # Same number of registered and unknown targets, interleaved to share any drift.
+def test_invite_timing_does_not_depend_on_registration(client, team, no_invite_limits):
     for i in range(15):
         register(client, f"known{i}@example.com")
-    known = median_ms(lambda i: f"known{i}@example.com")
-    unknown = median_ms(lambda i: f"unknown{i}@example.com")
+    samples: dict[str, list[float]] = {"known": [], "unknown": []}
+    for i in range(15):  # interleaved, so both groups share any drift
+        for group in ("known", "unknown"):
+            t0 = time.perf_counter()
+            r = _invite(client, team["owner"], team["ws"], f"{group}{i}@example.com")
+            samples[group].append((time.perf_counter() - t0) * 1000)
+            assert r.status_code == 201
+    known, unknown = (statistics.median(samples[g]) for g in ("known", "unknown"))
     assert abs(known - unknown) < max(5.0, 0.25 * min(known, unknown)), (known, unknown)
 
 
 # ----------------------------------------------------------------------- consent
 def test_membership_exists_only_after_the_invitee_accepts(client, team):
-    assert (
-        _invite(client, team["owner"], team["ws"], "bob@example.com", "editor").status_code == 201
-    )
+    token = _token(client, team["owner"], team["ws"], "bob@example.com", "editor")
     assert "bob@example.com" not in _members(client, team["owner"], team["ws"])
-    bob_ws = client.get(f"/api/v1/workspaces/{team['ws']}", headers=team["bob"])
-    assert bob_ws.status_code == 404
-    token = invitation_token(client, team["bob"])
+    assert client.get(f"/api/v1/workspaces/{team['ws']}", headers=team["bob"]).status_code == 404
     preview = client.post(PREVIEW, headers=team["bob"], json={"token": token})
     assert preview.status_code == 200
     assert preview.json()["role"] == "editor"
@@ -126,11 +131,9 @@ def test_membership_exists_only_after_the_invitee_accepts(client, team):
 
 
 def test_declined_invitation_adds_no_member_and_cannot_be_accepted(client, team):
-    _invite(client, team["owner"], team["ws"], "bob@example.com")
-    token = invitation_token(client, team["bob"])
+    token = _token(client, team["owner"], team["ws"], "bob@example.com")
     assert client.post(DECLINE, headers=team["bob"], json={"token": token}).status_code == 204
-    again = client.post(ACCEPT, headers=team["bob"], json={"token": token})
-    assert again.status_code == 409
+    assert client.post(ACCEPT, headers=team["bob"], json={"token": token}).status_code == 409
     assert "bob@example.com" not in _members(client, team["owner"], team["ws"])
 
 
@@ -143,10 +146,17 @@ def test_direct_add_member_is_gone(client, team):
     assert r.status_code == 405
 
 
+def test_accept_link_is_shown_once(client, team):
+    created = _invite(client, team["owner"], team["ws"], "bob@example.com")
+    assert created.json()["accept_path"].startswith("/invite#token=")
+    listed = client.get(f"/api/v1/workspaces/{team['ws']}/invitations", headers=team["owner"])
+    assert "accept_path" not in listed.json()[0]
+    assert accept_token(created) not in listed.text
+
+
 # ------------------------------------------------------------ token lifecycle
 def test_token_is_single_use(client, team):
-    _invite(client, team["owner"], team["ws"], "bob@example.com")
-    token = invitation_token(client, team["bob"])
+    token = _token(client, team["owner"], team["ws"], "bob@example.com")
     assert client.post(ACCEPT, headers=team["bob"], json={"token": token}).status_code == 200
     replay = client.post(ACCEPT, headers=team["bob"], json={"token": token})
     assert replay.status_code == 409
@@ -159,8 +169,7 @@ def test_expired_token_is_rejected(client, team):
     from quantlab_api.db import SessionLocal
     from quantlab_api.invitations import Invitation
 
-    _invite(client, team["owner"], team["ws"], "bob@example.com")
-    token = invitation_token(client, team["bob"])
+    token = _token(client, team["owner"], team["ws"], "bob@example.com")
     with SessionLocal() as db:
         db.execute(update(Invitation).values(expires_at=datetime.now(UTC) - timedelta(seconds=1)))
         db.commit()
@@ -173,22 +182,20 @@ def test_expired_token_is_rejected(client, team):
 
 
 def test_revoked_token_is_rejected(client, team):
-    inv = _invite(client, team["owner"], team["ws"], "bob@example.com").json()
-    token = invitation_token(client, team["bob"])
+    created = _invite(client, team["owner"], team["ws"], "bob@example.com")
     revoke = client.delete(
-        f"/api/v1/workspaces/{team['ws']}/invitations/{inv['id']}", headers=team["owner"]
+        f"/api/v1/workspaces/{team['ws']}/invitations/{created.json()['id']}",
+        headers=team["owner"],
     )
     assert revoke.status_code == 204
-    r = client.post(ACCEPT, headers=team["bob"], json={"token": token})
+    r = client.post(ACCEPT, headers=team["bob"], json={"token": accept_token(created)})
     assert r.status_code == 409
     assert "bob@example.com" not in _members(client, team["owner"], team["ws"])
 
 
 def test_reinvite_rotates_the_token(client, team):
-    _invite(client, team["owner"], team["ws"], "bob@example.com", "viewer")
-    old = invitation_token(client, team["bob"])
-    _invite(client, team["owner"], team["ws"], "bob@example.com", "editor")
-    new = invitation_token(client, team["bob"])
+    old = _token(client, team["owner"], team["ws"], "bob@example.com", "viewer")
+    new = _token(client, team["owner"], team["ws"], "bob@example.com", "editor")
     assert old != new
     assert client.post(ACCEPT, headers=team["bob"], json={"token": old}).status_code == 409
     assert client.post(ACCEPT, headers=team["bob"], json={"token": new}).status_code == 200
@@ -200,13 +207,12 @@ def test_reinvite_rotates_the_token(client, team):
     [
         lambda t: t[:-1] + ("A" if t[-1] != "A" else "B"),
         lambda t: t[1:] + "x",
-        lambda t: t.upper(),
+        lambda t: t.swapcase(),
         lambda t: "x" * 43,
     ],
 )
 def test_tampered_tokens_are_rejected(client, team, mutate):
-    _invite(client, team["owner"], team["ws"], "bob@example.com")
-    token = invitation_token(client, team["bob"])
+    token = _token(client, team["owner"], team["ws"], "bob@example.com")
     r = client.post(ACCEPT, headers=team["bob"], json={"token": mutate(token)})
     assert r.status_code == 404
     assert r.json()["error"]["code"] == "invitation_not_found"
@@ -215,14 +221,16 @@ def test_tampered_tokens_are_rejected(client, team, mutate):
 
 def test_token_for_another_account_reveals_nothing(client, team):
     """Registration does not verify email ownership, so the token alone is not enough:
-    the signed-in account must be the invited address."""
-    _invite(client, team["owner"], team["ws"], "bob@example.com")
-    token = invitation_token(client, team["bob"])
+    the signed-in account must be the invited address. The answer is the same as for a
+    token that does not exist."""
+    token = _token(client, team["owner"], team["ws"], "bob@example.com")
     mallory = register(client, "mallory@example.com")
     for path in (PREVIEW, ACCEPT, DECLINE):
-        r = client.post(path, headers=mallory, json={"token": token})
-        assert r.status_code == 404, path
-        assert "workspace" not in r.text.lower() or "owner" not in r.text
+        stolen = client.post(path, headers=mallory, json={"token": token})
+        unknown = client.post(path, headers=mallory, json={"token": "y" * 43})
+        assert stolen.status_code == unknown.status_code == 404, path
+        strip = lambda r: {k: v for k, v in r.json()["error"].items() if k != "request_id"}  # noqa: E731
+        assert strip(stolen) == strip(unknown)
     assert "mallory@example.com" not in _members(client, team["owner"], team["ws"])
     # Bob can still accept: Mallory's attempts did not consume the invitation.
     assert client.post(ACCEPT, headers=team["bob"], json={"token": token}).status_code == 200
@@ -231,12 +239,10 @@ def test_token_for_another_account_reveals_nothing(client, team):
 def test_unauthenticated_invitee_endpoints_require_login(client, team):
     for path in (PREVIEW, ACCEPT, DECLINE):
         assert client.post(path, json={"token": "x" * 43}).status_code == 401
-    assert client.get("/api/v1/auth/invitations/dev-mailbox").status_code == 401
 
 
 def test_email_match_is_case_insensitive(client, team):
-    assert _invite(client, team["owner"], team["ws"], "Bob@Example.COM").status_code == 201
-    token = invitation_token(client, team["bob"])
+    token = _token(client, team["owner"], team["ws"], "Bob@Example.COM")
     assert client.post(ACCEPT, headers=team["bob"], json={"token": token}).status_code == 200
 
 
@@ -245,15 +251,39 @@ def test_tokens_are_stored_only_as_hashes(client, team):
     from quantlab_api.invitations import Invitation, hash_token
     from quantlab_api.models import AuditEvent
 
-    created = _invite(client, team["owner"], team["ws"], "bob@example.com")
-    token = invitation_token(client, team["bob"])
-    assert token not in created.text
+    token = _token(client, team["owner"], team["ws"], "bob@example.com")
     assert len(token) >= 43  # 256 bits, base64url
     with SessionLocal() as db:
         inv = db.scalar(select(Invitation))
         assert inv is not None and inv.token_hash == hash_token(token) != token
         details = [str(a.details) for a in db.scalars(select(AuditEvent))]
     assert not any(token in d for d in details)
+
+
+def test_delivery_failure_does_not_log_the_token(client, team, monkeypatch, capsys):
+    """Tracebacks are logged with frame locals; the failure path must not log one."""
+    from quantlab_api import invitations
+
+    sent: list[str] = []
+
+    class Broken:
+        def send_invitation(self, message: Any) -> None:
+            sent.append(message.accept_path)
+            raise ConnectionError("mail relay down")
+
+    real = invitations.notifier
+    monkeypatch.setattr(invitations, "notifier", Broken())
+    r = _invite(client, team["owner"], team["ws"], "bob@example.com")
+    assert r.status_code == 502
+    token = sent[0].split("#token=", 1)[1]
+    out = capsys.readouterr()
+    assert "invitation_delivery_failed" in out.out + out.err
+    assert token not in out.out + out.err
+    # Resending works.
+    monkeypatch.setattr(invitations, "notifier", real)
+    retry = _invite(client, team["owner"], team["ws"], "bob@example.com")
+    assert retry.status_code == 201
+    assert client.post(ACCEPT, headers=team["bob"], json={"token": accept_token(retry)}).is_success
 
 
 def test_concurrent_accepts_admit_exactly_once(client, team):
@@ -263,8 +293,7 @@ def test_concurrent_accepts_admit_exactly_once(client, team):
     from quantlab_api.main import app
     from quantlab_api.models import WorkspaceMember
 
-    _invite(client, team["owner"], team["ws"], "bob@example.com", "editor")
-    token = invitation_token(client, team["bob"])
+    token = _token(client, team["owner"], team["ws"], "bob@example.com", "editor")
     codes: list[int] = []
     barrier = threading.Barrier(8)
 
@@ -286,6 +315,53 @@ def test_concurrent_accepts_admit_exactly_once(client, team):
     assert len(rows) == 2  # owner + bob, once
 
 
+# ------------------------------------------------------- the inviter's authority
+@pytest.mark.parametrize("change", ["demote", "remove"])
+def test_invitations_die_with_the_inviters_ownership(client, team, change):
+    """A rogue owner's invitation must not outlive their removal: otherwise an accomplice
+    could accept later as owner and take the workspace over."""
+    rogue = register(client, "rogue@example.com")
+    join_workspace(client, team["owner"], team["ws"], rogue, "rogue@example.com", "owner")
+    accomplice = register(client, "accomplice@example.com")
+    token = _token(client, rogue, team["ws"], "accomplice@example.com", "owner")
+    pending = _token(client, rogue, team["ws"], "later@example.com", "owner")
+    url = f"/api/v1/workspaces/{team['ws']}/members/{_uid(client, rogue)}"
+    if change == "demote":
+        assert client.patch(url, headers=team["owner"], json={"role": "viewer"}).status_code == 200
+    else:
+        assert client.delete(url, headers=team["owner"]).status_code == 204
+    for path in (PREVIEW, ACCEPT):
+        r = client.post(path, headers=accomplice, json={"token": token})
+        assert r.status_code == 409, (path, r.text)
+    assert "accomplice@example.com" not in _members(client, team["owner"], team["ws"])
+    listed = client.get(f"/api/v1/workspaces/{team['ws']}/invitations", headers=team["owner"])
+    assert listed.json() == []  # the rogue's other invitation was withdrawn too
+    later = register(client, "later@example.com")
+    assert client.post(ACCEPT, headers=later, json={"token": pending}).status_code == 409
+
+
+def test_withdrawn_check_covers_invitations_from_before_the_revocation_hook(client, team):
+    """Even if an inviter lost owner some other way, accept re-checks under a lock."""
+    from sqlalchemy import update
+
+    from quantlab_api.db import SessionLocal
+    from quantlab_api.models import Role, WorkspaceMember
+
+    rogue = register(client, "rogue@example.com")
+    join_workspace(client, team["owner"], team["ws"], rogue, "rogue@example.com", "owner")
+    token = _token(client, rogue, team["ws"], "bob@example.com", "owner")
+    with SessionLocal() as db:
+        db.execute(
+            update(WorkspaceMember)
+            .where(WorkspaceMember.user_id == uuid.UUID(_uid(client, rogue)))
+            .values(role=Role.editor)
+        )
+        db.commit()
+    r = client.post(ACCEPT, headers=team["bob"], json={"token": token})
+    assert r.status_code == 409
+    assert r.json()["error"]["code"] == "invitation_withdrawn"
+
+
 # ------------------------------------------------------------------ authorization
 def test_authorization_matrix(client, team):
     viewer = register(client, "viewer@example.com")
@@ -295,11 +371,11 @@ def test_authorization_matrix(client, team):
     join_workspace(client, team["owner"], team["ws"], editor, "editor@example.com", "editor")
     inv = _invite(client, team["owner"], team["ws"], "x@example.com").json()
     base = f"/api/v1/workspaces/{team['ws']}/invitations"
+    bob_id = _uid(client, team["bob"])
     for who, expected in ((outsider, 404), (viewer, 403), (editor, 403)):
         assert _invite(client, who, team["ws"], "y@example.com").status_code == expected
         assert client.get(base, headers=who).status_code == expected
         assert client.delete(f"{base}/{inv['id']}", headers=who).status_code == expected
-        bob_id = client.get("/api/v1/auth/me", headers=team["bob"]).json()["id"]
         patch = client.patch(
             f"/api/v1/workspaces/{team['ws']}/members/{bob_id}", headers=who, json={"role": "owner"}
         )
@@ -310,35 +386,32 @@ def test_authorization_matrix(client, team):
 def test_owner_cannot_revoke_another_workspaces_invitation(client, team):
     other = register(client, "other-owner@example.com")
     other_ws = workspace_id(client, other)
-    inv = _invite(client, other, other_ws, "bob@example.com").json()
-    # Owner of team["ws"] uses its own workspace id with a foreign invitation id.
+    created = _invite(client, other, other_ws, "bob@example.com")
     r = client.delete(
-        f"/api/v1/workspaces/{team['ws']}/invitations/{inv['id']}", headers=team["owner"]
+        f"/api/v1/workspaces/{team['ws']}/invitations/{created.json()['id']}",
+        headers=team["owner"],
     )
     assert r.status_code == 404
-    token = invitation_token(client, team["bob"])
+    token = accept_token(created)
     assert client.post(ACCEPT, headers=team["bob"], json={"token": token}).status_code == 200
 
 
 def test_invitation_raises_but_never_lowers_a_role(client, team):
     join_workspace(client, team["owner"], team["ws"], team["bob"], "bob@example.com", "editor")
-    _invite(client, team["owner"], team["ws"], "bob@example.com", "viewer")
-    client.post(ACCEPT, headers=team["bob"], json={"token": invitation_token(client, team["bob"])})
+    token = _token(client, team["owner"], team["ws"], "bob@example.com", "viewer")
+    client.post(ACCEPT, headers=team["bob"], json={"token": token})
     assert _members(client, team["owner"], team["ws"])["bob@example.com"] == "editor"
-    _invite(client, team["owner"], team["ws"], "bob@example.com", "owner")
-    client.post(ACCEPT, headers=team["bob"], json={"token": invitation_token(client, team["bob"])})
+    token = _token(client, team["owner"], team["ws"], "bob@example.com", "owner")
+    client.post(ACCEPT, headers=team["bob"], json={"token": token})
     assert _members(client, team["owner"], team["ws"])["bob@example.com"] == "owner"
 
 
 def test_role_changes_keep_an_owner(client, team):
     join_workspace(client, team["owner"], team["ws"], team["bob"], "bob@example.com", "owner")
-    me = client.get("/api/v1/auth/me", headers=team["owner"]).json()["id"]
-    bob = client.get("/api/v1/auth/me", headers=team["bob"]).json()["id"]
+    me, bob = _uid(client, team["owner"]), _uid(client, team["bob"])
     url = f"/api/v1/workspaces/{team['ws']}/members"
-    assert (
-        client.patch(f"{url}/{me}", headers=team["owner"], json={"role": "viewer"}).status_code
-        == 200
-    )
+    demote = client.patch(f"{url}/{me}", headers=team["owner"], json={"role": "viewer"})
+    assert demote.status_code == 200
     last = client.patch(f"{url}/{bob}", headers=team["bob"], json={"role": "editor"})
     assert last.status_code == 409
     unknown = client.patch(f"{url}/{uuid.uuid4()}", headers=team["bob"], json={"role": "editor"})
@@ -349,15 +422,13 @@ def test_deleting_a_workspace_removes_its_invitations(client, team):
     from quantlab_api.db import SessionLocal
     from quantlab_api.invitations import Invitation
 
-    created = client.post("/api/v1/workspaces", headers=team["owner"], json={"name": "Temp"})
-    temp = created.json()["id"]
-    _invite(client, team["owner"], temp, "bob@example.com")
-    assert client.delete(f"/api/v1/workspaces/{temp}", headers=team["owner"]).status_code == 204
+    temp = client.post("/api/v1/workspaces", headers=team["owner"], json={"name": "Temp"})
+    temp_id = temp.json()["id"]
+    token = _token(client, team["owner"], temp_id, "bob@example.com")
+    assert client.delete(f"/api/v1/workspaces/{temp_id}", headers=team["owner"]).status_code == 204
     with SessionLocal() as db:
-        assert (
-            db.scalar(select(Invitation).where(Invitation.workspace_id == uuid.UUID(temp))) is None
-        )
-    token = invitation_token(client, team["bob"])
+        left = db.scalar(select(Invitation).where(Invitation.workspace_id == uuid.UUID(temp_id)))
+    assert left is None
     assert client.post(ACCEPT, headers=team["bob"], json={"token": token}).status_code == 404
 
 
@@ -373,12 +444,35 @@ def test_invitations_are_rate_limited_per_inviter(client, team):
     assert codes[-1] == 429
 
 
+def test_invitations_are_rate_limited_per_workspace(client, team, monkeypatch):
+    from quantlab_api.routes import invitations as routes
+
+    monkeypatch.setattr(routes, "INVITES_PER_HOUR_PER_WORKSPACE", 3)
+    second = register(client, "second@example.com")
+    join_workspace(client, team["owner"], team["ws"], second, "second@example.com", "owner")
+    # join_workspace used one of the three; two owners share the rest.
+    codes = [
+        _invite(client, who, team["ws"], f"w{i}@example.com").status_code
+        for i, who in enumerate((team["owner"], second, second))
+    ]
+    assert codes == [201, 201, 429]
+
+
+def test_one_address_cannot_be_flooded_with_invitations(client, team):
+    from quantlab_api.invitations import INVITES_PER_HOUR_PER_ADDRESS
+
+    codes = [
+        _invite(client, team["owner"], team["ws"], "bob@example.com").status_code
+        for _ in range(INVITES_PER_HOUR_PER_ADDRESS + 1)
+    ]
+    assert codes == [201] * INVITES_PER_HOUR_PER_ADDRESS + [429]
+    assert _invite(client, team["owner"], team["ws"], "carol@example.com").status_code == 201
+
+
 def test_pending_invitations_are_capped_per_workspace(client, team, monkeypatch):
-    from quantlab_api import invitations
     from quantlab_api.routes import invitations as routes
 
     monkeypatch.setattr(routes, "MAX_PENDING_PER_WORKSPACE", 3)
-    monkeypatch.setattr(invitations, "MAX_PENDING_PER_WORKSPACE", 3)
     codes = [
         _invite(client, team["owner"], team["ws"], f"p{i}@example.com").status_code
         for i in range(4)
@@ -386,53 +480,6 @@ def test_pending_invitations_are_capped_per_workspace(client, team, monkeypatch)
     assert codes == [201, 201, 201, 429]
     # Re-inviting a pending address replaces it rather than counting twice.
     assert _invite(client, team["owner"], team["ws"], "p0@example.com").status_code == 201
-
-
-def test_delivery_failure_is_reported_and_the_invitation_can_be_resent(client, team, monkeypatch):
-    from quantlab_api import invitations
-
-    class Broken:
-        def send_invitation(self, message: Any) -> None:
-            raise ConnectionError("mail relay down")
-
-    real = invitations.notifier
-    monkeypatch.setattr(invitations, "notifier", Broken())
-    r = _invite(client, team["owner"], team["ws"], "bob@example.com")
-    assert r.status_code == 502
-    monkeypatch.setattr(invitations, "notifier", real)
-    assert _invite(client, team["owner"], team["ws"], "bob@example.com").status_code == 201
-    token = invitation_token(client, team["bob"])
-    assert client.post(ACCEPT, headers=team["bob"], json={"token": token}).status_code == 200
-
-
-# -------------------------------------------------------------- local delivery
-def test_dev_mailbox_shows_only_your_own_messages(client, team):
-    _invite(client, team["owner"], team["ws"], "bob@example.com")
-    _invite(client, team["owner"], team["ws"], "carol@example.com")
-    mail = client.get("/api/v1/auth/invitations/dev-mailbox", headers=team["bob"]).json()
-    assert [m["to"] for m in mail] == ["bob@example.com"]
-    assert mail[0]["accept_path"].startswith("/invite#token=")
-    owner_mail = client.get("/api/v1/auth/invitations/dev-mailbox", headers=team["owner"])
-    assert owner_mail.json() == []
-
-
-def test_dev_mailbox_is_disabled_in_production(client, team, monkeypatch):
-    from quantlab_api.config import get_settings
-
-    _invite(client, team["owner"], team["ws"], "bob@example.com")
-    monkeypatch.setattr(get_settings(), "environment", "production")
-    r = client.get("/api/v1/auth/invitations/dev-mailbox", headers=team["bob"])
-    assert r.status_code == 404
-
-
-def test_outbox_files_are_private(client, team):
-    from quantlab_api.config import get_settings
-
-    _invite(client, team["owner"], team["ws"], "bob@example.com")
-    outbox = get_settings().data_dir / "outbox"
-    assert outbox.stat().st_mode & 0o077 == 0
-    for f in outbox.iterdir():
-        assert f.stat().st_mode & 0o077 == 0
 
 
 def test_model_module_is_safe_for_alembic_to_import():

@@ -1,8 +1,8 @@
 import AxeBuilder from "@axe-core/playwright";
 import { expect, test, type Page } from "@playwright/test";
 
-// Consent-based membership (#5): the owner invites an address, the invitee accepts through
-// the link delivered to them. Locally that link lands in the development mailbox.
+// Consent-based membership (#5): the owner invites an address and passes on the accept link
+// (shown once); the invitee accepts it while signed in with that address.
 
 async function audit(page: Page, name: string) {
   const results = await new AxeBuilder({ page }).withTags(["wcag2a", "wcag2aa", "wcag21aa"]).analyze();
@@ -32,17 +32,14 @@ test("invite -> accept: membership only after the invitee consents", async ({ br
   // The label wraps the select, so its accessible name includes the chosen option.
   await owner.locator("form select[name=role]").selectOption("editor");
   await owner.getByRole("button", { name: "Send invitation" }).click();
-  await expect(owner.getByRole("status")).toContainText(`Invitation sent to ${inviteeEmail}`);
+  await expect(owner.getByRole("status")).toContainText(`Invitation created for ${inviteeEmail}`);
   await expect(owner.getByRole("cell", { name: inviteeEmail })).toBeVisible(); // pending, not a member
+  const link = await owner.getByLabel(/Send this link to/).inputValue();
+  expect(link).toMatch(/\/invite#token=/);
   await audit(owner, "settings with a pending invitation");
 
-  // The invitee signs up, finds the invitation in the development mailbox, then opens the
-  // link signed out, as from an email.
+  // The invitee has an account but opens the link signed out, as from an email.
   await registerAs(invitee, "Invitee", inviteeEmail);
-  const mail = await (await invitee.request.get("/api/v1/auth/invitations/dev-mailbox")).json();
-  expect(mail).toHaveLength(1);
-  const link: string = mail[0].accept_path;
-  expect(link).toMatch(/^\/invite#token=/);
   await invitee.context().clearCookies();
   await invitee.goto(link);
   await expect(invitee).toHaveURL(/\/invite$/); // the token left the address bar

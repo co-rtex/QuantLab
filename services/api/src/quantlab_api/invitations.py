@@ -1,15 +1,18 @@
 """Workspace invitations: consent-based membership (#5).
 
 An owner invites an email address. Membership exists only after the invitee accepts with
-the invitation's token, which reaches them through a ``Notifier`` (a local outbox here;
-an email or chat adapter in a deployment that has one).
+the invitation's token. The token is shown to the inviting owner once, as an accept link
+to pass on, and handed to the ``notifier`` for deployments that can deliver it (an email
+or chat adapter). No plaintext token is stored or logged.
 
 Security properties:
 * Creating an invitation never reads the users table, so the response and its timing are
   identical whether or not the address belongs to an account (no enumeration).
 * Registration does not verify email ownership, so acceptance requires both the token
-  (proof that the delivered message was received) and a signed-in account with the
-  invited address. Pre-registering someone's address is not enough to join as them.
+  and a signed-in account with the invited address. Showing the link to the owner grants
+  nothing new: an owner can already invite any address.
+* An invitation carries its inviter's authority, so it can be previewed or accepted only
+  while the inviter is still an owner of the workspace, and losing owner revokes it.
 * Tokens are 256-bit random values. Only their SHA-256 is stored (they have full
   entropy, so a slow hash adds nothing). They expire, and every transition (accept,
   decline, revoke) is a conditional UPDATE on ``status = 'pending'``, so a token works at
@@ -19,34 +22,28 @@ Security properties:
 from __future__ import annotations
 
 import hashlib
-import json
-import os
 import secrets
 import uuid
-from dataclasses import asdict, dataclass
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
-from pathlib import Path
 from typing import Literal, Protocol
 
-import structlog
 from pydantic import BaseModel, EmailStr, Field
 from sqlalchemy import CheckConstraint, DateTime, ForeignKey, Index, String, Uuid, text
 from sqlalchemy.orm import Mapped, mapped_column
 
-from quantlab_api.config import get_settings
 from quantlab_api.db import Base
 from quantlab_api.models import new_id, utcnow
 
 # Alembic's env.py imports this module to see the table, before the API creates the
-# Prometheus multiprocess directory, so it must not import quantlab_api.observability
-# (which registers metrics on import). Same logger name, without the metrics.
-log = structlog.get_logger("quantlab")
-
+# Prometheus multiprocess directory: it must not import quantlab_api.observability,
+# which registers metrics on import.
 INVITATION_TTL = timedelta(days=7)
-# Abuse bounds: invitations created per hour by one owner and into one workspace, and
-# pending invitations a workspace may hold at once.
+# Abuse bounds: invitations created per hour by one owner, into one workspace and to one
+# address of a workspace, and pending invitations a workspace may hold at once.
 INVITES_PER_HOUR_PER_INVITER = 20
 INVITES_PER_HOUR_PER_WORKSPACE = 50
+INVITES_PER_HOUR_PER_ADDRESS = 3
 MAX_PENDING_PER_WORKSPACE = 100
 
 STATUSES = ("pending", "accepted", "declined", "revoked")
@@ -131,11 +128,10 @@ class MemberRoleIn(BaseModel):
     role: Literal["viewer", "editor", "owner"]
 
 
-class MailboxItem(BaseModel):
-    to: str
-    subject: str
+class InvitationCreated(InvitationOut):
+    """The new invitation plus its accept link, shown to the inviting owner only once."""
+
     accept_path: str
-    sent_at: datetime
 
 
 # ----------------------------------------------------------------------- notification
@@ -149,50 +145,22 @@ class InvitationMessage:
     # or Referer headers.
     accept_path: str
     expires_at: str
-    sent_at: str
 
 
 class Notifier(Protocol):
     def send_invitation(self, message: InvitationMessage) -> None: ...
 
 
-class OutboxNotifier:
-    """Writes each message as a JSON file under ``$QUANTLAB_DATA_DIR/outbox`` (0600).
-
-    The local-development delivery channel: no external service. A deployment with email
-    replaces ``notifier`` with an adapter implementing ``Notifier``.
-    """
-
-    def __init__(self, root: Path | None = None) -> None:
-        self._root = root
-
-    @property
-    def root(self) -> Path:
-        return self._root or get_settings().data_dir / "outbox"
+class ManualDelivery:
+    """The default: nothing is sent. The owner passes on the accept link from the create
+    response. A deployment that can send email replaces ``notifier`` with an adapter. It
+    must not log or store ``accept_path``, which carries a live token."""
 
     def send_invitation(self, message: InvitationMessage) -> None:
-        self.root.mkdir(parents=True, exist_ok=True, mode=0o700)
-        path = self.root / f"{message.sent_at.replace(':', '')}-{uuid.uuid4().hex}.json"
-        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-        with os.fdopen(fd, "w") as f:
-            json.dump({"kind": "invitation", **asdict(message)}, f)
-        log.info("invitation_queued", outbox=str(path))
-
-    def messages_for(self, email: str) -> list[dict[str, str]]:
-        if not self.root.exists():
-            return []
-        out = []
-        for p in sorted(self.root.glob("*.json")):
-            try:
-                m = json.loads(p.read_text())
-            except (OSError, ValueError):
-                continue
-            if m.get("to") == email:
-                out.append(m)
-        return out
+        return None
 
 
-notifier: Notifier = OutboxNotifier()
+notifier: Notifier = ManualDelivery()
 
 
 def expiry() -> datetime:

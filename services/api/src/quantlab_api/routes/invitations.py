@@ -14,20 +14,19 @@ from sqlalchemy import func, select, update
 from sqlalchemy.orm import Session
 
 from quantlab_api import invitations as inv_mod
-from quantlab_api.config import get_settings
 from quantlab_api.errors import ApiError
 from quantlab_api.invitations import (
+    INVITES_PER_HOUR_PER_ADDRESS,
     INVITES_PER_HOUR_PER_INVITER,
     INVITES_PER_HOUR_PER_WORKSPACE,
     MAX_PENDING_PER_WORKSPACE,
     Invitation,
+    InvitationCreated,
     InvitationIn,
     InvitationMessage,
     InvitationOut,
     InvitationPreview,
     InvitationTokenIn,
-    MailboxItem,
-    OutboxNotifier,
     expiry,
     hash_token,
     new_token,
@@ -57,20 +56,27 @@ def _out(i: Invitation) -> InvitationOut:
     )
 
 
-@owner_router.post("/{workspace_id}/invitations", response_model=InvitationOut, status_code=201)
+@owner_router.post("/{workspace_id}/invitations", response_model=InvitationCreated, status_code=201)
 def create_invitation(
     workspace_id: uuid.UUID, body: InvitationIn, user: CurrentUser, db: DB, request: Request
-) -> InvitationOut:
-    """Invite an address. The response is the same whether or not it has an account: this
-    path never reads the users table."""
+) -> InvitationCreated:
+    """Invite an address and return its accept link, once, for the owner to pass on.
+
+    The response is the same whether or not the address has an account: this path never
+    reads the users table, and its limits do not depend on the address having one.
+    """
     ws, _ = require_workspace(db, user, workspace_id, Role.owner)
+    email = body.email.lower()
     login_limiter.check(f"invite:user:{user.id}", INVITES_PER_HOUR_PER_INVITER, 3600)
     login_limiter.check(f"invite:ws:{workspace_id}", INVITES_PER_HOUR_PER_WORKSPACE, 3600)
-    email = body.email.lower()
+    login_limiter.check(f"invite:to:{workspace_id}:{email}", INVITES_PER_HOUR_PER_ADDRESS, 3600)
     now = datetime.now(UTC)
     # Serializes invitation writes per workspace: the pending cap and the re-invite
-    # revocation below would otherwise race.
-    db.execute(select(Workspace.id).where(Workspace.id == workspace_id).with_for_update())
+    # revocation below would otherwise race. NO KEY UPDATE, so inserts that reference the
+    # workspace (members, audit events) are not blocked and cannot deadlock with it.
+    db.execute(
+        select(Workspace.id).where(Workspace.id == workspace_id).with_for_update(key_share=True)
+    )
     db.execute(
         update(Invitation)
         .where(
@@ -113,23 +119,28 @@ def create_invitation(
         role=body.role,
     )
     db.commit()
+    accept_path = f"/invite#token={token}"
     message = InvitationMessage(
         to=email,
         workspace_name=ws.name,
         inviter_name=user.display_name,
         role=body.role,
-        accept_path=f"/invite#token={token}",
+        accept_path=accept_path,
         expires_at=invitation.expires_at.isoformat(),
-        sent_at=now.isoformat(),
     )
     try:
         inv_mod.notifier.send_invitation(message)
     except Exception as exc:
-        log.exception("invitation_delivery_failed", invitation_id=str(invitation.id))
+        # No traceback: its frame locals would put the live token in the log.
+        log.error(
+            "invitation_delivery_failed",
+            invitation_id=str(invitation.id),
+            error=type(exc).__name__,
+        )
         raise ApiError(
             502, "delivery_failed", "The invitation was saved but could not be sent; resend it"
-        ) from exc
-    return _out(invitation)
+        ) from None
+    return InvitationCreated(**_out(invitation).model_dump(), accept_path=accept_path)
 
 
 @owner_router.get("/{workspace_id}/invitations", response_model=list[InvitationOut])
@@ -188,6 +199,43 @@ def _addressed_to(db: Session, user: User, token: str) -> Invitation:
     return invitation
 
 
+def _require_inviter_still_owner(db: Session, i: Invitation) -> None:
+    """An invitation carries its inviter's authority: once they are no longer an owner (or
+    no longer a member) it is withdrawn. The inviter's membership row is read with a share
+    lock, so a concurrent demotion or removal finishes first and is seen."""
+    role = None
+    if i.invited_by is not None:
+        role = db.scalar(
+            select(WorkspaceMember.role)
+            .where(
+                WorkspaceMember.workspace_id == i.workspace_id,
+                WorkspaceMember.user_id == i.invited_by,
+            )
+            .with_for_update(read=True)
+        )
+    if role != Role.owner:
+        db.execute(
+            update(Invitation)
+            .where(Invitation.id == i.id, Invitation.status == "pending")
+            .values(status="revoked", responded_at=datetime.now(UTC))
+        )
+        db.commit()
+        raise ApiError(409, "invitation_withdrawn", "This invitation was withdrawn")
+
+
+def revoke_invitations_from(db: Session, workspace_id: uuid.UUID, inviter: uuid.UUID) -> None:
+    """Withdraw the pending invitations a member sent, when they stop being an owner."""
+    db.execute(
+        update(Invitation)
+        .where(
+            Invitation.workspace_id == workspace_id,
+            Invitation.invited_by == inviter,
+            Invitation.status == "pending",
+        )
+        .values(status="revoked", responded_at=datetime.now(UTC))
+    )
+
+
 def _require_pending(i: Invitation) -> None:
     if i.status != "pending":
         raise ApiError(409, "invitation_used", f"This invitation was already {i.status}")
@@ -218,6 +266,7 @@ def _respond(db: Session, i: Invitation, user: User, status: str) -> None:
 def preview_invitation(body: InvitationTokenIn, user: CurrentUser, db: DB) -> InvitationPreview:
     i = _addressed_to(db, user, body.token)
     _require_pending(i)
+    _require_inviter_still_owner(db, i)
     ws = db.get(Workspace, i.workspace_id)
     inviter = db.get(User, i.invited_by) if i.invited_by else None
     assert ws is not None
@@ -236,6 +285,7 @@ def accept_invitation(
 ) -> MemberOut:
     i = _addressed_to(db, user, body.token)
     _require_pending(i)
+    _require_inviter_still_owner(db, i)
     _respond(db, i, user, "accepted")
     role = Role(i.role)
     member = db.get(WorkspaceMember, (i.workspace_id, user.id), with_for_update=True)
@@ -278,24 +328,3 @@ def decline_invitation(
     )
     db.commit()
     return Response(status_code=204)
-
-
-@invitee_router.get("/dev-mailbox", response_model=list[MailboxItem])
-def dev_mailbox(user: CurrentUser) -> list[MailboxItem]:
-    """Development and test only: the local outbox messages sent to your own address.
-
-    Stands in for an email inbox so invitations can be accepted without a mail service.
-    Disabled in production, where a ``Notifier`` adapter delivers messages instead.
-    """
-    n = inv_mod.notifier
-    if get_settings().environment == "production" or not isinstance(n, OutboxNotifier):
-        raise ApiError(404, "not_found", "Not found")
-    return [
-        MailboxItem(
-            to=m["to"],
-            subject=f"{m['inviter_name']} invited you to {m['workspace_name']} as {m['role']}",
-            accept_path=m["accept_path"],
-            sent_at=datetime.fromisoformat(m["sent_at"]),
-        )
-        for m in n.messages_for(user.email.lower())
-    ]

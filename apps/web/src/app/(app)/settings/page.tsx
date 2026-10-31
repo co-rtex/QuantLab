@@ -22,11 +22,8 @@ interface Invitation {
   status: string;
   expires_at: string;
 }
-interface MailboxItem {
-  to: string;
-  subject: string;
+interface Created extends Invitation {
   accept_path: string;
-  sent_at: string;
 }
 interface AuditEvent {
   id: string;
@@ -45,8 +42,8 @@ export default function SettingsPage() {
   const members = useApi<Member[]>(ws ? `/workspaces/${ws}/members` : null);
   const audit = useApi<Page<AuditEvent>>(ws && isOwner ? `/workspaces/${ws}/audit?limit=30` : null);
   const invitations = useApi<Invitation[]>(ws && isOwner ? `/workspaces/${ws}/invitations` : null);
-  // Development only (404 in production): stands in for the email an invitee would receive.
-  const mailbox = useApi<MailboxItem[]>("/auth/invitations/dev-mailbox");
+  // The accept link is returned once, when the invitation is created.
+  const [link, setLink] = useState<{ email: string; url: string }>();
   const [err, setErr] = useState<ApiError>();
   const [msg, setMsg] = useState<string>();
 
@@ -56,10 +53,14 @@ export default function SettingsPage() {
     const f = new FormData(form);
     setErr(undefined);
     try {
-      await api(`/workspaces/${ws}/invitations`, { method: "POST", json: { email: f.get("email"), role: f.get("role") } });
+      const created = await api<Created>(`/workspaces/${ws}/invitations`, {
+        method: "POST",
+        json: { email: f.get("email"), role: f.get("role") },
+      });
       form.reset();
       invitations.reload();
-      setMsg(`Invitation sent to ${f.get("email")}. They join once they accept it.`);
+      setLink({ email: created.email, url: new URL(created.accept_path, window.location.origin).href });
+      setMsg(`Invitation created for ${created.email}. They join once they accept it.`);
     } catch (x) {
       setErr(x as ApiError);
     }
@@ -169,6 +170,19 @@ export default function SettingsPage() {
               <button className="btn btn-primary">Send invitation</button>
             </form>
           )}
+          {isOwner && link && (
+            <div className="mt-3 rounded border border-rule p-3 text-sm">
+              <label htmlFor="invite-link" className="mb-1 block">
+                Send this link to {link.email}. It is shown only once and works only for that address.
+              </label>
+              <div className="flex gap-2">
+                <input id="invite-link" readOnly value={link.url} className="field flex-1 font-mono text-xs" />
+                <button type="button" className="btn btn-quiet" onClick={() => navigator.clipboard?.writeText(link.url)}>
+                  Copy
+                </button>
+              </div>
+            </div>
+          )}
           {isOwner && invitations.data && invitations.data.length > 0 && (
             <div className="mt-4">
               <h3 className="mb-1 text-sm font-semibold">Pending invitations</h3>
@@ -218,20 +232,6 @@ export default function SettingsPage() {
               Sign out on all devices
             </button>
           </Panel>
-          {mailbox.data && mailbox.data.length > 0 && (
-            <Panel title="Invitations to you" aside="Development mailbox">
-              <ul className="space-y-2 text-sm">
-                {mailbox.data.map((m) => (
-                  <li key={m.accept_path}>
-                    <a href={m.accept_path} className="underline">
-                      {m.subject}
-                    </a>
-                    <span className="ml-2 text-xs text-ink-3">{dateTime(m.sent_at)}</span>
-                  </li>
-                ))}
-              </ul>
-            </Panel>
-          )}
           <Panel title="New workspace">
             <form onSubmit={createWorkspace} className="flex gap-2 text-sm">
               <label className="flex-1">

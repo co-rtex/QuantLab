@@ -132,7 +132,10 @@ def test_two_owners_demoting_or_removing_each_other_leave_one_owner(client):
                 ).status_code
 
             codes = sorted(_race(2, act))
-            assert codes not in ([200, 200], [204, 204]), (action, codes)
+            # One wins. The other lost its owner role while waiting for the lock and is
+            # refused (or, once removed, is no longer a member): never a deadlock 500.
+            ok = 200 if action == "demote" else 204
+            assert codes in ([ok, 403], [ok, 404]), (action, codes)
             assert _owner_count(ws) == 1, (action, codes)
 
 

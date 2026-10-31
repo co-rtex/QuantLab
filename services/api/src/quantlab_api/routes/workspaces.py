@@ -11,6 +11,7 @@ from quantlab_api.errors import ApiError
 from quantlab_api.invitations import MemberRoleIn
 from quantlab_api.models import AuditEvent, Role, User, Workspace, WorkspaceMember
 from quantlab_api.routes.invitations import owner_router as invitation_routes
+from quantlab_api.routes.invitations import revoke_invitations_from
 from quantlab_api.schemas import (
     MAX_OFFSET,
     AuditOut,
@@ -114,17 +115,26 @@ def list_members(workspace_id: uuid.UUID, user: CurrentUser, db: DB) -> list[Mem
     ]
 
 
-def _locked_owner_count(db: Session, workspace_id: uuid.UUID) -> int:
-    """Count owners while locking their rows. Without the lock, two owners demoting or
-    removing each other concurrently both saw two owners and left the workspace with none.
-    A request that waits re-reads the rows after the other commits and sees one owner."""
-    return len(
+def _lock_owners(db: Session, workspace_id: uuid.UUID, actor: User) -> set[uuid.UUID]:
+    """Lock the workspace's owner rows and return their user ids.
+
+    Every member change takes these locks first and in user-id order, so two owners
+    changing each other cannot deadlock. A request that waits re-reads the rows after the
+    other commits: two owners demoting or removing each other used to both see two owners
+    and leave the workspace with none. Authorization is rechecked under the lock, because
+    the actor may have been demoted while waiting.
+    """
+    owners = set(
         db.scalars(
             select(WorkspaceMember.user_id)
             .where(WorkspaceMember.workspace_id == workspace_id, WorkspaceMember.role == Role.owner)
+            .order_by(WorkspaceMember.user_id)
             .with_for_update()
         ).all()
     )
+    if actor.id not in owners:
+        raise ApiError(403, "forbidden", "Requires owner role")
+    return owners
 
 
 # Members join only by accepting an invitation (routes/invitations.py, #5). Adding an
@@ -143,12 +153,17 @@ def set_member_role(
 ) -> MemberOut:
     """Change an existing member's role."""
     require_workspace(db, user, workspace_id, Role.owner)
-    m = db.get(WorkspaceMember, (workspace_id, user_id), with_for_update=True)
+    owners = _lock_owners(db, workspace_id, user)
+    m = db.get(
+        WorkspaceMember, (workspace_id, user_id), with_for_update=True, populate_existing=True
+    )
     target = db.get(User, user_id)
     if m is None or target is None:
         raise ApiError(404, "not_found", "Member not found")
-    if m.role == Role.owner and body.role != "owner" and _locked_owner_count(db, workspace_id) <= 1:
-        raise ApiError(409, "last_owner", "A workspace needs at least one owner")
+    if m.role == Role.owner and body.role != "owner":
+        if len(owners) <= 1:
+            raise ApiError(409, "last_owner", "A workspace needs at least one owner")
+        revoke_invitations_from(db, workspace_id, user_id)
     m.role = Role(body.role)
     audit(
         db,
@@ -171,11 +186,15 @@ def remove_member(
     workspace_id: uuid.UUID, user_id: uuid.UUID, user: CurrentUser, db: DB, request: Request
 ) -> None:
     require_workspace(db, user, workspace_id, Role.owner)
-    m = db.get(WorkspaceMember, (workspace_id, user_id))
+    owners = _lock_owners(db, workspace_id, user)
+    m = db.get(
+        WorkspaceMember, (workspace_id, user_id), with_for_update=True, populate_existing=True
+    )
     if m is None:
         raise ApiError(404, "not_found", "Member not found")
-    if m.role == Role.owner and _locked_owner_count(db, workspace_id) <= 1:
+    if m.role == Role.owner and len(owners) <= 1:
         raise ApiError(409, "last_owner", "Cannot remove the last owner")
+    revoke_invitations_from(db, workspace_id, user_id)
     db.delete(m)
     audit(
         db,
