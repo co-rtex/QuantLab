@@ -33,6 +33,7 @@ from sklearn.pipeline import make_pipeline
 from sklearn.preprocessing import StandardScaler
 
 from quantlab.data.adjust import PointInTimeAdjuster, total_returns
+from quantlab.data.identity import normalize_master
 from quantlab.data.schema import wide
 
 FEATURES = [
@@ -108,8 +109,18 @@ def compute_features(
     return feats, adj
 
 
-def build_panel(bars: pd.DataFrame, actions: pd.DataFrame, cfg: MLConfig) -> pd.DataFrame:
-    """Long panel (date, symbol, features..., fwd_return, label, label_available_at)."""
+def build_panel(
+    bars: pd.DataFrame,
+    actions: pd.DataFrame,
+    cfg: MLConfig,
+    *,
+    instruments: pd.DataFrame | None = None,
+) -> pd.DataFrame:
+    """Long panel (date, symbol, features..., fwd_return, label, label_available_at).
+
+    ``instruments`` is an instrument master keyed like ``bars["symbol"]``; its delisting
+    returns are applied to labels whose horizon runs past the security's last bar.
+    """
     feats, adj = compute_features(bars, actions, cfg.exclude)
     close = adj
     h = cfg.horizon
@@ -117,10 +128,34 @@ def build_panel(bars: pd.DataFrame, actions: pd.DataFrame, cfg: MLConfig) -> pd.
     # inside the horizon that is the return to delisting (the engine liquidates at the last
     # close). Using adj.shift(-h) alone made the label NaN and the row was dropped, so the
     # panel only contained assets that survived to t+h: selection on future information.
-    # The exit at the last close is optimistic: a real delisting return (often a large
-    # loss for performance delistings) is not modelled until instrument identity (#9)
-    # supplies delisting returns.
-    fwd = adj.ffill().shift(-h) / adj - 1
+    # With an instrument master, a security exits at its delisting exactly as in the
+    # engine: its exit price is the last close on or before the delisting date (bars after
+    # it, an OTC tail say, are ignored and it is not sampled after it), and a known
+    # delisting return applies only to labels whose horizon reaches the first session
+    # after the delisting date, the moment the engine books it. So no label includes a
+    # return that is not public by its label_available_at. Without a return the
+    # optimistic last-close exit remains (documented in METHODOLOGY).
+    exit_px = adj
+    booked: list[tuple[str, int, float]] = []
+    if instruments is not None and len(instruments):
+        master = normalize_master(instruments)
+        master = master[
+            master["delisting_date"].notna() & master["instrument_id"].isin(adj.columns)
+        ]
+        if len(master):
+            exit_px = adj.copy()
+            for row in master.itertuples():
+                when = pd.Timestamp(row.delisting_date)
+                exit_px.loc[exit_px.index > when, row.instrument_id] = np.nan
+                if pd.notna(row.delisting_return):
+                    first_after = int(adj.index.searchsorted(when, side="right"))
+                    booked.append((row.instrument_id, first_after, float(row.delisting_return)))
+    fwd = exit_px.ffill().shift(-h) / adj - 1
+    positions = np.arange(len(adj))
+    for sym, first_after, r in booked:
+        reaches = positions + h >= first_after
+        fwd.loc[reaches, sym] = (1 + fwd.loc[reaches, sym]) * (1 + r) - 1
+    close = exit_px
     dates = close.index[252 :: cfg.sample_every]
     dates = dates[dates <= close.index[-1 - h]] if len(close) > h else dates[:0]
     frames = []
@@ -244,12 +279,14 @@ def run_ml_experiment(
     actions: pd.DataFrame,
     cfg: MLConfig | None = None,
     on_progress: Callable[[float, str], None] | None = None,
+    *,
+    instruments: pd.DataFrame | None = None,
 ) -> dict[str, Any]:
     cfg = cfg or MLConfig()
     unknown = set(cfg.models) - set(MODELS)
     if unknown:
         raise ValueError(f"unknown models: {sorted(unknown)}")
-    panel = build_panel(bars, actions, cfg)
+    panel = build_panel(bars, actions, cfg, instruments=instruments)
     splits = purged_splits(panel, cfg)
     if not splits:
         raise ValueError(
