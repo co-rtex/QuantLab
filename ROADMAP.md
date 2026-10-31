@@ -48,7 +48,7 @@ Owners, file ownership and migration slots: [docs/COORDINATION.md](docs/COORDINA
 | P0 | ✅ #10 Corporate-action validation gates (#27) | Agent 3 | — |
 | P0 | #12 Reconciliation report: ✅ library (#34), ✅ API (#62); cross-vendor blocked on #11; follow-ups #54 | Agent 3 | #11 |
 | P0 | #11 Vendor adapter: ✅ fixture-only contract (#33); **#50 before live wiring**; live part blocked on credentials | Agent 3 | — |
-| P0 | #50 Massive adapter correctness before live wiring | Agent 3 | — |
+| P0 | ✅ #50 Massive adapter correctness before live wiring (#73) | Agent 3 | — |
 | P1 | ✅ #6 Idempotent retries (#40) | Agent 2 | — |
 | P1 | ✅ #43 Idempotency fingerprint (#47) | Agent 2 | — |
 | P1 | ✅ #51 (#57) · ✅ #52 (#61) · ✅ #55 device cookies + ADR-0010 (#69) | Agent 2 | — |
@@ -64,8 +64,8 @@ Owners, file ownership and migration slots: [docs/COORDINATION.md](docs/COORDINA
 | P1 | #19 Terraform, validated and never applied | Lead | #3 |
 | P1 | #20 External load test (needs a separate host) | Unassigned | — |
 | P1 | #21 Storage lifecycle on workspace deletion | Unassigned | #9 |
-| P2 | #8 Security hardening: ✅ #38, A (#64), C (#65), follow-up (#70); B (`/ready`) in progress | Agent 2 | — |
+| P2 | ✅ #8 Security hardening (#38, #64, #65, #70, #75) | Agent 2 | — |
 | P2 | #22 Per-worktree isolation hardening | Lead | — |
 | P2 | #23 Frontend completeness and synthetic labels | Unassigned | — |
 | P2 | #24 Benchmark methodology, golden tests | Unassigned | — |
-| P2 | #25 Job-deletion semantics for results | Lead | — |
+| P2 | ✅ #25 Job-deletion semantics: ADR-0011 plus a guard test (#78) | Lead | — |

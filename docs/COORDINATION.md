@@ -26,13 +26,15 @@ Work items are issues labelled `owner:*`, `P0`/`P1`/`P2`, `status:*` and `area:*
 | `services/api/src/quantlab_api/routes/datasets.py` | Agent 3 (since #65; Agent 2's upload work #4, #7, #51, #52 and #8 C is merged) |
 | `apps/web/src/app/api/[...path]/route.ts`, `apps/web/src/proxy.ts`, `infra/edge/**` | Agent 2 |
 | Web pages for login, settings, members, invitations | Agent 2 |
-| `routes/experiments.py`, `routes/ml.py`, `routes/research.py` (idempotency only, #6) | Agent 2 while #6 is open |
+| `routes/experiments.py` | Agent 3 for #63 (reproduction engine-version naming, `instrument_id` trade filter) |
+| `routes/ml.py`, `routes/research.py` | Unassigned (lead leases per issue) |
 | `packages/quantlab/src/quantlab/data/**`, `services/api/src/quantlab_api/marketdata.py` | Agent 3 |
 | `packages/quantlab/src/quantlab/{backtest,analytics,research,ml,portfolio,optimize,strategies}/**` | Agent 3 |
 | `docs/METHODOLOGY.md` | Agent 3 |
 | `benchmarks/**` | Agent 3 for the market-data part of #24 (leased) |
 | `services/api/src/quantlab_api/observability.py`, `db.py`, `apps/web/playwright.config.ts` | Lead |
 | `packages/quantlab/src/quantlab/assistant/**`, `tests/unit/test_assistant.py`, the verifier section of `docs/AI_EVAL.md` | Agent 2 for #15 (leased) |
+| `apps/web/src/lib/useApi.ts`, `apps/web/src/lib/workspace.tsx`, `apps/web/src/components/**`, `apps/web/src/app/(app)/**`, new E2E specs | Agent 2 for #18 (leased) |
 | Other web pages | Unassigned (lead assigns per issue) |
 
 ## Shared files (lead-owned, leased one holder at a time)
@@ -43,14 +45,14 @@ follow-up docs commit. A lease ends when the PR that used it merges or closes.
 
 | Shared file | Current holder | For |
 |---|---|---|
-| `services/api/src/quantlab_api/models.py` | — | (#62 merged) |
+| `services/api/src/quantlab_api/models.py` | Agent 3 | #66 catalog key per (ticker, instrument), migration M3 |
 | `services/api/src/quantlab_api/schemas.py` | — | (#62 merged) |
 | `services/api/src/quantlab_api/config.py` | — | (#70 merged) |
 | `services/api/src/quantlab_api/jobs.py` | — | (#40, #47 merged) |
-| `services/api/src/quantlab_api/tasks.py` | — | (#62 merged) |
+| `services/api/src/quantlab_api/tasks.py` | Agent 3 | #66 catalog owner on reuse, `meta.universe` labels |
 | `services/api/alembic/env.py` | — | (#37 merged) |
 | `scripts/case_study.py` | — | (Agent 2's invitation fix merged in #37) |
-| `services/api/src/quantlab_api/main.py` | Agent 2 | #8 PR B (`/ready`) |
+| `services/api/src/quantlab_api/main.py` | — | (#75 merged) |
 | `services/api/alembic/versions/**` | see migration slots | |
 | `docker-compose.yml`, `Makefile`, `scripts/stack-env.sh` | — | |
 | `pyproject.toml`, `uv.lock`, `apps/web/package*.json` | — | |
@@ -68,6 +70,7 @@ Alembic revisions form one linear chain, so only one migration may be in flight 
 |---|---|---|---|
 | M1 | Agent 2 | #5 invitations, revision `7c3e5a1d9b20` → `4f1c2a9e7b10` | **merged** (#37, `9e76ff3`) |
 | M2 | Agent 3 | #9 part C, revision `9a4c6e2f1b37` → `7c3e5a1d9b20` | **merged** (#62, `925cc1c`) |
+| M3 | Agent 3 | #66 instruments unique key `(dataset_version_id, symbol, instrument_id)` with `NULLS NOT DISTINCT`; `down_revision 9a4c6e2f1b37` | in progress |
 
 Rules: request the slot on the issue before running `alembic revision`; set `down_revision`
 to the current head on `main` at the time; include a working `downgrade`; the migration

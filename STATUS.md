@@ -1,6 +1,6 @@
 # Status (authoritative handoff)
 
-_Last updated: 2026-10-31 (lead integration cycle 2: 32 PRs merged before this update, per `gh pr list --state merged`; main `77f8650`)_
+_Last updated: 2026-10-31 (lead integration cycle 2: 38 PRs merged before this update, per `gh pr list --state merged`; main `0a1c5f2`)_
 
 ## Where things stand
 All roadmap phases 0–10 are implemented. An independent audit on 2026-10-30
@@ -91,10 +91,18 @@ leases and migration slots: [docs/COORDINATION.md](docs/COORDINATION.md).
   * #70 #8 follow-ups.
   * #71 (lead) integration tests use the worktree's own Postgres when
     `QUANTLAB_PG_PORT` isn't exported.
+  * #67 delisting follow-ups (#59): halt convention documented; `after_window` counts
+    stale marks only; an opt-in performance-delisting fallback, reported as a warning.
+  * #75 `/ready` returns generic statuses and logs the detail. **#8 complete.**
+  * #73 Massive adapter correctness before live wiring (#50): short reads retried; no key
+    in exception chains. **#50 complete**; live use is still blocked on credentials.
+  * #77 statistics follow-ups (#41).
+  * #78 (lead) ADR-0011: jobs are deleted only through their workspace, with a guard test
+    (#25).
 * Every merge had an independent read-only lead review: no blockers. Should-fix items are
   tracked in #8, #51, #52 and #55 (Agent 2), #39 (gate), and #41, #50 and #54 (Agent 3).
 
-## Last verified (2026-10-31, main `77f8650`)
+## Last verified (2026-10-31, main `0a1c5f2`)
 Each merge was verified on a trial merge with current main, with pytest output written to a
 file rather than piped:
 * #28, #32, #36, #29, #30, #31: tree identical to main afterwards; 314 passed;
@@ -123,6 +131,10 @@ file rather than piped:
   about 6; migration round trip head → `7c3e5a1d9b20` → head clean, `alembic check` no drift.
 * main@925cc1c + #69 + #70 + #71 (byte-identical to main `77f8650`): **559 passed, exit 0**;
   **serial E2E 13/13** (55 s, load about 7).
+* main + #67 + #75: 570 passed, E2E 13/13. main + #73: 583 passed.
+* main + #77 + #78 (byte-identical to main `0a1c5f2`): 591 passed, plus 1 failed
+  (`test_invite_timing_does_not_depend_on_registration`, a 5.54 vs 5.0 wall-clock margin in
+  an untouched file; it passed 5/5 rerun alone). Tracked as a flake (#80). E2E 13/13.
 
 CI is green on every merged head. CI doesn't run Playwright (#17).
 
@@ -134,29 +146,22 @@ E2E failures this cycle were resource starvation, not regressions:
 Full-stack runs are now serialized machine-wide (`make e2e-serial`).
 
 ## Next steps (issues carry owners and acceptance criteria)
-1. **Agent 2:** #15 assistant verifier (the hosted eval is blocked on a key); #8 PR B
-   (`/ready`; `main.py` leased).
+1. **Agent 2:**
+   * #74 (#15 verifier): three narrow misattributions left;
+   * #18 frontend error surfacing (web files leased);
+   * then #79 (verifier false rejects) and #80 (timing flake).
 2. **Agent 3:**
-   * #67 (#59): two integrity-report merge conditions;
-   * #66 (part C follow-ups);
-   * #63;
-   * #9 part C (M2 open; `tasks.py`, `models.py` and `schemas.py` leased; also #12's
-     report API);
-   * #50 (P0, Massive adapter fixes; the same-day dividend collapse also affects existing
-     ingestion);
-   * #54, #41, #24.
+   * #76 (#54): the false `version_matches_data` alarm;
+   * #66 (M3 catalog key, leased `models.py`/`tasks.py`);
+   * #63 (`routes/experiments.py` leased);
+   * then #24 (market-data benchmarks, quiet window only).
 3. **Lead:**
-   * #16: needs clean serial full-suite runs on main with nothing else heavy running;
-   * #17 E2E in CI (private-repo Actions minutes: confirm with the user);
-   * the rest of #22;
-   * #25.
-4. **Unassigned:** #15, #18, #20, #21, #23, the benchmark half of #24.
-5. **User-only:**
-   * #39 host verification (Linux Docker Engine plus a second machine);
-   * credentials for #11 (vendor), #15 (LLM key), #19 (cloud), #20 (load host);
-   * the product decision on email verification for registration (#55 option A);
-   * whether to drop a stale `quantlab_test_<hash>` test database that an agent left on
-     the main checkout's Postgres.
+   * #81 (#22 stack-env overrides);
+   * #16 and #17 need the user's OK on Actions minutes;
+   * #21 storage lifecycle spans three owners' files and is unscheduled;
+   * #19 Terraform waits on #39.
+4. **Unassigned:** #20 (needs a load host), #23 frontend completeness, the benchmark half of
+   #24.
 
 ## Blockers
 No LLM API key, market-data API key or cloud credentials (docs/BLOCKERS.md).
