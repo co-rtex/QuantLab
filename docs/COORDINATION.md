@@ -106,8 +106,9 @@ stack peaks around 1.7 GB, and three full stacks at once caused API OOM kills
   (`docker inspect <api> --format '{{.State.OOMKilled}}'`), it reproduces with the failing
   spec run alone, and the report includes `uptime` load. **CI does not run Playwright
   (#17)**, so green CI is not E2E evidence.
-* Integration tests **skip silently** when Postgres is down (#22): check that the pytest
-  summary says `passed`, not `skipped`.
+* Integration tests **fail** when Postgres is unreachable. `make e2e-serial` and `make down`
+  stop the project's Postgres too, so run `make up` again before pytest.
+  `QUANTLAB_ALLOW_SKIP_INTEGRATION=1` skips them explicitly (unit-only runs).
 
 ## Branches, commits and PRs
 

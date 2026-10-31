@@ -13,7 +13,12 @@ from sqlalchemy.orm import Session
 
 from quantlab.analytics.summary import analyze_backtest
 from quantlab.backtest.engine import BacktestConfig, BacktestResult, run_backtest
-from quantlab.data.quality import assess_quality
+from quantlab.data.quality import (
+    QualityGateError,
+    QualityReport,
+    assess_quality,
+    enforce_gates,
+)
 from quantlab.data.store import DatasetStore
 from quantlab.data.synthetic import SyntheticSpec, generate_market
 from quantlab.strategies.library import create_strategy
@@ -35,6 +40,19 @@ def dataset_store() -> DatasetStore:
     return DatasetStore(get_settings().datasets_dir)
 
 
+def gate_quality(bars: pd.DataFrame, actions: pd.DataFrame) -> QualityReport:
+    """Run the quality checks; a failing ingestion gate fails the job permanently.
+
+    Called in the job body, before ``finalize``, so a rejected dataset writes nothing and
+    the CSV path's staged-file cleanup runs. Retrying cannot fix the data.
+    """
+    report = assess_quality(bars, actions)
+    try:
+        return enforce_gates(report)
+    except QualityGateError as exc:
+        raise PermanentJobError(str(exc)) from exc
+
+
 def register_version(
     db: Session,
     dataset: Dataset,
@@ -42,9 +60,13 @@ def register_version(
     actions: pd.DataFrame,
     provenance: dict[str, Any],
     instruments: pd.DataFrame | None,
+    *,
+    quality: QualityReport,
 ) -> DatasetVersion:
-    """Write an immutable dataset version and its catalog rows (idempotent by content)."""
-    quality = assess_quality(bars, actions)
+    """Write an immutable dataset version and its catalog rows (idempotent by content).
+
+    ``quality`` is the report from :func:`gate_quality`, which has already passed.
+    """
     dv = dataset_store().write(
         dataset.slug, bars, actions, provenance, quality.to_dict(), instruments
     )
@@ -113,6 +135,7 @@ def synthetic_dataset_task(ctx: JobContext) -> Finalizer:
     ctx.heartbeat(0.05, "generating synthetic market", force=True)
     market = generate_market(spec)
     ctx.heartbeat(0.6, "validating and writing dataset version", force=True)
+    quality = gate_quality(market.bars, market.actions)
     dataset_id = uuid.UUID(p["dataset_id"])
 
     def finalize(db: Session) -> dict[str, Any]:
@@ -120,7 +143,13 @@ def synthetic_dataset_task(ctx: JobContext) -> Finalizer:
         if ds is None:
             raise PermanentJobError("dataset was deleted")
         dv = register_version(
-            db, ds, market.bars, market.actions, market.provenance, market.instruments
+            db,
+            ds,
+            market.bars,
+            market.actions,
+            market.provenance,
+            market.instruments,
+            quality=quality,
         )
         return {
             "message": f"dataset version {dv.version_hash[:12]} ready",
@@ -397,13 +426,14 @@ def _csv_finalizer(ctx: JobContext, staged: Any) -> Finalizer:
         "duplicates_dropped": dupes,
     }
     ctx.heartbeat(0.5, "validating and writing dataset version", force=True)
+    quality = gate_quality(bars, actions)
     dataset_id = uuid.UUID(p["dataset_id"])
 
     def finalize(db: Session) -> dict[str, Any]:
         ds = db.get(Dataset, dataset_id)
         if ds is None:
             raise PermanentJobError("dataset was deleted")
-        dv = register_version(db, ds, bars, actions, provenance, None)
+        dv = register_version(db, ds, bars, actions, provenance, None, quality=quality)
         shutil.rmtree(staged, ignore_errors=True)
         return {
             "message": f"dataset version {dv.version_hash[:12]} ready ({dv.quality_status})",

@@ -11,7 +11,11 @@ Bars frame columns:
 Corporate actions frame columns:
     symbol (str), ex_date (datetime64), kind ("split" | "dividend"), value (float64)
     - split: ratio of new shares per old share (2.0 = 2-for-1)
-    - dividend: cash amount per pre-split share, paid to holders at the ex-date open
+    - dividend: cash amount per share held at the ex-date open; when a split shares the
+      ex-date, per pre-split share (the dividend is applied first)
+    declared_date, record_date, pay_date (datetime64, optional, NaT when unknown)
+    - recorded for provenance and validated by the ingestion gates; the engine and the
+      adjuster act on the ex-date only
 """
 
 from __future__ import annotations
@@ -21,6 +25,7 @@ import pandas as pd
 
 BAR_COLUMNS = ["symbol", "date", "open", "high", "low", "close", "volume", "available_at"]
 ACTION_COLUMNS = ["symbol", "ex_date", "kind", "value"]
+ACTION_DATE_COLUMNS = ["declared_date", "record_date", "pay_date"]
 ACTION_KINDS = ("split", "dividend")
 # Daily bars are considered knowable at the regular-session close (16:00 New York).
 SESSION_CLOSE = pd.Timedelta(hours=16)
@@ -76,6 +81,7 @@ def normalize_actions(frame: pd.DataFrame | None) -> pd.DataFrame:
                 "ex_date": pd.Series(dtype="datetime64[ns]"),
                 "kind": pd.Series(dtype=str),
                 "value": pd.Series(dtype="float64"),
+                **{c: pd.Series(dtype="datetime64[ns]") for c in ACTION_DATE_COLUMNS},
             }
         )
     missing = set(ACTION_COLUMNS) - set(frame.columns)
@@ -85,7 +91,18 @@ def normalize_actions(frame: pd.DataFrame | None) -> pd.DataFrame:
     out["symbol"] = out["symbol"].astype(str).str.upper().str.strip()
     if (~out["symbol"].str.fullmatch(SYMBOL_PATTERN)).any():
         raise SchemaError("invalid symbols in corporate actions")
-    out["ex_date"] = pd.to_datetime(out["ex_date"]).dt.normalize().astype("datetime64[ns]")
+    for col in ["ex_date", *ACTION_DATE_COLUMNS]:
+        if col not in out.columns:
+            out[col] = pd.NaT
+        try:
+            parsed = pd.to_datetime(out[col])
+        except (ValueError, TypeError) as exc:
+            raise SchemaError(f"corporate action {col} is not a date: {exc}") from exc
+        if parsed.dt.tz is not None:
+            parsed = parsed.dt.tz_convert(EXCHANGE_TZ).dt.tz_localize(None)
+        out[col] = parsed.dt.normalize().astype("datetime64[ns]")
+    if out["ex_date"].isna().any():
+        raise SchemaError("corporate action ex_date is required")
     out["kind"] = out["kind"].astype(str).str.lower()
     out["value"] = pd.to_numeric(out["value"], errors="coerce").astype("float64")
     bad_kind = ~out["kind"].isin(ACTION_KINDS)
@@ -93,7 +110,8 @@ def normalize_actions(frame: pd.DataFrame | None) -> pd.DataFrame:
         raise SchemaError(f"unknown corporate action kinds: {sorted(out.loc[bad_kind, 'kind'])}")
     if not np.isfinite(out["value"]).all() or (out["value"] <= 0).any():
         raise SchemaError("corporate action values must be finite and positive")
-    out = out[ACTION_COLUMNS].sort_values(["symbol", "ex_date", "kind"], kind="stable")
+    out = out[[*ACTION_COLUMNS, *ACTION_DATE_COLUMNS]]
+    out = out.sort_values(["symbol", "ex_date", "kind"], kind="stable")
     return out.reset_index(drop=True)
 
 
