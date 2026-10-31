@@ -185,7 +185,9 @@ def normalize_master(frame: pd.DataFrame) -> pd.DataFrame:
     try:
         # A malformed value (e.g. "-30%") must not silently become "unknown", which would
         # take the optimistic last-close exit.
-        m["delisting_return"] = pd.to_numeric(ret).astype("float64")
+        # Strip strings element by element; .str would turn non-string values into NaN.
+        cleaned = ret.map(lambda v: (v.strip() or None) if isinstance(v, str) else v)
+        m["delisting_return"] = pd.to_numeric(cleaned).astype("float64")
     except (ValueError, TypeError) as exc:
         raise IdentityError(f"delisting_return is not a number: {exc}") from exc
     r = m["delisting_return"]

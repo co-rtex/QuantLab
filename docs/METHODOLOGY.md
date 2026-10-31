@@ -167,15 +167,21 @@ Per session `k`:
    engine's handling during a halt depends on the later delisting, so positions and
    cash during the halt differ from a run without a master (pinned in
    `tests/unit/test_delisting_returns.py`). Decisions before the halt begins are
-   identical. A delisting dated on or after the last session of the window is not
-   applied: the position stays marked at its last close, and
-   `meta.delistings.after_window` counts it. `BacktestConfig.performance_delisting_return`
+   identical. The same holds for any data gap in a security the master delists later,
+   not only a gap that runs into the delisting: the missing-bars rule never sells it. A
+   delisting dated on or after the last session of the window is not applied, and the
+   position keeps its last mark. If the security traded on the last session, that mark
+   is a real close (a study ending before its data does); this is counted as
+   `meta.delistings.after_window_current` and is not a concern. If it did not, the mark
+   is stale; this is counted as `after_window` and warned about. `BacktestConfig.performance_delisting_return`
    (default off) prices a performance delisting (bankruptcy, liquidation, noncompliance)
    whose return is unknown, for example at Shumway's (1997) -30% instead of the
    optimistic last close; `meta.delistings.with_fallback_return` counts those. Delisting
    fills are recorded as sells and count toward turnover, like the missing-bars rule.
-   The integrity report's `delisting_exits` check warns when held delistings exited
-   at the last close without a known return, or delist after the window.
+   The integrity report's `delisting_exits` check warns when held delistings exited at
+   the last close without a known return, were priced with the assumed fallback (it names
+   the assumed return), or sit at a stale mark after the window. It is "not assessed" for
+   a dataset without an instrument master.
    The delisting date is public on the day, so acting on the next session uses no
    future data; the delisting return (final value relative to the last close, as in
    CRSP's DLRET) is booked at that point, which is standard practice even though the

@@ -244,6 +244,7 @@ def run_backtest(
         "return_unknown": 0,
         "by_missing_bars": 0,
         "after_window": 0,
+        "after_window_current": 0,
     }
     placement = adjuster.placed["placement"].value_counts()
     action_counts = {
@@ -537,10 +538,13 @@ def run_backtest(
             on_progress((step + 1) / n_steps)
 
     # A held security the master delists on or after the last session never reaches its
-    # delisting inside the window: it stays marked at its last close.
+    # delisting inside the window. If it traded on the last session its mark is a real
+    # close (a study ending before its data does); if not, it is a stale mark frozen at an
+    # earlier close, which overstates a failing security. Only the stale case is a concern.
     for sym, (when, _) in delist_at.items():
         if when >= dates[-1] and abs(ledger.quantity(sym)) > 1e-12:
-            delist_counts["after_window"] += 1
+            stale = not has_bar[-1, col[sym]]
+            delist_counts["after_window" if stale else "after_window_current"] += 1
     ledger.check_invariants()
     eq = pd.DataFrame(records).set_index("date")
     eq["gross_equity"] = eq["equity"] + eq["cum_commission"] + eq["cum_slippage"]
@@ -581,6 +585,7 @@ def run_backtest(
             "corporate_actions": action_counts,
             "delistings": delist_counts,
             "instrument_master_unmatched": master_unmatched,
+            "instrument_master": instruments is not None and len(instruments) > 0,
             "first_session": str(trade_dates[0].date()),
             "last_session": str(trade_dates[-1].date()),
         },

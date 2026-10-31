@@ -169,39 +169,59 @@ def build_integrity_report(ev: dict[str, Any]) -> dict[str, Any]:
     exits = _get(analysis, "meta", "delistings")
     if isinstance(exits, dict):
         optimistic = int(exits.get("return_unknown", 0)) + int(exits.get("by_missing_bars", 0))
-        unapplied = int(exits.get("after_window", 0))
+        stale = int(exits.get("after_window", 0))
         assumed = int(exits.get("with_fallback_return", 0))
         priced = int(exits.get("with_return", 0))
-        evidence = {k: int(v) for k, v in exits.items()}
-        if optimistic or unapplied:
-            parts = []
-            if optimistic:
-                parts.append(
-                    f"{optimistic} held delisting(s) exited at the last close because no "
-                    "delisting return was known, which overstates returns for failures"
-                )
-            if unapplied:
-                parts.append(
-                    f"{unapplied} held position(s) delist after the backtest window and stay "
-                    "marked at their last close"
-                )
+        evidence: dict[str, Any] = {k: int(v) for k, v in exits.items()}
+        assumption = cfg.get("performance_delisting_return")
+        has_master = bool(_get(analysis, "meta", "instrument_master"))
+        concerns = []
+        if optimistic:
+            concerns.append(
+                f"{optimistic} held delisting(s) exited at the last close because no delisting "
+                "return was known, which overstates returns for failures"
+            )
+        if stale:
+            concerns.append(
+                f"{stale} held position(s) delist after the backtest window and are marked at "
+                "a stale close (no bar on the last session)"
+            )
+        if assumed:
+            evidence["assumed_performance_delisting_return"] = assumption
+            concerns.append(
+                f"{assumed} performance delisting(s) were priced with an assumed return of "
+                f"{assumption:+.0%} (BacktestConfig.performance_delisting_return), not "
+                "observed data"
+                if isinstance(assumption, (int, float))
+                else f"{assumed} performance delisting(s) were priced with an assumed return"
+            )
+        if concerns:
             checks.append(
                 Check(
                     "delisting_exits",
                     "Delisting returns",
                     "warning",
-                    "; ".join(parts) + ".",
+                    "; ".join(concerns) + ".",
                     evidence,
                 )
             )
-        elif priced or assumed:
+        elif priced:
             checks.append(
                 Check(
                     "delisting_exits",
                     "Delisting returns",
                     "verified",
-                    f"{priced} held delisting(s) priced with known delisting returns"
-                    + (f" and {assumed} with the assumed performance return." if assumed else "."),
+                    f"{priced} held delisting(s) priced with known delisting returns.",
+                    evidence,
+                )
+            )
+        elif has_master:
+            checks.append(
+                Check(
+                    "delisting_exits",
+                    "Delisting returns",
+                    "verified",
+                    "No held position delisted during the backtest (instrument master present).",
                     evidence,
                 )
             )
@@ -210,8 +230,9 @@ def build_integrity_report(ev: dict[str, Any]) -> dict[str, Any]:
                 Check(
                     "delisting_exits",
                     "Delisting returns",
-                    "verified",
-                    "No held position delisted during the backtest.",
+                    "unassessed",
+                    "The dataset has no instrument master, so delistings could not be checked "
+                    "against delisting dates or returns.",
                     evidence,
                 )
             )
