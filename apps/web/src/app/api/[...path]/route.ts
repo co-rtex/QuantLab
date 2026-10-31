@@ -1,5 +1,7 @@
 import type { NextRequest } from "next/server";
 
+import { edgeClientAddress, edgeRequiredResponse, fromEdge } from "@/lib/edge";
+
 // Same-origin proxy to the QuantLab API so the httpOnly session cookie is first-party.
 // The upstream URL is read at request time, which keeps container images portable.
 const FORWARD_REQUEST = ["content-type", "authorization", "idempotency-key", "x-request-id", "cookie"];
@@ -43,6 +45,7 @@ async function readCapped(req: NextRequest): Promise<ArrayBuffer | null> {
 }
 
 async function forward(req: NextRequest, ctx: { params: Promise<{ path: string[] }> }) {
+  if (!fromEdge(req.headers)) return edgeRequiredResponse();
   const { path } = await ctx.params;
   // Only proxy the versioned API; never let dot segments or separators escape it.
   if (path[0] !== "v1" || path.some((seg) => seg === "." || seg === ".." || /[\\/]/.test(seg))) {
@@ -59,12 +62,11 @@ async function forward(req: NextRequest, ctx: { params: Promise<{ path: string[]
     const v = req.headers.get(h);
     if (v) headers.set(h, v);
   }
-  // Tell the API who the client is, or every browser shares this server's address and ten
-  // failed logins anywhere lock everyone out (ADR-0008). Next fills X-Forwarded-For with
-  // the socket address when the request has none; an edge in front appends its peer. Only
-  // the rightmost hop is forwarded: entries to its left were written by the client.
-  const hops = (req.headers.get("x-forwarded-for") ?? "").split(",").map((h) => h.trim()).filter(Boolean);
-  if (hops.length) headers.set("x-forwarded-for", hops[hops.length - 1]);
+  // The client address goes to the API only when the TLS edge wrote it (lib/edge.ts,
+  // ADR-0008). Otherwise none is sent and the API skips its per-address limit: forwarding
+  // whatever arrived would let a client choose the bucket it is throttled in.
+  const client = edgeClientAddress(req.headers);
+  if (client) headers.set("x-forwarded-for", client);
   const hasBody = !["GET", "HEAD"].includes(req.method);
   const body = hasBody ? await readCapped(req) : undefined;
   if (body === null) {

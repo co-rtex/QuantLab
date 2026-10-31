@@ -12,10 +12,10 @@ from quantlab_api.security import (
     DB,
     CurrentUser,
     audit,
-    client_ip,
     create_access_token,
     hash_password,
     login_limiter,
+    rate_limit_address,
     verify_password,
 )
 
@@ -39,8 +39,10 @@ def _issue(response: Response, user: User) -> TokenOut:
 
 @router.post("/register", response_model=TokenOut, status_code=201)
 def register(body: RegisterIn, request: Request, response: Response, db: DB) -> TokenOut:
-    ip = client_ip(request)
-    login_limiter.check(f"register:{ip}", get_settings().rate_limit_login_per_minute)
+    # No address (behind a proxy without a TLS edge): skip rather than share one bucket.
+    ip = rate_limit_address(request)
+    if ip is not None:
+        login_limiter.check(f"register:{ip}", get_settings().rate_limit_login_per_minute)
     email = body.email.lower()
     if db.scalar(select(User).where(User.email == email)):
         raise ApiError(409, "email_taken", "An account with this email already exists")
@@ -74,12 +76,16 @@ def register(body: RegisterIn, request: Request, response: Response, db: DB) -> 
 
 @router.post("/login", response_model=TokenOut)
 def login(body: LoginIn, request: Request, response: Response, db: DB) -> TokenOut:
-    ip = client_ip(request)
+    ip = rate_limit_address(request)
     limit = get_settings().rate_limit_login_per_minute
     # Every attempt counts against the client address. Only *failed* attempts count against
-    # the account, with a higher threshold, so a third party cannot lock out a real user by
-    # spending the account's budget, while distributed guessing is still throttled.
-    login_limiter.check(f"login:ip:{ip}", limit)
+    # the account, with a higher threshold, so distributed guessing is still throttled.
+    # A client that reaches the API from many addresses can still spend an account's
+    # budget (ADR-0008); what the edge guarantees is that it cannot choose those addresses.
+    # Without a known address (no TLS edge) only the account limit applies: one shared
+    # bucket for everyone would let ten failed logins lock every user out.
+    if ip is not None:
+        login_limiter.check(f"login:ip:{ip}", limit)
     acct_key = f"login:fail:{body.email.lower()}"
     # Reserve atomically before verifying; refunded below if the login succeeds.
     if not login_limiter.reserve(acct_key, limit * 3):
