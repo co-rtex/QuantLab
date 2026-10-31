@@ -281,15 +281,19 @@ Full-stack runs are now serialized machine-wide (`make e2e-serial`).
      and PR (#139).
    * #17 Playwright in CI is **approved, with Actions usage controlled**. The lead is
      building it.
-   * After that, the lead writes a consolidated release-readiness assessment instead of
-     new feature work.
+   * Local Caddyfile validation is **approved**, using an existing Caddy binary or an
+     approved container-image pull. It does **not** clear the #39 gate.
+   * A quiet benchmark window for #24 is **approved**, coordinated with both workers.
+     Only measured figures are published.
+   * Then an independent release-candidate assessment and a classified list of release
+     blockers, not new feature work.
+   * Paid market-data services and hosted LLM usage stay blocked.
 5. **Blocked on the user:**
    * #39 (a host, a second machine, and Caddyfile validation, since the caddy download was
      denied);
    * #11 and #12 live (vendor, licence and key);
    * #15 hosted eval (LLM key);
    * #20 (load host);
-   * a quiet window for #24 figures;
    * any `terraform apply` (cloud account, cost).
 
 ## Blockers
