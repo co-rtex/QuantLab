@@ -260,9 +260,10 @@ def compute_performance(
             rb = simple_returns(b)
             active = r - rb
             var_b = float(rb.var(ddof=1))
+            sd_b = float(rb.std(ddof=1))
             m.set("benchmark_total_return", b.iloc[-1] / b.iloc[0] - 1)
             m.set("excess_total_return", (e.iloc[-1] / e.iloc[0]) - (b.iloc[-1] / b.iloc[0]))
-            if var_b <= 1e-18:
+            if sd_b <= ZERO_DISPERSION:  # the same per-period rule as every dispersion
                 m.set("beta", None, "benchmark has zero variance")
                 m.set("alpha", None, "beta undefined")
                 m.set("correlation", None, "benchmark has zero variance")

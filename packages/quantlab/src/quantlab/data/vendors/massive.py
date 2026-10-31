@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import math
 from typing import Any
+from urllib.parse import quote
 
 import numpy as np
 import pandas as pd
@@ -128,35 +129,57 @@ class MassiveProvider:
             ],
         )
 
-    def ticker_events(self, figi: str) -> list[tuple[pd.Timestamp, str]]:
-        """(date, ticker) changes for one security, oldest first (experimental endpoint)."""
-        page = self.api.get(f"/vX/reference/tickers/{figi}/events", {"types": "ticker_change"})
+    def ticker_events(self, id_: str) -> list[tuple[pd.Timestamp, str]]:
+        """(date, ticker) changes for one security, oldest first (experimental endpoint).
+
+        The vendor documents ``id`` as a ticker, a CUSIP or a **composite** FIGI; a
+        share-class FIGI is not listed, so callers pass the composite FIGI.
+        """
+        page = self.api.get(
+            f"/vX/reference/tickers/{quote(id_, safe='')}/events", {"types": "ticker_change"}
+        )
         res = page.get("results")
         if not isinstance(res, dict):
             raise VendorSchemaError("events: 'results' is not an object")
         events = res.get("events") or []
         out = []
         for e in events:
-            where = f"events[{figi}]"
+            where = f"events[{id_}]"
             if not isinstance(e, dict) or e.get("type") != "ticker_change":
                 continue
             change = _need(e, "ticker_change", where)
-            out.append((_date(_need(e, "date", where), "date", where), str(change["ticker"])))
+            if not isinstance(change, dict) or not isinstance(change.get("ticker"), str):
+                raise VendorSchemaError(f"{where}: ticker_change has no ticker")
+            out.append((_date(_need(e, "date", where), "date", where), change["ticker"]))
         return sorted(out)
 
     def identity(self, reference: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:
         """Symbol history and instrument master for the securities in ``reference``.
 
-        Securities without a ``share_class_figi`` cannot be given a permanent id and are
-        left out (they are reported by :meth:`unidentified`).
+        Securities without a ``share_class_figi`` cannot be given a permanent id, and those
+        without a ``composite_figi`` cannot have their ticker history looked up; both are
+        left out (reported by :meth:`unidentified` and ``self.skipped``).
+
+        ``reference`` must carry the *current* ``active`` flags: build it from
+        ``reference(active=True)`` and ``reference(active=False)`` without ``date=``. A
+        reference taken as of a past date marks securities delisted since then as active,
+        so their delisting is lost and the universe is survivorship-biased.
         """
         hist_rows: list[dict[str, Any]] = []
         master_rows: list[dict[str, Any]] = []
+        self.skipped: list[str] = []
         known = reference[reference["share_class_figi"].notna()]
         for figi, g in known.groupby("share_class_figi", sort=True):
             info = g.iloc[-1]
-            delisted = g["delisted"].dropna().max() if g["delisted"].notna().any() else None
-            events = self.ticker_events(str(figi))
+            # A security is delisted only if none of its rows is active: a rename can leave
+            # the old ticker as an inactive row with delisted_utc set on the rename date.
+            gone = not g["active"].any() and g["delisted"].notna().any()
+            delisted = g["delisted"].dropna().max() if gone else None
+            composite = g["composite_figi"].dropna()
+            if composite.empty:
+                self.skipped.append(str(figi))
+                continue
+            events = self.ticker_events(str(composite.iloc[-1]))
             if not events:
                 raise VendorSchemaError(f"no ticker history for {figi}")
             ends = [d for d, _ in events[1:]] + [
@@ -191,14 +214,14 @@ class MassiveProvider:
     def fetch_bars(self, symbol: str, start: pd.Timestamp, end: pd.Timestamp) -> pd.DataFrame:
         """Raw daily bars for one ticker in [start, end] (ticker-keyed)."""
         path = (
-            f"/v2/aggs/ticker/{symbol}/range/1/day/"
+            f"/v2/aggs/ticker/{quote(symbol, safe='')}/range/1/day/"
             f"{pd.Timestamp(start).date()}/{pd.Timestamp(end).date()}"
         )
         params = {"adjusted": "false", "sort": "asc", "limit": PAGE_LIMIT["aggs"]}
         rows = []
         for page in self.api.pages(path, params):
-            if page.get("adjusted") is True:
-                raise VendorSchemaError("aggregates came back split-adjusted; raw bars required")
+            if page.get("adjusted") is not False:  # fail closed: missing is not raw
+                raise VendorSchemaError("aggregates are not confirmed unadjusted (adjusted=false)")
             for r in _results(page, f"aggs[{symbol}]"):
                 where = f"aggs[{symbol}]"
                 rows.append(
@@ -257,7 +280,7 @@ class MassiveProvider:
         for page in self.api.pages("/stocks/v1/dividends", div_params):
             for r in _results(page, f"dividends[{symbol}]"):
                 where = f"dividends[{symbol}]"
-                currency = r.get("currency", "USD")
+                currency = _need(r, "currency", where)  # fail closed: never assume USD
                 if currency != "USD":
                     raise VendorSchemaError(f"{where}: currency {currency!r} is not USD")
                 rows.append(

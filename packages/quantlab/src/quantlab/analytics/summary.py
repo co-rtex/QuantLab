@@ -69,7 +69,8 @@ def rolling_metrics(
     rf_p = (1 + risk_free_rate) ** (1 / P) - 1
     r = simple_returns(equity)
     sd = r.rolling(window).std(ddof=1)
-    sd = sd.where(sd > ZERO_DISPERSION, 0.0)  # rolling sums leave ~1e-17 on flat windows
+    # Rolling sums leave ~1e-17 on flat windows; mask (not where) keeps warm-up rows NaN.
+    sd = sd.mask(sd <= ZERO_DISPERSION, 0.0)
     excess_mean = r.rolling(window).mean() - rf_p
     sharpe = (excess_mean / sd.where(sd > 0)) * math.sqrt(P)
     return pd.DataFrame({"rolling_vol": sd * math.sqrt(P), "rolling_sharpe": sharpe})
