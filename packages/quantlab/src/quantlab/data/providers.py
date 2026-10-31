@@ -243,9 +243,7 @@ def ingest(
     s, e = pd.Timestamp(start), pd.Timestamp(end)
     cp = checkpoint or IngestionCheckpoint()
     bar_frames = [existing_bars] if existing_bars is not None and len(existing_bars) else []
-    act_frames = (
-        [existing_actions] if existing_actions is not None and len(existing_actions) else []
-    )
+    act_frames: list[pd.DataFrame] = []  # fetched in this run
     syms = list(symbols)
     ingested: list[str] = []
     for k, sym in enumerate(syms):
@@ -278,10 +276,20 @@ def ingest(
     )
     before = len(bars)
     bars = bars.drop_duplicates(["symbol", "date"], keep="last").reset_index(drop=True)
-    actions = normalize_actions(pd.concat(act_frames, ignore_index=True) if act_frames else None)
-    actions = actions.drop_duplicates(["symbol", "ex_date", "kind"], keep="last").reset_index(
-        drop=True
-    )
+    # Every row a provider returns is kept: two dividends on one ex-date (a regular and a
+    # special) are two payments. A re-fetch is the provider's current statement for the
+    # (symbol, ex-date, kind) keys it returns, so it replaces those keys in the existing
+    # actions instead of adding to them (a corrected amount must not be summed with the
+    # old one). Exact duplicates within one fetch are left for the quality gates.
+    fetched = normalize_actions(pd.concat(act_frames, ignore_index=True) if act_frames else None)
+    old = normalize_actions(existing_actions)
+    key = ["symbol", "ex_date", "kind"]
+    restated = pd.MultiIndex.from_frame(old[key]).isin(pd.MultiIndex.from_frame(fetched[key]))
+    actions = normalize_actions(
+        pd.concat([old[~restated], fetched], ignore_index=True)
+        if len(old) or len(fetched)
+        else None
+    ).reset_index(drop=True)
     return IngestionResult(
         bars=bars,
         actions=actions,
