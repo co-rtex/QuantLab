@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { PageHeader } from "@/components/Shell";
-import { Empty, Panel, QueryError, Skeleton, StatusPill, SyntheticTag } from "@/components/ui";
+import { Empty, Panel, QueryError, Skeleton, StatusPill, SyntheticLabel } from "@/components/ui";
 import type { DatasetVersion, Experiment, Job, Page } from "@/lib/api";
 import { dateTime, num, pct, shortHash, signClass, strategyLabel } from "@/lib/format";
 import { useSynthetic } from "@/lib/synthetic";
@@ -69,11 +69,7 @@ export default function Overview() {
                         <Link href={`/experiments/${e.id}`} className="font-medium text-cobalt hover:underline">
                           {e.name}
                         </Link>
-                        {synthetic(e.dataset_version_id) && (
-                          <span className="ml-1.5 align-middle">
-                            <SyntheticTag />
-                          </span>
-                        )}
+                        <SyntheticLabel inline status={synthetic(e.dataset_version_id)} />
                       </td>
                       <td className="text-ink-2">{strategyLabel(e.strategy_key)}</td>
                       <td>

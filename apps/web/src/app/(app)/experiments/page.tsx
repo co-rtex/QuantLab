@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useState } from "react";
 import { PageHeader } from "@/components/Shell";
-import { Panel, QueryError, Skeleton, StatusPill, SyntheticTag } from "@/components/ui";
+import { Panel, QueryError, Skeleton, StatusPill, SyntheticLabel } from "@/components/ui";
 import type { Experiment, Page } from "@/lib/api";
 import { dateTime, multiple, num, pct, signClass, strategyLabel } from "@/lib/format";
 import { useSynthetic } from "@/lib/synthetic";
@@ -88,11 +88,7 @@ export default function ExperimentsPage() {
                           {e.name}
                         </Link>
                         {e.parent_id && <span className="ml-1.5 text-xs text-ink-3">reproduction</span>}
-                        {synthetic(e.dataset_version_id) && (
-                          <span className="ml-1.5 align-middle">
-                            <SyntheticTag />
-                          </span>
-                        )}
+                        <SyntheticLabel inline status={synthetic(e.dataset_version_id)} />
                       </td>
                       <td className="text-ink-2">{strategyLabel(e.strategy_key)}</td>
                       <td>

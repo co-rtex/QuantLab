@@ -5,7 +5,7 @@ import { useParams } from "next/navigation";
 import { useState, type FormEvent } from "react";
 import { EquityChart } from "@/components/charts";
 import { PageHeader } from "@/components/Shell";
-import { ErrorNote, Panel, QueryError, Skeleton, SyntheticTag } from "@/components/ui";
+import { ErrorNote, Panel, QueryError, Skeleton, SyntheticLabel, syntheticStatus } from "@/components/ui";
 import { api, ApiError } from "@/lib/api";
 import { money, num, pct, signClass } from "@/lib/format";
 import { useApi } from "@/lib/useApi";
@@ -79,7 +79,7 @@ export default function PortfolioPage() {
           Portfolios
         </Link>
       </p>
-      <PageHeader title={p.data?.name ?? "Portfolio"} lede="Returns are time-weighted, so deposits and withdrawals do not count as performance." actions={val?.portfolio.is_synthetic ? <SyntheticTag /> : undefined} />
+      <PageHeader title={p.data?.name ?? "Portfolio"} lede="Returns are time-weighted, so deposits and withdrawals do not count as performance." actions={<SyntheticLabel status={syntheticStatus(val?.portfolio.is_synthetic)} />} />
       <QueryError q={p} what="this portfolio" />
       <QueryError q={v} what="the valuation" />
       {val && (

@@ -2,7 +2,7 @@
 
 import { useState, type FormEvent } from "react";
 import { PageHeader } from "@/components/Shell";
-import { ErrorNote, JobProgress, Panel, Pending, QueryError, StatusPill, SyntheticTag } from "@/components/ui";
+import { ErrorNote, JobProgress, Panel, Pending, QueryError, StatusPill, SyntheticLabel } from "@/components/ui";
 import { api, ApiError, newIdempotencyKey, type DatasetVersion, type Job } from "@/lib/api";
 import { dateTime, num, pct, shortHash } from "@/lib/format";
 import { useSynthetic } from "@/lib/synthetic";
@@ -241,11 +241,7 @@ export default function MLPage() {
                     <span>
                       <span className="block">
                         {r.name}
-                        {synthetic(r.dataset_version_id) && (
-                          <span className="ml-1.5 align-middle">
-                            <SyntheticTag />
-                          </span>
-                        )}
+                        <SyntheticLabel inline status={synthetic(r.dataset_version_id)} />
                       </span>
                       <span className="block text-xs text-ink-2">{dateTime(r.created_at)}</span>
                     </span>
@@ -258,7 +254,7 @@ export default function MLPage() {
         </div>
         <Panel
           title="Results"
-          aside={synthetic(runs.data?.find((r) => r.id === (selected ?? runs.data?.[0]?.id))?.dataset_version_id) ? <SyntheticTag /> : undefined}
+          aside={<SyntheticLabel status={synthetic(runs.data?.find((r) => r.id === (selected ?? runs.data?.[0]?.id))?.dataset_version_id)} />}
         >
           {selected ?? runs.data?.[0]?.id ? <RunDetail id={(selected ?? runs.data?.[0]?.id) as string} /> : <p className="text-sm text-ink-2">Train a model to see out-of-sample results here.</p>}
         </Panel>

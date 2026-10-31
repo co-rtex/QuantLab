@@ -4,10 +4,10 @@ import Link from "next/link";
 import { useState } from "react";
 import { CompareChart, SERIES } from "@/components/charts";
 import { PageHeader } from "@/components/Shell";
-import { ErrorNote, Panel, QueryError, Skeleton, SyntheticTag } from "@/components/ui";
+import { ErrorNote, Panel, QueryError, Skeleton, SyntheticLabel } from "@/components/ui";
 import { api, ApiError, type Experiment, type Metrics, type Page, type Series } from "@/lib/api";
 import { num, pct, signClass, strategyLabel } from "@/lib/format";
-import { useSynthetic } from "@/lib/synthetic";
+import { combined, useSynthetic } from "@/lib/synthetic";
 import { useApi } from "@/lib/useApi";
 import { useWorkspace } from "@/lib/workspace";
 
@@ -87,11 +87,7 @@ export default function ComparePage() {
                     <span>
                       <span className="block">
                         {e.name}
-                        {synthetic(e.dataset_version_id) && (
-                          <span className="ml-1.5 align-middle">
-                            <SyntheticTag />
-                          </span>
-                        )}
+                        <SyntheticLabel inline status={synthetic(e.dataset_version_id)} />
                       </span>
                       <span className="block text-xs text-ink-2">{strategyLabel(e.strategy_key)}</span>
                     </span>
@@ -110,7 +106,7 @@ export default function ComparePage() {
         <div className="space-y-6">
           {result ? (
             <>
-              <Panel title="Growth of $1" aside={result.some((r) => isSynthetic(r.id)) ? <SyntheticTag /> : undefined}>
+              <Panel title="Growth of $1" aside={<SyntheticLabel status={combined(result.map((r) => isSynthetic(r.id)))} />}>
                 <CompareChart series={result.map((r) => ({ name: r.name, dates: r.series.dates, values: r.series.normalized as (number | null)[] }))} />
               </Panel>
               <Panel title="Statistics">
@@ -134,11 +130,7 @@ export default function ComparePage() {
                             <Link href={`/experiments/${r.id}`} className="text-cobalt hover:underline">
                               {r.name}
                             </Link>
-                            {isSynthetic(r.id) && (
-                              <span className="ml-1.5 align-middle">
-                                <SyntheticTag />
-                              </span>
-                            )}
+                            <SyntheticLabel inline status={isSynthetic(r.id)} />
                           </td>
                           {COLS.map(([l, k, f]) => (
                             <td key={l} className={`r ${k === "total_return" || k === "cagr" ? signClass(r.summary[k]) : ""}`}>

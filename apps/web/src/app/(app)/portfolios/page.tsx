@@ -4,7 +4,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useState, type FormEvent } from "react";
 import { PageHeader } from "@/components/Shell";
-import { ErrorNote, Panel, QueryError, SyntheticTag } from "@/components/ui";
+import { ErrorNote, Panel, QueryError, SyntheticLabel } from "@/components/ui";
 import { api, ApiError, type DatasetVersion } from "@/lib/api";
 import { dateTime, shortHash } from "@/lib/format";
 import { useSynthetic } from "@/lib/synthetic";
@@ -81,11 +81,7 @@ export default function PortfoliosPage() {
                       <Link className="font-medium text-cobalt hover:underline" href={`/portfolios/${p.id}`}>
                         {p.name}
                       </Link>
-                      {synthetic(p.dataset_version_id) && (
-                        <span className="ml-1.5 align-middle">
-                          <SyntheticTag />
-                        </span>
-                      )}
+                      <SyntheticLabel inline status={synthetic(p.dataset_version_id)} />
                     </td>
                     <td>{p.benchmark ?? "—"}</td>
                     <td className="r num">{p.transactions}</td>

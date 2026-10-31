@@ -85,3 +85,53 @@ test("every instrument of a large catalog is read, so the benchmark is offered",
   await expect(benchmark.locator("option", { hasText: "ZZIDX" })).toHaveCount(1);
   await expect(page.getByPlaceholder("All 2000 tradable symbols")).toBeVisible();
 });
+
+test("a result whose dataset cannot be checked is never shown as real", async ({ page }) => {
+  test.setTimeout(180_000);
+  const { dv, id, name } = await workspaceWithExperiment(page, "unknown");
+  const row = page.getByRole("row").filter({ hasText: name });
+  const versions = "**/api/v1/workspaces/*/dataset-versions";
+  const failure = { status: 500, contentType: "application/json", body: JSON.stringify({ error: { code: "internal_error", message: "Internal server error" } }) };
+
+  // Loading: the version list has not arrived yet.
+  let release: () => void = () => {};
+  const held = new Promise<void>((r) => (release = r));
+  await page.route(versions, async (route) => {
+    await held;
+    await route.continue();
+  });
+  await page.goto("/experiments");
+  await expect(row.getByText("Synthetic status unknown")).toBeVisible();
+  release();
+  await expect(row.getByText("Synthetic data")).toBeVisible();
+  await page.unroute(versions);
+
+  // Failed: the version list could not be loaded.
+  await page.route(versions, (route) => route.fulfill(failure));
+  await page.goto("/experiments");
+  await expect(row.getByText("Synthetic status unknown")).toBeVisible();
+  await audit(page, "experiments list, synthetic status unknown");
+  await page.unroute(versions);
+
+  // Missing: the list does not contain the experiment's version.
+  await page.route(versions, (route) => route.fulfill({ contentType: "application/json", body: "[]" }));
+  await page.goto("/experiments");
+  await expect(row.getByText("Synthetic status unknown")).toBeVisible();
+  await page.unroute(versions);
+
+  // Positively real: no label.
+  await page.route(versions, async (route) => {
+    const list = await (await route.fetch()).json();
+    await route.fulfill({ contentType: "application/json", body: JSON.stringify(list.map((v: { id: string }) => (v.id === dv ? { ...v, is_synthetic: false } : v))) });
+  });
+  await page.goto("/experiments");
+  await expect(row).toBeVisible();
+  await expect(row.getByText(/Synthetic/)).toHaveCount(0);
+  await page.unroute(versions);
+
+  // The experiment page, when its dataset version cannot be loaded.
+  await page.route(`**/api/v1/dataset-versions/${dv}`, (route) => route.fulfill(failure));
+  await page.goto(`/experiments/${id}`);
+  await expect(page.getByRole("region", { name: "Evidence" }).getByText("Synthetic status unknown")).toBeVisible();
+  await expect(page.locator("section").filter({ hasText: "Ask about this experiment" }).getByText("Synthetic status unknown")).toBeVisible();
+});
