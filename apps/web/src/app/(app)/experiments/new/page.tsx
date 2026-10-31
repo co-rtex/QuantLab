@@ -24,6 +24,16 @@ function editable(prop: JsonSchemaProp): boolean {
   return !!prop.enum || prop.type === "integer" || prop.type === "number";
 }
 
+/**
+ * The default first session: a year after the data starts, so indicators have history to
+ * warm up on. On data shorter than that, the first session, so the default is always a
+ * date the form accepts: past max, the browser refused to submit the form.
+ */
+function defaultStart(first: string, last: string): string {
+  const afterWarmUp = `${Number(first.slice(0, 4)) + 1}-01-02`;
+  return afterWarmUp <= last ? afterWarmUp : first;
+}
+
 function ParamField({ name, prop, value, onChange }: { name: string; prop: JsonSchemaProp; value: unknown; onChange: (v: unknown) => void }) {
   const label = prop.title ?? name.replaceAll("_", " ");
   const id = `param-${name}`;
@@ -378,7 +388,7 @@ function Builder() {
             <div className="grid grid-cols-2 gap-3">
               <label className="block">
                 <span className="mb-1 block">First session</span>
-                <input name="start" type="date" min={version?.start_date} max={version?.end_date} defaultValue={version ? `${Number(version.start_date.slice(0, 4)) + 1}-01-02` : undefined} key={version?.id} className="field" />
+                <input name="start" type="date" min={version?.start_date} max={version?.end_date} defaultValue={version ? defaultStart(version.start_date, version.end_date) : undefined} key={version?.id} className="field" />
               </label>
               <label className="block">
                 <span className="mb-1 block">Last session</span>
