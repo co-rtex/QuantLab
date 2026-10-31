@@ -20,6 +20,7 @@ The API key is added to every request, including ``next_url`` pages, and is repl
 
 from __future__ import annotations
 
+import http.client
 import json
 import random
 import time
@@ -54,6 +55,8 @@ class HttpResponse:
 
 
 Transport = Callable[[str, float], HttpResponse]
+# Larger than any documented page (aggregates: 50,000 bars), small enough to be safe.
+MAX_RESPONSE_BYTES = 64 * 2**20
 
 
 class _RefuseRedirects(urllib.request.HTTPRedirectHandler):
@@ -80,11 +83,25 @@ def urllib_transport(url: str, timeout: float) -> HttpResponse:
     req = urllib.request.Request(url, headers={"Accept": "application/json"})  # noqa: S310
     try:
         with _OPENER.open(req, timeout=timeout) as resp:  # https only, no redirects
-            return HttpResponse(resp.status, dict(resp.headers), resp.read())
+            return HttpResponse(resp.status, dict(resp.headers), _read(resp))
     except urllib.error.HTTPError as exc:
-        return HttpResponse(exc.code, dict(exc.headers or {}), exc.read() or b"")
-    except (urllib.error.URLError, TimeoutError, ConnectionError) as exc:
-        raise TransientProviderError(f"network error: {exc}") from exc
+        try:
+            body = _read(exc)
+        except (OSError, http.client.HTTPException):
+            body = b""
+        return HttpResponse(exc.code, dict(exc.headers or {}), body)
+    except (OSError, http.client.HTTPException) as exc:
+        # URLError, timeouts, resets, TLS errors (ssl.SSLError) and a truncated body
+        # (http.client.IncompleteRead) can all happen while reading; all are retryable.
+        raise TransientProviderError(f"network error: {type(exc).__name__}: {exc}") from exc
+
+
+def _read(resp: Any) -> bytes:
+    """The response body, refusing anything larger than ``MAX_RESPONSE_BYTES``."""
+    body: bytes = resp.read(MAX_RESPONSE_BYTES + 1)
+    if len(body) > MAX_RESPONSE_BYTES:
+        raise PermanentProviderError(f"response larger than {MAX_RESPONSE_BYTES} bytes")
+    return body
 
 
 @dataclass
@@ -109,7 +126,14 @@ class JsonApi:
         self._rng = random.Random(self.seed)  # noqa: S311 - backoff jitter, not crypto
 
     def _redact(self, text: str) -> str:
-        return text.replace(self.api_key, "***")
+        # The key also appears URL-encoded in request URLs (e.g. "+" as "%2B").
+        for form in {
+            self.api_key,
+            urllib.parse.quote(self.api_key, safe=""),
+            urllib.parse.quote_plus(self.api_key),
+        }:
+            text = text.replace(form, "***")
+        return text
 
     def _url(self, path_or_url: str, params: Mapping[str, Any] | None = None) -> str:
         url = path_or_url if "://" in path_or_url else self.base_url.rstrip("/") + path_or_url

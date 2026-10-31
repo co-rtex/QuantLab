@@ -26,9 +26,9 @@ Credible historical research on US equities requires:
 |---|---|---|---|---|
 | Delisted securities | `active=false` on `/v3/reference/tickers`, `delisted_utc` = last trade date (optional on some records) [1][2] | Yes, survivorship-free; `isdelisted` [5][6] | Unclear from docs; anecdotal yes [7] | `delisted=1` symbol list; delisted before 2018: EOD prices only [8] |
 | Permanent identifier | `composite_figi`, `share_class_figi` (OpenFIGI); vendor recommends share-class FIGI [1][2] | `permaticker` [6] | Not found in docs | None documented; reused tickers get an `_old` suffix [8] |
-| Ticker history | `/vX/reference/tickers/{id}/events`, `ticker_change` events since 2003-09-10; **experimental** [3] | ACTIONS table ticker changes; TICKERS holds only the current ticker [6][9] | Not documented | Separate symbol-rename API [10] |
+| Ticker history | `/vX/reference/tickers/{id}/events`, `ticker_change` events since 2003-09-10 (vendor-stated, unverified); **experimental** [3] | ACTIONS table ticker changes [6]; TICKERS reportedly holds only the current ticker (unverified community report [9]) | Not documented | Separate symbol-rename API [10] |
 | Point-in-time reference | `date` parameter on the tickers endpoint [1] | Via ACTIONS chain | No | No |
-| Dividends with dates | `/stocks/v1/dividends`: `declaration_date`, `ex_dividend_date`, `record_date`, `pay_date`, `cash_amount`, `distribution_type` (recurring, special, ...), since 2000-01-15 [4] | ACTIONS covers dividends, splits, spin-offs, acquisitions, delist reasons [6] | `divCash` on ex-date only [7] | Declaration/record/payment dates only for "major US tickers", JSON only [8] |
+| Dividends with dates | `/stocks/v1/dividends`: `declaration_date`, `ex_dividend_date`, `record_date`, `pay_date`, `cash_amount`, `distribution_type` (recurring, special, ...), since 2000-01-15 (vendor-stated, unverified) [4] | ACTIONS covers dividends, splits, spin-offs, acquisitions, delist reasons [6] | `divCash` on ex-date only [7] | Declaration/record/payment dates only for "major US tickers", JSON only [8] |
 | Delisting reason or return | No reason or return field documented | Delist reasons in ACTIONS [6]; return not documented | No | No |
 | Pagination | `next_url` cursor; `limit` max 1000 (tickers), 5000 (dividends) [1][4] | Bulk export or table API | Per-ticker | Per-ticker |
 | History depth by plan | Basic: 2 years; paid plans: full [1][3][4] | 20+ years [5] | | |
@@ -43,7 +43,7 @@ Sources:
 [6] https://sharadar.com/sample ·
 [7] https://www.tiingo.com/documentation/end-of-day ·
 [8] https://eodhd.com/financial-apis/api-splits-dividends and https://eodhd.com/financial-apis/delisted-stock-companies-data ·
-[9] https://github.com/ZhaorongDai/quantlab/issues/229 (community report, unrelated project) ·
+[9] https://github.com/ZhaorongDai/quantlab/issues/229 (an unrelated project's issue: weak evidence, not relied on) ·
 [10] https://eodhd.com/financial-apis/us-stock-symbol-rename-history-api ·
 [11] https://apicostcalc.com/blog/polygon-massive-rebrand-api-pricing.html (third party; confirm on massive.com/pricing)
 
@@ -83,10 +83,10 @@ Sources:
 | Purpose | Endpoint | Fields mapped | Notes |
 |---|---|---|---|
 | Daily bars | `GET /v2/aggs/ticker/{ticker}/range/1/day/{from}/{to}?adjusted=false&sort=asc` [12] | `o h l c v t` → open, high, low, close, volume, session date (`t` = Unix ms of the window start in New York time) | `limit` max 50000 base aggregates; `next_url` paging. **Aggregates include pre-market and after-hours trades** [12], so `o`/`c` may differ from the official opening and closing auction prices. Unverified: must be reconciled against a second source before research use. |
-| Splits | `GET /stocks/v1/splits` [13] | `ticker, execution_date` (ex-date), `split_to / split_from` (ratio), `adjustment_type` (`forward_split`, `reverse_split`, `stock_dividend`), `id` | Since 1978-10-25; `limit` max 5000. A stock dividend is a share-count change, so it is mapped as a split. |
+| Splits | `GET /stocks/v1/splits` [13] | `ticker, execution_date` (ex-date), `split_to / split_from` (ratio), `adjustment_type` (`forward_split`, `reverse_split`, `stock_dividend`), `id` | Since 1978-10-25 (vendor-stated, unverified); `limit` max 5000. A stock dividend is a share-count change, so it is mapped as a split. |
 | Dividends | `GET /stocks/v1/dividends` [4] | `ticker, ex_dividend_date, cash_amount, declaration_date, record_date, pay_date, distribution_type, currency, id` | Non-USD amounts are rejected rather than converted. |
 | Security master | `GET /v3/reference/tickers?active=…&date=…` [1] | `ticker, name, active, delisted_utc, share_class_figi, composite_figi, cik` | `limit` max 1000. |
-| Ticker history | `GET /vX/reference/tickers/{id}/events?types=ticker_change` [3] | `events[].date, events[].ticker_change.ticker` | Experimental. |
+| Ticker history | `GET /vX/reference/tickers/{id}/events?types=ticker_change` [3] | `events[].date, events[].ticker_change.ticker` | Experimental. `id` is documented as a ticker, CUSIP or **composite** FIGI, so the adapter passes `composite_figi` (a security without one is skipped, not guessed). |
 
 [12] https://massive.com/docs/rest/stocks/aggregates/custom-bars.md ·
 [13] https://massive.com/docs/rest/stocks/corporate-actions/splits.md
@@ -95,6 +95,9 @@ Sources:
 
 * `http.JsonApi`:
   * HTTPS only; redirects are never followed (the key is in the query string).
+  * Bodies are capped at 64 MiB, and read-time failures (truncated body, TLS error,
+    reset) are retried like connection failures.
+  * The key is redacted in raw and URL-encoded forms.
   * `next_url` must stay on the vendor's host.
   * Retries 429, 5xx and network errors with exponential backoff and jitter, honouring
     `Retry-After` as a floor.
@@ -118,6 +121,11 @@ Sources:
   malformed payloads, an off-host `next_url`, a real redirect on a loopback server,
   limiter pacing, resumed ingestion and a misreported split ratio blocking ingestion.
   **No test touches the network, and live behaviour is unverified.**
+* **Fail-closed checks:**
+  * Aggregates must say `adjusted: false` (a missing flag is rejected).
+  * Dividends must state a currency (USD only).
+  * A security counts as delisted only when none of its reference rows is active, so a
+    rename's inactive old-ticker row does not truncate it.
 * **Not wired yet:** a `MASSIVE_API_KEY` setting and a dataset job. Both need leases from
   the lead (`config.py`, `tasks.py`).
 
