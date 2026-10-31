@@ -661,9 +661,24 @@ _KIND_WORDS: list[tuple[frozenset[str], re.Pattern[str], str | None]] = [
 _FALL = re.compile(
     r"\b(?:fell|fall(?:s|en|ing)?|declin(?:e|es|ed|ing)|drop(?:s|ped|ping)?|down|shed|sheds|"
     r"slid|sliding|sinking|"
-    r"sank|tumbled|negative|below zero)\b",
+    r"sank|tumbled|negative|below zero|lower|worse)\b",
     re.I,
 )
+
+
+def _directions(pattern: re.Pattern[str], body: str) -> list[re.Match[str]]:
+    """The direction words of ``pattern`` in ``body``, without attributive participles:
+    in "In a falling market" the market is falling, not the figure."""
+    return [
+        d
+        for d in pattern.finditer(body)
+        if not (
+            d.group(0).lower().endswith("ing")
+            and re.search(r"\b(?:a|an|the|this|that)\s+$", body[: d.start()], re.I)
+        )
+    ]
+
+
 # Words that state a rise. They state a gain for the figure they modify, before it ("equity
 # rose 28.3%") or right after it ("28.3% higher"), unless their subject is a loss: in "the
 # drawdown grew to 28.3%" the loss deepened (#74).
@@ -767,23 +782,39 @@ _NO_SUBJECT = frozenset(
 )
 
 
+# The strategy under test, however it is named: the subject of the main clause, never one
+# of its own (#94). "Although the portfolio fell, total return was 15.2%" is about it.
+_MAIN_SUBJECT = re.compile(
+    r"\b(?:strateg(?:y|ies)|portfolios?|equity|funds?|accounts?|it|its|our|we|us)\b", re.I
+)
+
+
 def _own_subject(
-    masked: str, s: int, e: int, mentions: list[Mention], directions: list[int]
+    masked: str, s: int, e: int, upto: int, mentions: list[Mention], directions: list[int]
 ) -> bool:
     """Whether the figure-less clause masked[s:e] is about something other than the main
     clause: "Although the benchmark fell", "Despite losses elsewhere", "After the
-    drawdown", but not "Although it fell" or "Although the return fell"."""
+    drawdown", but not "Although it fell", "Although the portfolio fell" or "Although the
+    return fell". Nothing up to the main clause (``upto``) may name the strategy itself:
+    in "Although the benchmark fell, and so did the strategy," the fall is its, too."""
     text = masked[s:e]
+    if _MAIN_SUBJECT.search(masked[s:upto]):
+        return False
     if re.search(r"\b(?:elsewhere|others?)\b", text, re.I):
         return True
     # A quantity named with a direction ("the return fell") is the main clause's quantity.
     if any(s <= w[0] < e for w in mentions) and any(s <= d < e for d in directions):
         return False
     lead = _SUBORDINATE.match(text)
-    word = re.search(r"[A-Za-z][\w'&-]*", text[lead.end() :] if lead else text)
-    if word is None:
-        return False
-    w = word.group(0)
+    words = re.findall(r"[A-Za-z][\w'&-]*", text[lead.end() :] if lead else text)
+    while words and words[0].lower() in ("a", "an", "the", "this", "that", "these", "those"):
+        words.pop(0)
+    if not words:
+        # Only a named quantity: its own subject ("After the drawdown"), unless it states a
+        # direction ("While a loss").
+        named = [w for w in mentions if s <= w[0] < e]
+        return bool(named) and not any(w[4] for w in named)
+    w = words[0]
     return not (
         w.lower() in _NO_SUBJECT
         or w.lower().endswith("ing")
@@ -806,6 +837,15 @@ def _scopes(
     for i in range(len(edges) - 1):
         s, e = edges[i], edges[i + 1]
         fig = any(s <= p < e for p in figures)
+        # Where the clause with the next figure starts.
+        upto = next(
+            (
+                edges[j]
+                for j in range(i, len(edges) - 1)
+                if any(edges[j] <= p < edges[j + 1] for p in figures)
+            ),
+            len(masked),
+        )
         sep = cuts[i - 1].group(0).strip().lower() if i else ""
         nxt = masked[e : edges[i + 2]] if i + 2 < len(edges) else ""
         sub = sep in ("while", "whereas") or _SUBORDINATE.match(masked[s:e]) is not None
@@ -816,7 +856,7 @@ def _scopes(
             (sub or contrast)
             and not fig
             and leading
-            and _own_subject(masked, s, e, mentions, directions)
+            and _own_subject(masked, s, e, upto, mentions, directions)
         ):
             out.append([s, e, False, True])
         elif out and not out[-1][3] and (not fig or not out[-1][2]):
@@ -882,8 +922,8 @@ def verify_answer(text: str, facts: list[Fact]) -> dict[str, Any]:
             masked = masked[: w[0]] + " " * (w[1] - w[0]) + masked[w[1] :]
         numbers = list(_NUM.finditer(body))
         directions = [
-            *(d.start() for d in _FALL.finditer(body)),
-            *(d.start() for d in _RISE.finditer(body)),
+            *(d.start() for d in _directions(_FALL, body)),
+            *(d.start() for d in _directions(_RISE, body)),
             *(w[0] for w in mentions if w[4]),
         ]
         scopes = _scopes(masked, [n.start() for n in numbers], mentions, directions)
@@ -896,10 +936,10 @@ def verify_answer(text: str, facts: list[Fact]) -> dict[str, Any]:
         label_words = {w.lower() for f in cited for w in re.findall(r"[A-Za-z]{2,}", f.label)}
         templates = {x for f in cited for x in f.label_numbers}
 
-        falls = [(m.start(), m.end()) for m in _FALL.finditer(body)]
+        falls = [(m.start(), m.end()) for m in _directions(_FALL, body)]
         rises = [
             (r.start(), r.end())
-            for r in _RISE.finditer(body)
+            for r in _directions(_RISE, body)
             if not any(
                 w[2] & _MAGNITUDE_KINDS
                 and w[1] <= r.start()
@@ -1009,6 +1049,8 @@ def _supported(
                 if gain and signed < 0:
                     continue  # "the drawdown gained 28.3%"
                 return True
+            if loss and gain and x >= 0:
+                continue  # "Since falling, total return rose 15.2%": which is it?
             negative = x < 0 or loss
             if signed != 0 and negative != (signed < 0):
                 continue  # "lost 15.2%" for +15.2%, "15.2%" for -15.2%

@@ -1,4 +1,5 @@
 import re
+from dataclasses import replace
 
 import pytest
 
@@ -590,3 +591,57 @@ def test_review_94_opening_clause_misattributions_rejected(text, facts):
 )
 def test_review_94_opening_clause_legitimate(text, facts):
     assert verify_answer(text, facts)["grounded"], text
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        # The strategy, however it is named, is the main clause's subject (#94).
+        "Although the portfolio fell, total return was 15.2% [F3].",
+        "Although the strategy fell, total return was 15.2% [F3].",
+        "Although equity fell, total return was 15.2% [F3].",
+        "Although the fund fell, total return was 15.2% [F3].",
+        "Although the account fell, total return was 15.2% [F3].",
+        "Although our strategy fell, total return was 15.2% [F3].",
+        "Although the strategy's equity fell, total return was 15.2% [F3].",
+        "Although the benchmark fell and so did the strategy, total return was 15.2% [F3].",
+        "Although the benchmark fell, as did the strategy, total return was 15.2% [F3].",
+    ],
+)
+def test_review_94_strategy_is_never_another_subject(text):
+    assert not verify_answer(text, FACTS_79)["grounded"], text
+    # The same sentence is fine when the return really fell.
+    assert verify_answer(text, SIGNED_FACTS)["grounded"], text
+
+
+def test_review_94_negative_opening_matches_a_negative_fact():
+    """'Although negative, alpha was 2.1%' states -2.1%: consistent with a -2.1% alpha."""
+    assert verify_answer("Although negative, alpha was 2.1% [F10].", FACTS_79)["grounded"]
+    positive = [replace(f, value=0.021) if f.id == "F10" else f for f in FACTS_79]
+    assert not verify_answer("Although negative, alpha was 2.1% [F10].", positive)["grounded"]
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        # Found by a sign sweep against main (#94): each must read as the sign it states.
+        "In a falling market, total return was 15.2% [F3].",  # the market falls, not F3
+        "Despite the decline, total return was 15.2% [F3].",  # whose decline? F3's
+        "Since falling, total return rose 15.2% [F3].",  # both directions: rejected
+        "Total return was 15.2% lower [F3].",  # "lower" states a fall
+    ],
+)
+def test_review_94_sign_sweep_cases(text):
+    verdicts = [verify_answer(text, fs)["grounded"] for fs in (FACTS_79, SIGNED_FACTS)]
+    assert verdicts.count(True) <= 1, (text, verdicts)  # never both signs
+
+
+def test_review_94_sign_sweep_reads_each_sign():
+    pos, neg = FACTS_79, SIGNED_FACTS  # F3 = +15.2%, -15.2%
+    assert verify_answer("In a falling market, total return was 15.2% [F3].", pos)["grounded"]
+    assert not verify_answer("In a falling market, total return was 15.2% [F3].", neg)["grounded"]
+    assert not verify_answer("Despite the decline, total return was 15.2% [F3].", pos)["grounded"]
+    assert verify_answer("Despite the decline, total return was 15.2% [F3].", neg)["grounded"]
+    assert not verify_answer("Since falling, total return rose 15.2% [F3].", neg)["grounded"]
+    assert verify_answer("Total return was 15.2% lower [F3].", neg)["grounded"]
+    assert not verify_answer("Total return was 15.2% lower [F3].", pos)["grounded"]

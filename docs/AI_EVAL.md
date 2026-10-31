@@ -134,8 +134,17 @@ misattribution rejected (`test_issue_79_*`):
   benchmark fell, but". Its words then describe that subject. A pronoun, a participle,
   an article or a bare adjective ("Although it fell", "Despite falling", "While a loss",
   "While negative"), or a named quantity with a direction ("Although the return fell"),
-  is about the main clause, so its words apply there. (The second draft of #94 kept every
-  opening subordinate clause apart; review caught that too.) A figure is
+  is about the main clause, so its words apply there, as do the strategy itself under
+  any name ("the portfolio", "equity", "the fund", "our strategy") and a direction noun
+  ("Despite the decline"). An opening clause that also names the strategy ("and so did
+  the strategy") is about it too. (Earlier drafts of #94 kept these apart; review
+  caught them.) A participle after an article describes its noun, not the figure ("In a
+  falling market"), and a figure stated with both a fall and a rise ("Since falling,
+  total return rose 15.2%") is rejected. "15.2% lower" states a fall.
+
+  Each round was also checked with a sign sweep: 276 sentences (23 opening clauses × 12
+  main clauses) against a +15.2% and a -15.2% return. None is accepted under both signs,
+  and every sentence accepted here but rejected on main was read by hand. A figure is
   read with the names of its scope when there are any, and with the direction words of
   its scope up to the next figure, so "15.2%, a decline" and "15.2%, but negative" state
   a loss. In "Volatility was 18.3% and costs were $12,345" each figure has its own kind.
