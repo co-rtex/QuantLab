@@ -11,6 +11,7 @@ import { IntegrityReport, ValidationPanel } from "@/components/Validation";
 import { api, ApiError, newIdempotencyKey, type DatasetVersion, type Experiment, type Job, type Series } from "@/lib/api";
 import { DASH, money, multiple, num, pct, shortHash, signClass, strategyLabel } from "@/lib/format";
 import { useApi } from "@/lib/useApi";
+import { useCanEdit } from "@/lib/workspace";
 
 type MetricBlock = { values: Record<string, number | null>; undefined: Record<string, string> };
 interface Analysis {
@@ -252,6 +253,7 @@ export default function ExperimentPage() {
   const { id } = useParams<{ id: string }>();
   const router = useRouter();
   const exp = useApi<Experiment>(`/experiments/${id}`, { poll: (e) => (e && ACTIVE.has(e.status) ? 1500 : false) });
+  const canEdit = useCanEdit();
   const job = useApi<Job>(`/experiments/${id}/job`, { poll: (j) => (j && ACTIVE.has(j.status) ? 1000 : false) });
   const done = exp.data?.status === "completed";
   const analysis = useApi<Analysis>(done ? `/experiments/${id}/analysis` : null);
@@ -348,7 +350,7 @@ export default function ExperimentPage() {
 
       {!done && job.data && ACTIVE.has(e.status) && (
         <Panel title="Run status" className="mb-6">
-          <JobProgress job={job.data} onCancel={cancel} />
+          <JobProgress job={job.data} onCancel={canEdit ? cancel : undefined} />
         </Panel>
       )}
 
