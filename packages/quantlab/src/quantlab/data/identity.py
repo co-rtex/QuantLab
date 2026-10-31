@@ -1,0 +1,266 @@
+"""Permanent instrument identity and point-in-time symbol history.
+
+A ticker is not an identity. Issuers change tickers (a rename keeps the security), and
+exchanges hand retired tickers to unrelated issuers (reuse). Keying research data by
+ticker therefore splits one security into two series at a rename, which the engine sees as
+a delisting followed by a new listing, and glues two securities into one series at a
+reuse.
+
+Research data is keyed by a permanent ``instrument_id`` instead. A **symbol history** maps
+tickers to instruments with half-open validity intervals ``[valid_from, valid_to)``
+(``valid_to`` NaT = still valid):
+
+    instrument_id  symbol  valid_from   valid_to
+    I1             FB      2012-05-18   2022-06-09
+    I1             META    2022-06-09   NaT
+
+Rules, enforced by :func:`normalize_history`: at any instant a ticker names at most one
+instrument, and an instrument trades under at most one ticker.
+
+Resolution is point-in-time: the ticker for an instrument (or the instrument for a ticker)
+as of date ``d`` uses only an interval with ``valid_from <= d < valid_to``, never one that
+starts after ``d``.
+
+:func:`key_by_instrument` re-keys ticker-keyed vendor bars and actions so that the
+``symbol`` column holds the instrument id. The engine, strategies, ML and analytics treat
+``symbol`` as an opaque series key, so they run unchanged on the re-keyed frames, and
+tickers become display labels (:func:`symbols_as_of`).
+
+The **instrument master** carries listing and delisting facts per instrument:
+``listing_date``, ``delisting_date``, ``delisting_reason`` and ``delisting_return`` (the
+return from the last trade to the final distribution or the first post-delisting quote,
+when the vendor supplies it; NaN = unknown).
+
+Datasets without identity data use :func:`legacy_history`, under which every ticker is its
+own permanent instrument (``instrument_id == symbol``), so re-keying is the identity map.
+"""
+
+from __future__ import annotations
+
+import numpy as np
+import pandas as pd
+
+from quantlab.data.schema import SYMBOL_PATTERN, SchemaError, normalize_actions, normalize_bars
+
+HISTORY_COLUMNS = ["instrument_id", "symbol", "valid_from", "valid_to"]
+MASTER_COLUMNS = [
+    "instrument_id",
+    "name",
+    "listing_date",
+    "delisting_date",
+    "delisting_reason",
+    "delisting_return",
+]
+DELISTING_REASONS = (
+    "merger",
+    "exchange_change",
+    "liquidation",
+    "bankruptcy",
+    "noncompliance",
+    "voluntary",
+    "other",
+)
+# Start of the open-ended interval used for datasets without identity data.
+LEGACY_FROM = pd.Timestamp("1900-01-01")
+SAMPLE = 5
+
+
+class IdentityError(SchemaError):
+    """Raised when identity data is inconsistent or data cannot be keyed by instrument."""
+
+
+def _ids(series: pd.Series, what: str) -> pd.Series:
+    out = series.astype(str).str.upper().str.strip()
+    bad = ~out.str.fullmatch(SYMBOL_PATTERN)
+    if bad.any():
+        raise IdentityError(f"invalid {what}: {sorted(out[bad].unique())[:SAMPLE]}")
+    return out
+
+
+def _dates(series: pd.Series, what: str) -> pd.Series:
+    try:
+        parsed = pd.to_datetime(series)
+    except (ValueError, TypeError) as exc:
+        raise IdentityError(f"{what} is not a date: {exc}") from exc
+    return parsed.dt.normalize().astype("datetime64[ns]")
+
+
+def _overlaps(history: pd.DataFrame, key: str) -> pd.DataFrame:
+    """Rows whose interval starts before the previous interval of the same ``key`` ends."""
+    h = history.sort_values([key, "valid_from"], kind="stable")
+    prev_end = h.groupby(key)["valid_to"].shift(1)
+    has_prev = h.groupby(key).cumcount() > 0
+    clash = has_prev & (prev_end.isna() | (prev_end > h["valid_from"]))
+    return h[clash]
+
+
+def normalize_history(frame: pd.DataFrame) -> pd.DataFrame:
+    """Validate and canonicalize a symbol history (sorted by instrument, then start)."""
+    missing = {"instrument_id", "symbol", "valid_from"} - set(frame.columns)
+    if missing:
+        raise IdentityError(f"symbol history missing columns: {sorted(missing)}")
+    h = frame.copy()
+    h["instrument_id"] = _ids(h["instrument_id"], "instrument ids")
+    h["symbol"] = _ids(h["symbol"], "symbols")
+    h["valid_from"] = _dates(h["valid_from"], "valid_from")
+    if h["valid_from"].isna().any():
+        raise IdentityError("valid_from is required")
+    h["valid_to"] = _dates(
+        h["valid_to"] if "valid_to" in h else pd.Series(pd.NaT, index=h.index), "valid_to"
+    )
+    empty = h["valid_to"].notna() & (h["valid_to"] <= h["valid_from"])
+    if empty.any():
+        raise IdentityError(f"empty validity intervals: {_rows(h[empty])}")
+    for key, rule in (
+        ("symbol", "a ticker maps to two instruments at once"),
+        ("instrument_id", "an instrument has two tickers at once"),
+    ):
+        clash = _overlaps(h, key)
+        if len(clash):
+            raise IdentityError(f"overlapping intervals ({rule}): {_rows(clash)}")
+    h = h[HISTORY_COLUMNS].sort_values(["instrument_id", "valid_from"], kind="stable")
+    return h.reset_index(drop=True)
+
+
+def normalize_master(frame: pd.DataFrame) -> pd.DataFrame:
+    """Validate and canonicalize an instrument master (one row per instrument)."""
+    if "instrument_id" not in frame.columns:
+        raise IdentityError("instrument master missing column: instrument_id")
+    m = frame.copy()
+    m["instrument_id"] = _ids(m["instrument_id"], "instrument ids")
+    if m["instrument_id"].duplicated().any():
+        raise IdentityError("instrument master has duplicate instrument ids")
+    for col in ("listing_date", "delisting_date"):
+        m[col] = _dates(m[col] if col in m else pd.Series(pd.NaT, index=m.index), col)
+    m["name"] = m["name"].astype(str) if "name" in m else m["instrument_id"]
+    reason = m["delisting_reason"] if "delisting_reason" in m else pd.Series(None, index=m.index)
+    m["delisting_reason"] = reason.where(reason.notna(), None)
+    known = m["delisting_reason"].notna()
+    bad = known & ~m["delisting_reason"].isin(DELISTING_REASONS)
+    if bad.any():
+        raise IdentityError(
+            f"unknown delisting reasons {sorted(m.loc[bad, 'delisting_reason'].unique())}; "
+            f"expected one of {DELISTING_REASONS}"
+        )
+    ret = m["delisting_return"] if "delisting_return" in m else pd.Series(np.nan, index=m.index)
+    m["delisting_return"] = pd.to_numeric(ret, errors="coerce").astype("float64")
+    r = m["delisting_return"]
+    if (r.notna() & ~((r >= -1.0) & np.isfinite(r))).any():
+        raise IdentityError("delisting_return must be a finite return >= -1")
+    after = m["delisting_date"].notna() & m["listing_date"].notna()
+    if (after & (m["delisting_date"] < m["listing_date"])).any():
+        raise IdentityError("delisting_date before listing_date")
+    orphan = m["delisting_date"].isna() & (known | r.notna())
+    if orphan.any():
+        raise IdentityError("delisting reason or return given without a delisting_date")
+    return m[MASTER_COLUMNS].sort_values("instrument_id").reset_index(drop=True)
+
+
+def _rows(frame: pd.DataFrame) -> list[dict[str, object]]:
+    out = frame.head(SAMPLE).astype(object).where(frame.head(SAMPLE).notna(), None)
+    return [
+        {k: (str(v) if isinstance(v, pd.Timestamp) else v) for k, v in r.items()}
+        for r in out.to_dict("records")
+    ]
+
+
+def legacy_history(symbols: pd.Series | list[str]) -> pd.DataFrame:
+    """Compatibility history: every ticker is its own instrument, valid from 1900 onward."""
+    syms = sorted(set(pd.Series(symbols, dtype=str)))
+    return normalize_history(
+        pd.DataFrame(
+            {"instrument_id": syms, "symbol": syms, "valid_from": LEGACY_FROM, "valid_to": pd.NaT}
+        )
+    )
+
+
+def is_legacy(history: pd.DataFrame) -> bool:
+    """True when ``history`` is the identity map that :func:`legacy_history` produces."""
+    return bool(
+        (history["instrument_id"] == history["symbol"]).all()
+        and not history["symbol"].duplicated().any()
+        and (history["valid_from"] == LEGACY_FROM).all()
+        and history["valid_to"].isna().all()
+    )
+
+
+def _resolve(
+    history: pd.DataFrame, by: str, target: str, keys: pd.Series, dates: pd.Series
+) -> pd.Series:
+    """For each (key, date), the ``target`` of the interval of ``by`` = key covering date."""
+    # merge_asof needs identical key dtypes on both sides.
+    left = (
+        pd.DataFrame(
+            {
+                by: keys.astype(str).str.upper().to_numpy(),
+                "_d": pd.to_datetime(dates).astype("datetime64[ns]").to_numpy(),
+                "_pos": np.arange(len(keys)),
+            }
+        )
+        .astype({by: str})
+        .sort_values("_d", kind="stable")
+    )
+    right = history[[by, target, "valid_from", "valid_to"]].astype(
+        {by: str, "valid_from": "datetime64[ns]"}
+    )
+    right = right.sort_values("valid_from", kind="stable")
+    # Latest interval of this key starting on or before the date; intervals of one key
+    # never overlap, so it is the only candidate, and it must still be open on the date.
+    m = pd.merge_asof(left, right, left_on="_d", right_on="valid_from", by=by, direction="backward")
+    live = m["valid_from"].notna() & (m["valid_to"].isna() | (m["_d"] < m["valid_to"]))
+    out = pd.Series(np.where(live, m[target], None), index=m["_pos"].to_numpy(), dtype=object)
+    return out.sort_index().set_axis(keys.index)
+
+
+def resolve_ids(history: pd.DataFrame, symbols: pd.Series, dates: pd.Series) -> pd.Series:
+    """Instrument id of each (ticker, date), or None when no interval covers the date."""
+    return _resolve(history, "symbol", "instrument_id", symbols, dates)
+
+
+def symbols_as_of(history: pd.DataFrame, ids: pd.Series, dates: pd.Series) -> pd.Series:
+    """Ticker of each (instrument, date), or None when it has no ticker on that date."""
+    return _resolve(history, "instrument_id", "symbol", ids, dates)
+
+
+def resolve(history: pd.DataFrame, symbol: str, as_of: pd.Timestamp | str) -> str | None:
+    """Instrument named by ``symbol`` as of ``as_of`` (point-in-time)."""
+    out = resolve_ids(history, pd.Series([symbol]), pd.Series([pd.Timestamp(as_of)]))
+    v = out.iloc[0]
+    return None if v is None else str(v)
+
+
+def key_by_instrument(
+    bars: pd.DataFrame, actions: pd.DataFrame, history: pd.DataFrame
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """Re-key ticker-keyed bars and actions by instrument id (in the ``symbol`` column).
+
+    Each bar is resolved as of its session date and each action as of its ex-date. Data
+    that no interval covers, or two tickers of one instrument printing on the same
+    session, raise :class:`IdentityError` with a sample: guessing would silently merge or
+    split histories.
+    """
+    bar_ids = resolve_ids(history, bars["symbol"], bars["date"])
+    unmapped = bar_ids.isna()
+    if unmapped.any():
+        raise IdentityError(
+            f"{int(unmapped.sum())} bars have no instrument for their ticker and date: "
+            f"{_rows(bars.loc[unmapped, ['symbol', 'date']])}"
+        )
+    keyed = bars.assign(symbol=bar_ids.astype(str))
+    dup = keyed.duplicated(["symbol", "date"], keep=False)
+    if dup.any():
+        raise IdentityError(
+            "one instrument has bars under two tickers on the same session: "
+            f"{_rows(bars.loc[dup, ['symbol', 'date']])}"
+        )
+    act_ids = resolve_ids(history, actions["symbol"], actions["ex_date"])
+    unmapped = act_ids.isna()
+    if unmapped.any():
+        raise IdentityError(
+            f"{int(unmapped.sum())} corporate actions have no instrument for their ticker "
+            f"and ex-date: {_rows(actions.loc[unmapped, ['symbol', 'ex_date', 'kind']])}"
+        )
+    return (
+        normalize_bars(keyed),
+        normalize_actions(actions.assign(symbol=act_ids.astype(str))),
+    )
