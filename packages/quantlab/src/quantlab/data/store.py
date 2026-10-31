@@ -16,13 +16,17 @@ version directory is never rewritten once written.
 
 from __future__ import annotations
 
+import contextlib
 import errno
 import hashlib
 import json
 import os
 import re
+import secrets
 import shutil
 import tempfile
+import time
+from collections.abc import Iterator
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -52,6 +56,7 @@ ROW_GROUP_ROWS = 50_000
 # link() errors meaning the filesystem has no hard links (some network and FUSE mounts).
 _NO_HARD_LINKS = {errno.EPERM, errno.EOPNOTSUPP, errno.ENOTSUP, errno.EXDEV, errno.EMLINK}
 REPORTS_DIR = "_reports"
+_VERSION = re.compile(r"[0-9a-f]{64}")
 REPORT_NAME = re.compile(r"[a-z0-9][a-z0-9_-]{0,63}")
 
 
@@ -116,6 +121,63 @@ class DatasetStore:
         if not all(c in "0123456789abcdef" for c in version) or len(version) != 64:
             raise ValueError("invalid version hash")
         return self.root / slug / version
+
+    @staticmethod
+    def version_of(
+        bars: pd.DataFrame,
+        actions: pd.DataFrame,
+        symbol_history: pd.DataFrame | None = None,
+        master: pd.DataFrame | None = None,
+    ) -> str:
+        """The version hash :meth:`write` would give these inputs, without writing."""
+        history = None if symbol_history is None else normalize_history(symbol_history)
+        return content_hash(
+            normalize_bars(bars),
+            normalize_actions(actions),
+            history,
+            None if master is None else normalize_master(master),
+        )
+
+    def remove_version(self, slug: str, version: str) -> bool:
+        """Delete a version's files and its reports. Returns whether anything was removed.
+
+        The caller decides that nothing references the version (``quantlab_api.storage``
+        does so under a lock). The directory is first renamed away in one step, so a reader
+        or ``write`` never sees a half-deleted version under its name: ``write`` treats an
+        existing directory as already written.
+        """
+        removed = False
+        for path in (self._dir(slug, version), self.root / slug / REPORTS_DIR / version):
+            if not path.exists():
+                continue
+            trash = path.with_name(f".tmp-del-{path.name}-{secrets.token_hex(4)}")
+            os.rename(path, trash)
+            shutil.rmtree(trash, ignore_errors=True)
+            removed = True
+        slug_dir = self.root / slug
+        for d in (slug_dir / REPORTS_DIR, slug_dir):
+            with contextlib.suppress(OSError):
+                d.rmdir()  # only if now empty
+        return removed
+
+    def versions_on_disk(self) -> Iterator[tuple[str, str, Path]]:
+        """(slug, version, directory) of every published version under the root."""
+        for slug_dir in sorted(p for p in self.root.iterdir() if p.is_dir()):
+            if slug_dir.name.startswith("."):
+                continue
+            for d in sorted(slug_dir.iterdir()):
+                if d.is_dir() and _VERSION.fullmatch(d.name):
+                    yield slug_dir.name, d.name, d
+
+    def stale_temporaries(self, older_than_seconds: float) -> list[Path]:
+        """Leftovers of interrupted writes or deletions (``.tmp-*``) older than the age."""
+        cutoff = time.time() - older_than_seconds
+        out = []
+        for slug_dir in (p for p in self.root.iterdir() if p.is_dir()):
+            for d in [*slug_dir.glob(".tmp-*"), *(slug_dir / REPORTS_DIR).glob(".tmp-*")]:
+                if d.stat().st_mtime < cutoff:
+                    out.append(d)
+        return sorted(out)
 
     def write(
         self,

@@ -46,6 +46,7 @@ from quantlab_api.models import (
     Instrument,
 )
 from quantlab_api.observability import DATASET_FRESHNESS_DAYS, DATASET_ROWS, INGEST_QUALITY
+from quantlab_api.storage import version_lock
 
 
 def dataset_store() -> DatasetStore:
@@ -84,7 +85,12 @@ def register_version(
     version (#9). The catalog has one row per (ticker, instrument), recording that
     instrument's delisting facts.
     """
-    dv = dataset_store().write(
+    # Hold the version directory's lock from before the write through this transaction's
+    # commit, so storage.collect cannot remove a shared directory this row is about to
+    # reference (#21). The hash is known before anything is written.
+    store = dataset_store()
+    version_lock(db, dataset.slug, store.version_of(bars, actions, symbol_history, master))
+    dv = store.write(
         dataset.slug,
         bars,
         actions,

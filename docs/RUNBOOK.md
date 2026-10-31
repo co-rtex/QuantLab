@@ -71,9 +71,24 @@ passing through the edge. During a Redis outage limits are per process (ADR-0007
 
 ### Disk usage
 `$QUANTLAB_DATA_DIR/datasets` holds immutable dataset versions; `artifacts/` holds
-experiment and ML outputs; `uploads/` holds staged CSV imports (swept by the reaper after
-24 h). Deleting a dataset version directory breaks experiments that reference it; archive
-instead.
+experiment and ML outputs; `uploads/` holds staged CSV imports. Deleting a dataset version
+directory by hand breaks experiments that reference it; archive instead.
+
+Deleting a workspace removes its files after the database commit (#21,
+`quantlab_api.storage`):
+* Its experiment, ML and staging artifacts are removed, along with the uploads staged
+  for its jobs.
+* Dataset version directories are content-addressed and shared when two workspaces hold
+  the same slug and content. One is removed only when no version row references it any
+  more. That is decided under the directory's advisory lock (`dataset-dir:<slug>/<hash>`),
+  which `register_version` also holds from before its write through its commit.
+* If the process dies between the commit and the deletion, only unreferenced files
+  remain. The reaper's `sweep_orphans` removes unreferenced version directories,
+  leftover `.tmp-*` directories and artifacts whose row is gone, once older than the
+  grace period. That period is twice the longest timeout of any queued or running job,
+  and at least 24 h; every version write runs inside a job, so none can outlast it.
+* The upload sweep never deletes the files of a queued or running job, however old.
+  Other staged uploads go after 24 h.
 
 ## Backup and restore
 
