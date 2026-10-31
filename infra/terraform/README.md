@@ -46,9 +46,9 @@ CI does not run these yet; that waits on the user's approval of Actions minutes 
       with the RDS CA bundle, which the api image already includes (pinned by checksum
       in services/api/Dockerfile). `sslmode=require` would encrypt without checking the
       server.
-- [ ] **JWT secret only where it is needed.** Today every process requires
-      `QUANTLAB_JWT_SECRET` in production (config.py), so worker, reaper and migrate get it
-      too. #117 scopes it to the API.
+- [x] **JWT secret only where it is needed** (#117): only the API task receives
+      `QUANTLAB_JWT_SECRET` and `QUANTLAB_METRICS_TOKEN`. Worker, reaper and migrate run
+      without them.
 - [ ] Real values for `acm_certificate_arn` and `image_tag`. Neither has a default, and the
       example's placeholders fail validation.
 - [ ] The user's approval of the account, the plan and the cost.
