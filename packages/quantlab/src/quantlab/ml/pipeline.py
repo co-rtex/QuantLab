@@ -107,6 +107,9 @@ class MLConfig(BaseModel):
     models: tuple[ModelName, ...] = Field(MODELS, min_length=1, max_length=len(MODELS))
     seed: int = Field(0, ge=0, le=2**31 - 1)
     exclude: tuple[str, ...] = Field(("SYNIDX",), max_length=50)
+    # The pipeline version the run was submitted for, stamped by the API so the worker can
+    # refuse to compute it with different code (#143). None: not stamped (older runs).
+    pipeline_version: int | None = Field(None, ge=1)
 
     @field_validator("models")
     @classmethod
@@ -422,6 +425,14 @@ def run_ml_experiment(
     instruments: pd.DataFrame | None = None,
 ) -> dict[str, Any]:
     cfg = cfg or MLConfig()
+    if cfg.pipeline_version is not None and cfg.pipeline_version != ML_PIPELINE_VERSION:
+        # A mixed-version deploy: the input hash names the submitted version, so computing
+        # it with other code would make the stored hash describe a different panel.
+        raise ValueError(
+            f"this ML run was submitted for pipeline version {cfg.pipeline_version}, but this "
+            f"worker runs version {ML_PIPELINE_VERSION}; submit it again so its input hash "
+            "matches the code that computes it"
+        )
     unknown = set(cfg.models) - set(MODELS)
     if unknown:
         raise ValueError(f"unknown models: {sorted(unknown)}")

@@ -508,7 +508,10 @@ solving.
   `volume_flat_21 = 1`, which is a **model input**, so a model can tell "no dispersion"
   from "average volume". Results report the count as `panel.volume_flat_rows`.
 * `ML_PIPELINE_VERSION` is recorded in every result (`pipeline_version`) and changes
-  whenever the same dataset and config could produce a different panel.
+  whenever the same dataset and config could produce a different panel. The API stamps
+  it into the run's config and input hash, and a worker running a different version
+  refuses the run with a clear error (#143). During a mixed-version deploy a run then
+  fails instead of storing a hash that describes another panel.
 
 ## Known limitations
 

@@ -32,7 +32,17 @@ interface MLRun {
   summary?: ModelRow[];
   result?: {
     problem: string;
-    panel: { rows: number; dates: number; symbols: number; hash: string; positive_rate: number };
+    // Results stored before #125 have no pipeline_version, volume_flat_rows or excluded_rows.
+    pipeline_version?: number | null;
+    panel: {
+      rows: number;
+      dates: number;
+      symbols: number;
+      hash: string;
+      positive_rate: number;
+      volume_flat_rows?: number | null;
+      excluded_rows?: { untraded_21?: number | null; dates_below_10_after_untraded?: number | null } | null;
+    };
     splits: { fold: number; train_dates: number; test_start: string; test_end: string }[];
     summary: ModelRow[];
     feature_importance: Record<string, Record<string, number>>;
@@ -47,6 +57,37 @@ const MODEL_LABEL: Record<string, string> = {
   random_forest: "Random forest",
   gradient_boosting: "Gradient boosting",
 };
+
+/** A count the result may not have recorded: missing is "not recorded", never 0. */
+function recorded(v: number | null | undefined): string {
+  return typeof v === "number" && Number.isFinite(v) ? v.toLocaleString("en-US") : "not recorded";
+}
+
+function PanelInputs({ res }: { res: NonNullable<MLRun["result"]> }) {
+  const ex = res.panel.excluded_rows;
+  const items: [string, string, string][] = [
+    ["Pipeline version", res.pipeline_version == null ? "not recorded" : `v${res.pipeline_version}`, "How the panel was built; it changes whenever the same data and config could give a different panel."],
+    ["Rows excluded: no trading", recorded(ex?.untraded_21), "Zero volume over its last 21 bars (its own trading days); counted only on dates that make the panel."],
+    ["Dates skipped: too few names", recorded(ex?.dates_below_10_after_untraded), "Fewer than 10 names left on the date once untraded rows were removed."],
+    ["Rows with flat volume", recorded(res.panel.volume_flat_rows), "Kept: constant non-zero volume over its last 21 bars, flagged to the models as an input."],
+  ];
+  return (
+    <section aria-labelledby="panel-construction">
+      <h3 id="panel-construction" className="mb-2 text-sm font-semibold">
+        Panel construction
+      </h3>
+      <dl className="grid grid-cols-1 gap-x-8 gap-y-3 rounded border border-rule bg-surface px-4 py-3 text-sm sm:grid-cols-2 xl:grid-cols-4">
+        {items.map(([k, v, why]) => (
+          <div key={k}>
+            <dt className="text-xs text-ink-2">{k}</dt>
+            <dd className={v === "not recorded" ? "text-ink-2" : "num font-medium"}>{v}</dd>
+            <dd className="text-xs text-ink-2">{why}</dd>
+          </div>
+        ))}
+      </dl>
+    </section>
+  );
+}
 
 function RunDetail({ id }: { id: string }) {
   const run = useApi<MLRun>(`/ml-runs/${id}`, { poll: (r) => (r && (r.status === "queued" || r.status === "running") ? 1500 : false) });
@@ -87,6 +128,7 @@ function RunDetail({ id }: { id: string }) {
         Target: {res.problem}. Panel of {res.panel.rows.toLocaleString()} observations on {res.panel.dates} dates and {res.panel.symbols} symbols (positive rate{" "}
         {pct(res.panel.positive_rate, 1)}), hash <span className="num">{shortHash(res.panel.hash, 12)}</span>.
       </p>
+      <PanelInputs res={res} />
       <div className="overflow-x-auto" tabIndex={0}>
         <table className="data num">
           <thead>

@@ -27,11 +27,12 @@ Work items are issues labelled `owner:*`, `P0`/`P1`/`P2`, `status:*` and `area:*
 | `apps/web/src/app/api/[...path]/route.ts`, `apps/web/src/proxy.ts`, `infra/edge/**` | Agent 2 |
 | Web pages for login, settings, members, invitations | Agent 2 |
 | `routes/experiments.py` | — (#88 merged) |
-| `routes/ml.py`, `routes/research.py` | Unassigned (lead leases per issue) |
+| `routes/ml.py` | Agent 3 for #143 (pipeline version in the input hash) |
+| `routes/research.py` | Unassigned (lead leases per issue) |
 | `packages/quantlab/src/quantlab/data/**`, `services/api/src/quantlab_api/marketdata.py` | Agent 3 |
 | `packages/quantlab/src/quantlab/{backtest,analytics,research,ml,portfolio,optimize,strategies}/**` | Agent 3 |
 | `docs/METHODOLOGY.md` | Agent 3 |
-| `benchmarks/**` | Agent 3 for #24 (harness and methodology; no published figures until a quiet window) |
+| `benchmarks/**` | Agent 3: #24 harness (no published figures until a quiet window); `ml_liquidity_selection.py` (#125) |
 | `services/api/src/quantlab_api/observability.py`, `db.py`, `apps/web/playwright.config.ts` | Lead |
 | `packages/quantlab/src/quantlab/assistant/**`, `tests/unit/test_assistant.py`, the verifier section of `docs/AI_EVAL.md` | Agent 2 for #15 (leased) |
 | `apps/web/src/lib/useApi.ts`, `apps/web/src/lib/workspace.tsx`, `apps/web/src/components/**`, `apps/web/src/app/(app)/**`, new E2E specs | Agent 2 for #18 (leased) |
