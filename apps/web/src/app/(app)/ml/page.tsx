@@ -2,9 +2,10 @@
 
 import { useState, type FormEvent } from "react";
 import { PageHeader } from "@/components/Shell";
-import { ErrorNote, JobProgress, Panel, Pending, QueryError, StatusPill } from "@/components/ui";
+import { ErrorNote, JobProgress, Panel, Pending, QueryError, StatusPill, SyntheticTag } from "@/components/ui";
 import { api, ApiError, newIdempotencyKey, type DatasetVersion, type Job } from "@/lib/api";
 import { dateTime, num, pct, shortHash } from "@/lib/format";
+import { useSynthetic } from "@/lib/synthetic";
 import { useApi } from "@/lib/useApi";
 import { useWorkspace } from "@/lib/workspace";
 
@@ -21,6 +22,7 @@ interface ModelRow {
 interface MLRun {
   id: string;
   name: string;
+  dataset_version_id: string;
   status: Job["status"];
   created_at: string;
   config: Record<string, unknown>;
@@ -149,6 +151,7 @@ export default function MLPage() {
   const ws = workspace?.id;
   const versions = useApi<DatasetVersion[]>(ws ? `/workspaces/${ws}/dataset-versions` : null);
   const [nonce, setNonce] = useState(0);
+  const synthetic = useSynthetic();
   const runs = useApi<MLRun[]>(ws ? `/workspaces/${ws}/ml-runs?n=${nonce}` : null, { poll: 4000 });
   const [selected, setSelected] = useState<string | null>(null);
   const [err, setErr] = useState<ApiError>();
@@ -236,7 +239,14 @@ export default function MLPage() {
                 <li key={r.id}>
                   <button onClick={() => setSelected(r.id)} className={`flex w-full items-center justify-between gap-2 rounded px-2 py-1.5 text-left ${selected === r.id ? "bg-cobalt-soft" : "hover:bg-sunken"}`}>
                     <span>
-                      <span className="block">{r.name}</span>
+                      <span className="block">
+                        {r.name}
+                        {synthetic(r.dataset_version_id) && (
+                          <span className="ml-1.5 align-middle">
+                            <SyntheticTag />
+                          </span>
+                        )}
+                      </span>
                       <span className="block text-xs text-ink-2">{dateTime(r.created_at)}</span>
                     </span>
                     <StatusPill status={r.status} />
@@ -246,7 +256,10 @@ export default function MLPage() {
             </ul>
           </Panel>
         </div>
-        <Panel title="Results">
+        <Panel
+          title="Results"
+          aside={synthetic(runs.data?.find((r) => r.id === (selected ?? runs.data?.[0]?.id))?.dataset_version_id) ? <SyntheticTag /> : undefined}
+        >
           {selected ?? runs.data?.[0]?.id ? <RunDetail id={(selected ?? runs.data?.[0]?.id) as string} /> : <p className="text-sm text-ink-2">Train a model to see out-of-sample results here.</p>}
         </Panel>
       </div>

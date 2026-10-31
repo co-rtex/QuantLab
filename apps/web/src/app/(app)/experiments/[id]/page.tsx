@@ -493,7 +493,7 @@ export default function ExperimentPage() {
 
           <IntegrityReport experimentId={id} refreshKey={`${validationRun}-${repro.data?.comparisons.length ?? 0}`} />
           <ValidationPanel experimentId={id} onComplete={setValidationRun} />
-          <AssistantPanel experimentId={id} />
+          <AssistantPanel experimentId={id} synthetic={version.data?.is_synthetic} />
 
           {a?.factor_exposures && !a.factor_exposures.error && (
             <Panel title="Factor exposures" aside={a.factor_exposures.method}>

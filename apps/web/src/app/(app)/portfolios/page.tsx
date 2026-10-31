@@ -4,9 +4,11 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useState, type FormEvent } from "react";
 import { PageHeader } from "@/components/Shell";
-import { ErrorNote, Panel, QueryError } from "@/components/ui";
-import { api, ApiError, type DatasetVersion, type Instrument, type Page } from "@/lib/api";
+import { ErrorNote, Panel, QueryError, SyntheticTag } from "@/components/ui";
+import { api, ApiError, type DatasetVersion } from "@/lib/api";
 import { dateTime, shortHash } from "@/lib/format";
+import { useSynthetic } from "@/lib/synthetic";
+import { useInstruments } from "@/lib/instruments";
 import { useApi } from "@/lib/useApi";
 import { useWorkspace } from "@/lib/workspace";
 
@@ -14,6 +16,7 @@ interface PortfolioRow {
   id: string;
   name: string;
   benchmark: string | null;
+  dataset_version_id: string;
   transactions: number;
   created_at: string;
 }
@@ -22,12 +25,13 @@ export default function PortfoliosPage() {
   const router = useRouter();
   const { workspace } = useWorkspace();
   const ws = workspace?.id;
+  const synthetic = useSynthetic();
   const list = useApi<PortfolioRow[]>(ws ? `/workspaces/${ws}/portfolios` : null);
   const versions = useApi<DatasetVersion[]>(ws ? `/workspaces/${ws}/dataset-versions` : null);
   const [dv, setDv] = useState<string>("");
   const dvId = dv || versions.data?.[0]?.id || null;
   const version = versions.data?.find((v) => v.id === dvId);
-  const inst = useApi<Page<Instrument>>(dvId ? `/dataset-versions/${dvId}/instruments?limit=2000` : null);
+  const inst = useInstruments(dvId);
   const indexes = inst.data?.items.filter((i) => i.asset_class === "index_fund") ?? [];
   const [err, setErr] = useState<ApiError>();
 
@@ -77,6 +81,11 @@ export default function PortfoliosPage() {
                       <Link className="font-medium text-cobalt hover:underline" href={`/portfolios/${p.id}`}>
                         {p.name}
                       </Link>
+                      {synthetic(p.dataset_version_id) && (
+                        <span className="ml-1.5 align-middle">
+                          <SyntheticTag />
+                        </span>
+                      )}
                     </td>
                     <td>{p.benchmark ?? "—"}</td>
                     <td className="r num">{p.transactions}</td>

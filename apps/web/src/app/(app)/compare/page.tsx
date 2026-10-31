@@ -4,9 +4,10 @@ import Link from "next/link";
 import { useState } from "react";
 import { CompareChart, SERIES } from "@/components/charts";
 import { PageHeader } from "@/components/Shell";
-import { ErrorNote, Panel, QueryError, Skeleton } from "@/components/ui";
+import { ErrorNote, Panel, QueryError, Skeleton, SyntheticTag } from "@/components/ui";
 import { api, ApiError, type Experiment, type Metrics, type Page, type Series } from "@/lib/api";
 import { num, pct, signClass, strategyLabel } from "@/lib/format";
+import { useSynthetic } from "@/lib/synthetic";
 import { useApi } from "@/lib/useApi";
 import { useWorkspace } from "@/lib/workspace";
 
@@ -38,6 +39,9 @@ export default function ComparePage() {
   const [result, setResult] = useState<Compared[]>();
   const [err, setErr] = useState<ApiError>();
   const [busy, setBusy] = useState(false);
+  const synthetic = useSynthetic();
+  const versionOf = new Map(done.data?.items.map((e) => [e.id, e.dataset_version_id]));
+  const isSynthetic = (id: string) => synthetic(versionOf.get(id));
 
   function toggle(id: string) {
     setSelected((s) => (s.includes(id) ? s.filter((x) => x !== id) : s.length >= 6 ? s : [...s, id]));
@@ -81,7 +85,14 @@ export default function ComparePage() {
                   <label className="flex cursor-pointer items-start gap-2 rounded px-1.5 py-1 hover:bg-sunken">
                     <input type="checkbox" className="mt-0.5" checked={selected.includes(e.id)} onChange={() => toggle(e.id)} />
                     <span>
-                      <span className="block">{e.name}</span>
+                      <span className="block">
+                        {e.name}
+                        {synthetic(e.dataset_version_id) && (
+                          <span className="ml-1.5 align-middle">
+                            <SyntheticTag />
+                          </span>
+                        )}
+                      </span>
                       <span className="block text-xs text-ink-2">{strategyLabel(e.strategy_key)}</span>
                     </span>
                   </label>
@@ -99,7 +110,7 @@ export default function ComparePage() {
         <div className="space-y-6">
           {result ? (
             <>
-              <Panel title="Growth of $1">
+              <Panel title="Growth of $1" aside={result.some((r) => isSynthetic(r.id)) ? <SyntheticTag /> : undefined}>
                 <CompareChart series={result.map((r) => ({ name: r.name, dates: r.series.dates, values: r.series.normalized as (number | null)[] }))} />
               </Panel>
               <Panel title="Statistics">
@@ -123,6 +134,11 @@ export default function ComparePage() {
                             <Link href={`/experiments/${r.id}`} className="text-cobalt hover:underline">
                               {r.name}
                             </Link>
+                            {isSynthetic(r.id) && (
+                              <span className="ml-1.5 align-middle">
+                                <SyntheticTag />
+                              </span>
+                            )}
                           </td>
                           {COLS.map(([l, k, f]) => (
                             <td key={l} className={`r ${k === "total_return" || k === "cagr" ? signClass(r.summary[k]) : ""}`}>

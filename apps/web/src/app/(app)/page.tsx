@@ -2,9 +2,10 @@
 
 import Link from "next/link";
 import { PageHeader } from "@/components/Shell";
-import { Empty, Panel, QueryError, Skeleton, StatusPill } from "@/components/ui";
+import { Empty, Panel, QueryError, Skeleton, StatusPill, SyntheticTag } from "@/components/ui";
 import type { DatasetVersion, Experiment, Job, Page } from "@/lib/api";
 import { dateTime, num, pct, shortHash, signClass, strategyLabel } from "@/lib/format";
+import { useSynthetic } from "@/lib/synthetic";
 import { useApi } from "@/lib/useApi";
 import { useWorkspace } from "@/lib/workspace";
 
@@ -15,6 +16,7 @@ export default function Overview() {
   const jobs = useApi<Page<Job>>(ws ? `/workspaces/${ws}/jobs?limit=5` : null, { poll: 3000 });
   const versions = useApi<DatasetVersion[]>(ws ? `/workspaces/${ws}/dataset-versions` : null);
   const noData = versions.data && versions.data.length === 0;
+  const synthetic = useSynthetic();
 
   return (
     <>
@@ -67,6 +69,11 @@ export default function Overview() {
                         <Link href={`/experiments/${e.id}`} className="font-medium text-cobalt hover:underline">
                           {e.name}
                         </Link>
+                        {synthetic(e.dataset_version_id) && (
+                          <span className="ml-1.5 align-middle">
+                            <SyntheticTag />
+                          </span>
+                        )}
                       </td>
                       <td className="text-ink-2">{strategyLabel(e.strategy_key)}</td>
                       <td>

@@ -12,10 +12,10 @@ import {
   type Experiment,
   type Instrument,
   type JsonSchemaProp,
-  type Page,
   type StrategyCatalogEntry,
 } from "@/lib/api";
 import { shortHash } from "@/lib/format";
+import { useInstruments } from "@/lib/instruments";
 import { useApi } from "@/lib/useApi";
 import { useWorkspace } from "@/lib/workspace";
 
@@ -69,7 +69,7 @@ function Builder() {
   const versions = useApi<DatasetVersion[]>(ws ? `/workspaces/${ws}/dataset-versions` : null);
   const [dv, setDv] = useState<string | null>(params.get("dataset"));
   const dvId = dv ?? versions.data?.[0]?.id ?? null;
-  const inst = useApi<Page<Instrument>>(dvId ? `/dataset-versions/${dvId}/instruments?limit=2000` : null);
+  const inst = useInstruments(dvId);
   const [key, setKey] = useState(params.get("strategy") ?? "momentum");
   const [values, setValues] = useState<Record<string, unknown>>({});
   const [err, setErr] = useState<ApiError>();
