@@ -89,3 +89,22 @@ def test_trials_and_selected_strategy_use_the_same_window_and_rf(small_market):
     old = per_period_sharpe(simple_returns(full.equity["equity"]))
     assert old is not None
     assert abs(old - base["sharpe_per_period"]) > 0.002
+
+
+def test_trials_without_a_sharpe_still_count_toward_n():
+    from quantlab.research.stats import deflated_sharpe, expected_max_sharpe
+
+    sharpes = [0.01, -0.02, 0.03, 0.0]
+    assert expected_max_sharpe(sharpes, n_trials=10) > expected_max_sharpe(sharpes)
+    rng = np.random.default_rng(4)
+    r = pd.Series(rng.normal(0.0005, 0.01, 500))
+    few = deflated_sharpe(r, sharpes)
+    all_tried = deflated_sharpe(r, sharpes, n_trials=10)
+    assert all_tried["trials"] == 10 and all_tried["trials_with_sharpe"] == 4
+    assert all_tried["deflated_sharpe"] <= few["deflated_sharpe"]  # more conservative
+
+
+def test_suite_counts_every_grid_point_as_a_trial(small_market):
+    m = small_market
+    out = run_validation_suite(m.bars, m.actions, "momentum", {}, BacktestConfig())
+    assert out["deflated"]["trials"] == len(out["sensitivity"]["rows"])

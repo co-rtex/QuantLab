@@ -1,7 +1,9 @@
 """End-to-end research-correctness checks with independent references (issue #35).
 
-Each expected number is computed by hand in the test from share counts and prices, not
-from library helpers. Synthetic data only.
+Where a test asserts a number, it is computed by hand in the test from share counts and
+prices, not from library helpers. The look-ahead, corrected-history and row-order tests
+are self-comparisons instead (two runs that must agree), which is the right design for
+an invariance. Synthetic data only.
 """
 
 from __future__ import annotations
@@ -88,7 +90,9 @@ def test_ledger_keeps_dividends_in_cash_while_total_return_reinvests():
     assert res.equity["equity"].iloc[-1] == pytest.approx(10 * 107.8 + 20)  # 1098
     # Benchmark = total return with the dividend reinvested at the ex-date close (98):
     # 1000 x (98 + 2)/100 x 107.8/98 = 1100 (it is invested from the first session).
-    assert res.benchmark.iloc[-1] == pytest.approx(1000 * (100 / 100) * (100 / 100) * (107.8 / 98))
+    assert res.benchmark.iloc[-1] == pytest.approx(
+        1000 * (100 / 100) * ((98 + 2) / 100) * (107.8 / 98)
+    )
     # The gap is exactly the reinvestment effect: $20 that missed the +10% move.
     assert res.benchmark.iloc[-1] - res.equity["equity"].iloc[-1] == pytest.approx(20 * 0.1)
 
@@ -149,21 +153,32 @@ def test_dropping_names_that_later_delist_inflates_results():
 
 # ---------------------------------------------------------- missing observations
 def test_a_gap_in_one_symbol_does_not_move_another_symbols_fills_or_marks():
+    # Both are held (bought once, never rebalanced), so A's gap is exercised on marks.
     a = [10.0, 10.5, 11.0, 11.5, 12.0, 12.5, 13.0, 13.5]
     b = [20.0, 21.0, 22.0, 23.0, 24.0, 25.0, 26.0, 27.0]
     gappy_a = [10.0, 10.5, None, None, 12.0, 12.5, 13.0, 13.5]
-    cfg = BacktestConfig(rebalance="weekly", initial_capital=10_000, **FREE)
+    cfg = BacktestConfig(rebalance="daily", initial_capital=10_000, **FREE)
 
-    class FixedB(Strategy):
-        key, name, description, Params = "fixed_b", "", "", StrategyParams
+    class BuyOnce(Strategy):
+        key, name, description, Params = "buy_once", "", "", StrategyParams
 
-        def target_weights(self, view: MarketView) -> pd.Series:
-            return pd.Series({"B": 0.5})
+        def target_weights(self, view: MarketView) -> pd.Series | None:
+            return pd.Series({"A": 0.4, "B": 0.5}) if len(view.close) == 1 else None
 
-    clean = run_backtest(make_bars({"A": a, "B": b}), NONE, FixedB(), cfg)
-    gappy = run_backtest(make_bars({"A": gappy_a, "B": b}), NONE, FixedB(), cfg)
-    pd.testing.assert_frame_equal(clean.trades, gappy.trades)
-    pd.testing.assert_series_equal(clean.equity["equity"], gappy.equity["equity"])
+    clean = run_backtest(make_bars({"A": a, "B": b}), NONE, BuyOnce(), cfg)
+    gappy = run_backtest(make_bars({"A": gappy_a, "B": b}), NONE, BuyOnce(), cfg)
+    pd.testing.assert_frame_equal(clean.trades, gappy.trades)  # bought at d[1] in both
+    pb = [r.positions[r.positions["symbol"] == "B"].reset_index(drop=True) for r in (clean, gappy)]
+    cols = ["date", "quantity", "price"]
+    pd.testing.assert_frame_equal(pb[0][cols], pb[1][cols])
+    # A is marked at its last close (10.5) through the gap; equity differs by exactly that.
+    qa = 0.4 * 10_000 / 10.0  # shares are sized on the decision close (10.0), filled next open
+    d = pd.DatetimeIndex(sorted(make_bars({"A": a})["date"].unique()))
+    pa = gappy.positions[gappy.positions["symbol"] == "A"].set_index("date")["price"]
+    assert pa.loc[d[2]] == pa.loc[d[3]] == 10.5
+    gap = gappy.equity["equity"] - clean.equity["equity"]
+    np.testing.assert_allclose(gap.loc[[d[2], d[3]]].to_numpy(), [qa * -0.5, qa * -1.0])
+    np.testing.assert_allclose(gap.drop(index=[d[2], d[3]]).to_numpy(), 0.0, atol=1e-9)
 
 
 # ---------------------------------------------------------- corrected history
