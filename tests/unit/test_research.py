@@ -323,6 +323,63 @@ def test_zero_variance_strategy_gets_undefined_sharpe_not_a_crash():
     assert any("Sharpe ratio is undefined" in c for c in ctx["conclusions"])
 
 
+def _repro_check(reps):
+    ev = _evidence()
+    ev["reproductions"] = reps
+    return {c["key"]: c for c in build_integrity_report(ev)["checks"]}["reproducibility"]
+
+
+def test_a_rerun_on_another_engine_is_named_not_failed():
+    engine = {"input": "engine_version", "original": "1.2.0", "reproduction": "1.3.0"}
+    moved = {
+        "status": "completed",
+        "same_inputs": False,
+        "fingerprint_match": False,
+        "input_differences": [engine],
+    }
+    check = _repro_check([moved])
+    assert check["status"] == "unassessed"
+    assert "engine_version 1.2.0 → 1.3.0" in check["finding"]
+    # A same-input re-run still decides the status; the changed one is ignored.
+    same = {"status": "completed", "same_inputs": True, "fingerprint_match": True}
+    assert _repro_check([moved, same])["status"] == "verified"
+    broken = {**same, "fingerprint_match": False}
+    assert _repro_check([moved, broken])["status"] == "failed"
+    # Comparisons stored before same_inputs existed keep their old meaning.
+    assert _repro_check([{"status": "completed", "fingerprint_match": False}])["status"] == (
+        "failed"
+    )
+
+
+def test_the_changed_input_finding_is_actionable_and_never_empty():
+    unnamed = {"status": "completed", "same_inputs": False, "fingerprint_match": False}
+    check = _repro_check([{**unnamed, "input_differences": []}])
+    assert check["status"] == "unassessed"
+    assert "only re-runs with the same inputs are assessed" in check["finding"]
+    assert "Reproduce the re-run itself" in check["finding"]
+    assert "differ only in form" in check["finding"]  # no names: still says why
+
+
+def test_input_differences_compare_like_the_hash():
+    from types import SimpleNamespace
+
+    from quantlab_api.routes.experiments import input_differences
+
+    def run(params, config):
+        return SimpleNamespace(
+            engine_version="1.3.0",
+            dataset_version_id="d",
+            strategy_key="momentum",
+            strategy_params=params,
+            config=config,
+        )
+
+    diffs = input_differences(run({"n": 1}, {"a": None}), run({"n": 1.0}, {}))
+    assert [d["input"] for d in diffs] == ["strategy_params", "config.a"]
+    assert diffs[1] == {"input": "config.a", "original": None, "reproduction": "<absent>"}
+    assert input_differences(run({"n": 1}, {"a": 2}), run({"n": 1}, {"a": 2})) == []
+
+
 def _universe_check(universe, ids, delisted, delisted_ids):
     ev = _evidence()
     meta = {"sessions": 1300, "universe": universe}

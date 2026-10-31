@@ -542,8 +542,37 @@ def build_integrity_report(ev: dict[str, Any]) -> dict[str, Any]:
 
     # 13. reproducibility
     reps = ev.get("reproductions") or []
-    finished = [r for r in reps if r.get("status") == "completed"]
-    if not finished:
+    done = [r for r in reps if r.get("status") == "completed"]
+    # Only a re-run with the same inputs tests reproducibility. One on another engine (or
+    # with changed inputs) is reported by what changed, never as a failure.
+    finished = [r for r in done if r.get("same_inputs", True)]
+    changed = [r for r in done if not r.get("same_inputs", True)]
+    if not finished and changed:
+        names = sorted(
+            {
+                f"{d['input']} {d.get('original')} → {d.get('reproduction')}"
+                for r in changed
+                for d in r.get("input_differences") or []
+            }
+        )
+        checks.append(
+            Check(
+                "reproducibility",
+                "Reproducibility",
+                "unassessed",
+                f"{_plural(len(changed), 're-run')} used different inputs"
+                + (
+                    f" ({'; '.join(names)})"
+                    if names
+                    else " (the stored inputs differ only in form, e.g. a missing key vs null)"
+                )
+                + ", so they do not test reproducibility: only re-runs with the same inputs "
+                "are assessed. Reproduce the re-run itself to check it on the current engine; "
+                "its own report then shows the result.",
+                {"reproductions": changed},
+            )
+        )
+    elif not finished:
         checks.append(
             Check(
                 "reproducibility",
