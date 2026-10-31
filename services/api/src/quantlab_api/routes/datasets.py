@@ -29,7 +29,7 @@ from quantlab_api.schemas import (
     SyntheticDatasetIn,
 )
 from quantlab_api.security import DB, CurrentUser, audit, require_workspace
-from quantlab_api.uploads import invalid, read_multipart
+from quantlab_api.uploads import read_multipart
 
 router = APIRouter(tags=["datasets"])
 
@@ -264,6 +264,9 @@ async def upload_csv(
     import tempfile
 
     require_workspace(db, user, workspace_id, Role.editor)
+    # Return the connection to the pool while the body streams: a slow upload must not
+    # hold one, or a few dozen trickling uploads would exhaust the pool for everyone.
+    db.commit()
     staging_root = get_settings().data_dir / "uploads"
     staging_root.mkdir(parents=True, exist_ok=True)
     staged = Path(tempfile.mkdtemp(prefix="csv-", dir=staging_root))
@@ -279,14 +282,17 @@ async def upload_csv(
             },
             fields=dict.fromkeys(CsvUploadForm.model_fields, MAX_FIELD_BYTES),
         )
-        if "bars" not in upload.files:
-            raise invalid("bars", "Field required", "missing")
+        errors: list[Any] = []
         try:
             form = CsvUploadForm.model_validate(upload.fields)
         except ValidationError as exc:
-            raise RequestValidationError(
-                [{**e, "loc": ("body", *e["loc"])} for e in exc.errors()]
-            ) from None
+            errors = [{**e, "loc": ("body", *e["loc"])} for e in exc.errors()]
+        if "bars" not in upload.files:
+            errors.append({"loc": ("body", "bars"), "msg": "Field required", "type": "missing"})
+        if errors:
+            raise RequestValidationError(errors)
+        # Authorized again: membership may have been revoked while the body streamed.
+        require_workspace(db, user, workspace_id, Role.editor)
         slug, name, source, license = form.slug, form.name, form.source, form.license
         files = upload.files
         ds = db.scalar(

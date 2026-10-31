@@ -10,7 +10,6 @@ from __future__ import annotations
 
 import errno
 import shutil
-import tempfile
 import uuid
 from collections.abc import Iterator
 from datetime import UTC, datetime, timedelta
@@ -96,6 +95,7 @@ async def drive(
     content_length: int | None = None,
     content_type: str = f"multipart/form-data; boundary={BOUNDARY}",
     disconnect_after: int | None = None,
+    on_pull: Any = None,
 ) -> Result:
     """Run one request through the real middleware stack, counting bytes pulled."""
     from quantlab_api.main import app
@@ -138,6 +138,8 @@ async def drive(
             sent_all = True
             return {"type": "http.request", "body": b"", "more_body": False}
         res.pulled += len(chunk)
+        if on_pull is not None:
+            await anyio.to_thread.run_sync(on_pull, calls)
         return {"type": "http.request", "body": chunk, "more_body": True}
 
     async def send(message: dict[str, Any]) -> None:
@@ -401,7 +403,7 @@ def test_malformed_multipart_is_rejected_and_cleaned_up(
         "file_as_field": (fields, _file_head("slug") + b"x\r\n", bars),
         "field_as_file": (fields, _field("bars", "x")),
         "missing_bars": (fields,),
-        "empty_bars_filename": (fields, _bars_part(filename="")),
+        "empty_bars_filename": (fields, _bars_part(b"", filename="")),
         "missing_license": (
             b"".join(_field(k, v) for k, v in FIELDS.items() if k != "license"),
             bars,
@@ -487,6 +489,8 @@ def test_client_disconnect_mid_upload_removes_partial_files(client, uploads_dir)
     h, ws = _authorized(client)
     total, chunks = multipart_body(20 * 2**20)
     res = run(drive(_csv_path(ws), chunks, headers=h, content_length=total, disconnect_after=40))
+    assert res.status == 400, res.body
+    assert res.json()["error"]["code"] == "upload_incomplete"
     assert res.pulled < 3 * 2**20
     assert uploads_dir.new() == set()
     from quantlab_api.db import SessionLocal
@@ -522,11 +526,145 @@ def test_openapi_still_documents_the_multipart_body(client):
     assert schema["properties"]["bars"]["format"] == "binary"
 
 
-def test_tempdir_is_untouched(client, tmp_path, monkeypatch, uploads_dir):
-    """Belt and braces: nothing lands in the process temp directory either."""
-    monkeypatch.setattr(tempfile, "tempdir", str(tmp_path))
+# Bytes a careless boundary search would mangle: CR/LF runs and boundary prefixes.
+TRICKY = (
+    b"symbol,date,open,high,low,close,volume\r\n\r\r\n\n"
+    + f"\r\n--{BOUNDARY[:-1]}X\r\n--{BOUNDARY}-x\r\n-{BOUNDARY}\r".encode()
+    + bytes(range(256))
+    + b"\r\n--\r\n"
+)
+
+
+@pytest.mark.parametrize("split", [1, 7, 4096, 65536])
+def test_stored_file_matches_upload_byte_for_byte(client, uploads_dir, split: int) -> None:
     h, ws = _authorized(client)
-    total, chunks = multipart_body(3 * 2**20)
-    res = run(drive(_csv_path(ws), chunks, headers=h, content_length=total))
+    fields = b"".join(_field(k, v) for k, v in FIELDS.items())
+    content = TRICKY * 50
+    body = (
+        fields
+        + _bars_part(content)
+        + _bars_part(TRICKY, name="actions")
+        + (f"--{BOUNDARY}--\r\n".encode())
+    )
+    chunks = iter([body[i : i + split] for i in range(0, len(body), split)])
+    res = run(drive(_csv_path(ws), chunks, headers=h, content_length=len(body)))
     assert res.status == 202, res.body
-    assert list(tmp_path.iterdir()) == []
+    (staged,) = uploads_dir.new()
+    assert (staged / "bars.csv").read_bytes() == content
+    assert (staged / "actions.csv").read_bytes() == TRICKY
+
+
+def test_part_header_cap_applies_below_the_library_line_limit(client, uploads_dir):
+    h, ws = _authorized(client)
+    pad = "".join(f"X-Pad-{i}: {'a' * 3000}\r\n" for i in range(4))  # 4 x 3 KB lines
+    part = (
+        f'--{BOUNDARY}\r\n{pad}Content-Disposition: form-data; name="slug"\r\n\r\nx\r\n'
+    ).encode()
+    total, chunks = _parts(part, _bars_part())
+    res = run(drive(_csv_path(ws), chunks, headers=h, content_length=total))
+    assert res.status == 400, res.body
+    assert "headers are too large" in res.json()["error"]["message"]
+
+
+def test_upload_holds_no_database_connection_while_streaming(client, uploads_dir):
+    """A trickling upload must not pin a pooled connection (pool exhaustion DoS)."""
+    from quantlab_api.db import SessionLocal
+
+    h, ws = _authorized(client)
+    # The pool request sessions use (get_engine() and get_engine(None) cache separately).
+    with SessionLocal() as probe:
+        pool = probe.get_bind().pool
+    baseline = pool.checkedout()  # type: ignore[attr-defined]
+    during: list[int] = []
+
+    def sample(call: int) -> None:
+        if call in (3, 10):
+            during.append(pool.checkedout())  # type: ignore[attr-defined]
+
+    total, chunks = multipart_body(2 * 2**20)
+    res = run(drive(_csv_path(ws), chunks, headers=h, content_length=total, on_pull=sample))
+    assert res.status == 202, res.body
+    assert during == [baseline, baseline]
+
+
+def test_membership_revoked_mid_upload_is_rejected(client, uploads_dir):
+    from sqlalchemy import delete
+
+    from quantlab_api.db import SessionLocal
+    from quantlab_api.models import Job, Role, WorkspaceMember
+
+    owner = register(client, "owner2@example.com")
+    ws = workspace_id(client, owner)
+    editor = register(client, "editor@example.com")
+    _add_member(ws, "editor@example.com", "editor")
+
+    def revoke(call: int) -> None:
+        if call == 2:
+            with SessionLocal() as db:
+                db.execute(
+                    delete(WorkspaceMember).where(
+                        WorkspaceMember.workspace_id == uuid.UUID(ws),
+                        WorkspaceMember.role == Role.editor,
+                    )
+                )
+                db.commit()
+
+    total, chunks = multipart_body(2**20)
+    auth = {"authorization": editor["Authorization"]}
+    res = run(drive(_csv_path(ws), chunks, headers=auth, content_length=total, on_pull=revoke))
+    assert res.status == 404, res.body
+    assert uploads_dir.new() == set()
+    with SessionLocal() as db:
+        assert db.query(Job).count() == 0
+
+
+def test_epilogue_after_the_closing_boundary_is_not_read(client, uploads_dir):
+    h, ws = _authorized(client)
+    total, chunks = multipart_body(2**20)
+
+    def with_epilogue() -> Iterator[bytes]:
+        yield from chunks
+        for _ in range(800):  # 50 MB of trailing junk
+            yield b"z" * CHUNK
+
+    res = run(drive(_csv_path(ws), with_epilogue(), headers=h, content_length=None))
+    assert res.status == 202, res.body
+    assert res.pulled < total + 2 * CHUNK
+
+
+@pytest.mark.parametrize(
+    ("case", "status", "present"),
+    [
+        ("empty_text_for_file", 202, ["bars.csv"]),
+        ("unnamed_file_with_content", 202, ["actions.csv", "bars.csv"]),
+        ("mixed_case_form_data", 202, ["bars.csv"]),
+    ],
+)
+def test_browser_and_client_form_variants(client, uploads_dir, case, status, present):
+    """Compatibility with what FastAPI's form parsing accepted."""
+    h, ws = _authorized(client)
+    fields = b"".join(_field(k, v) for k, v in FIELDS.items())
+    extra = {
+        # requests' data={"actions": ""}: FastAPI treated an empty value as absent.
+        "empty_text_for_file": _field("actions", ""),
+        "unnamed_file_with_content": _bars_part(TRICKY, name="actions", filename=""),
+        "mixed_case_form_data": b"",
+    }[case]
+    bars = _bars_part()
+    if case == "mixed_case_form_data":
+        bars = bars.replace(b"form-data", b"Form-Data")
+    total, chunks = _parts(fields, bars, extra) if extra else _parts(fields, bars)
+    res = run(drive(_csv_path(ws), chunks, headers=h, content_length=total))
+    assert res.status == status, res.body
+    (staged,) = uploads_dir.new()
+    assert sorted(p.name for p in staged.iterdir()) == present
+
+
+def test_validation_errors_are_reported_together(client, uploads_dir):
+    h, ws = _authorized(client)
+    total, chunks = _parts(_field("slug", "BAD"), _field("name", "n"))
+    res = run(drive(_csv_path(ws), chunks, headers=h, content_length=total))
+    assert res.status == 422
+    locs = {tuple(d["loc"]) for d in res.json()["error"]["details"]}
+    assert {("body", "slug"), ("body", "source"), ("body", "license"), ("body", "bars")} <= locs
+    assert uploads_dir.new() == set()

@@ -35,7 +35,8 @@ _NO_SPACE = {errno.ENOSPC, errno.EDQUOT}
 @dataclass
 class Upload:
     fields: dict[str, str]
-    # Bytes written per file field. A file input left empty (filename="") is omitted.
+    # Bytes written per file field. An unused file input (empty filename and no content,
+    # or an empty text value, which FastAPI also treated as absent) is omitted.
     files: dict[str, int]
 
 
@@ -43,7 +44,9 @@ class Upload:
 class _Part:
     name: str = ""
     is_file: bool = False
-    dest: Path | None = None  # None: discard (an empty optional file input)
+    dest: Path | None = None
+    named: bool = False  # the file part carried a non-empty filename
+    empty_only: bool = False  # a text part for a file field: only "" is accepted
     limit: int = 0
     size: int = 0
     data: bytearray = field(default_factory=bytearray)
@@ -114,7 +117,7 @@ class _Reader:
     def on_headers_finished(self) -> None:
         kind, options = parse_options_header(self.disposition)
         raw_name = options.get(b"name")
-        if kind != b"form-data" or raw_name is None:
+        if kind.lower() != b"form-data" or raw_name is None:
             raise ApiError(400, "invalid_multipart", "Each part needs a form-data name")
         name = raw_name.decode("utf-8", "replace")
         is_file = b"filename" in options
@@ -123,38 +126,40 @@ class _Reader:
         if name in self.seen:
             raise invalid(name, "Field given more than once", "duplicate")
         self.seen.add(name)
-        if is_file != (name in self.file_specs):
-            expected = "a file" if name in self.file_specs else "a text field"
-            raise invalid(name, f"Expected {expected}", "type_error")
+        if is_file and name not in self.file_specs:
+            raise invalid(name, "Expected a text field", "type_error")
         p = self.part
         p.name, p.is_file = name, is_file
         if is_file:
-            dest, p.limit = self.file_specs[name]
-            if options[b"filename"]:
-                p.dest = dest
-                self.ops.append(("open", p, b""))
+            p.dest, p.limit = self.file_specs[name]
+            p.named = bool(options[b"filename"])
+        elif name in self.file_specs:
+            p.empty_only = True
         else:
             p.limit = self.field_limits[name]
 
     def on_part_data(self, data: bytes, start: int, end: int) -> None:
         p = self.part
         p.size += end - start
+        if p.empty_only:
+            raise invalid(p.name, "Expected a file", "type_error")
         if p.size > p.limit:
             if p.is_file:
                 mb = p.limit // 2**20
                 raise ApiError(413, "upload_too_large", f"Uploads are limited to {mb} MB")
             raise invalid(p.name, "Value is too long", "string_too_long")
-        if not p.is_file:
-            p.data += data[start:end]
-        elif p.dest is not None:
+        if p.is_file:
             self.ops.append(("write", p, data[start:end]))
+        else:
+            p.data += data[start:end]
 
     def on_part_end(self) -> None:
         p = self.part
+        if p.empty_only or (p.is_file and not p.named and p.size == 0):
+            return  # an unused file input; nothing was written
         if p.is_file:
-            if p.dest is not None:
-                self.files[p.name] = p.size
-                self.ops.append(("close", p, b""))
+            self.files[p.name] = p.size
+            self.ops.append(("close", p, b""))
             return
         try:
             self.fields[p.name] = p.data.decode("utf-8")
@@ -167,15 +172,14 @@ class _Reader:
     async def flush(self) -> None:
         ops, self.ops = self.ops, []
         for op, p, data in ops:
-            if op == "open":
+            # Opened on first use, so an unused file input creates no file.
+            if p.out is None:
                 assert p.dest is not None
                 p.out = await anyio.to_thread.run_sync(p.dest.open, "wb")
                 self.open_parts.append(p)
-            elif op == "write":
-                assert p.out is not None
+            if op == "write":
                 await anyio.to_thread.run_sync(_write, p.out, data)
             else:
-                assert p.out is not None
                 await anyio.to_thread.run_sync(p.out.close)
 
     def close_all(self) -> None:
@@ -199,7 +203,7 @@ async def read_multipart(
     out of disk space.
     """
     ctype, params = parse_options_header(request.headers.get("content-type"))
-    if ctype != b"multipart/form-data":
+    if ctype.lower() != b"multipart/form-data":
         raise ApiError(415, "unsupported_media_type", "Expected a multipart/form-data body")
     boundary = params.get(b"boundary")
     if not boundary:
@@ -210,6 +214,8 @@ async def read_multipart(
         async for chunk in request.stream():
             parser.write(chunk)
             await reader.flush()
+            if reader.ended:
+                break  # never read an epilogue after the closing boundary
         parser.finalize()
         await reader.flush()
     except FormParserError as exc:
