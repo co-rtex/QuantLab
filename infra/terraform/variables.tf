@@ -39,20 +39,29 @@ variable "single_nat_gateway" {
 }
 
 variable "acm_certificate_arn" {
-  description = "ARN of an existing ACM certificate for the public host name. The NLB terminates TLS with it."
+  description = "ARN of an existing ACM certificate for the public host name. The NLB terminates TLS with it. No default: an apply must name a real one."
   type        = string
-  default     = "arn:aws:acm:us-east-1:000000000000:certificate/00000000-0000-0000-0000-000000000000"
 
   validation {
-    condition     = can(regex("^arn:aws[a-z-]*:acm:", var.acm_certificate_arn))
-    error_message = "acm_certificate_arn must be an ACM certificate ARN."
+    condition     = can(regex("^arn:aws[a-z-]*:acm:[a-z0-9-]+:[0-9]{12}:certificate/", var.acm_certificate_arn)) && !can(regex(":000000000000:", var.acm_certificate_arn))
+    error_message = "acm_certificate_arn must be a real ACM certificate ARN (not the example's all-zero account)."
   }
 }
 
 variable "image_tag" {
-  description = "Tag of the api, web and edge images in this deployment's ECR repositories (immutable tags)."
+  description = "Tag of the api, web and edge images in this deployment's ECR repositories (immutable tags). No default."
   type        = string
-  default     = "unset"
+
+  validation {
+    condition     = can(regex("^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$", var.image_tag)) && !can(regex("(?i)example|replace|unset|latest", var.image_tag))
+    error_message = "image_tag must be a real, immutable release tag (not latest or an example value)."
+  }
+}
+
+variable "redis_auth_token_version" {
+  description = "Version of the generated Redis AUTH token. Increase it to rotate the token (README.md)."
+  type        = number
+  default     = 1
 }
 
 variable "api_count" {

@@ -75,12 +75,13 @@ data "aws_iam_policy_document" "efs" {
   }
 }
 
-# Daily recovery points of the data directory. Restore with the reaper stopped
-# (docs/RUNBOOK.md): restored files keep their old mtimes.
+# Backups come from the plan below only: EFS automatic backups would add a second,
+# default plan. Restore with the reaper stopped (docs/RUNBOOK.md): restored files keep
+# their old mtimes.
 resource "aws_efs_backup_policy" "data" {
   file_system_id = aws_efs_file_system.data.id
   backup_policy {
-    status = "ENABLED"
+    status = "DISABLED"
   }
 }
 
@@ -110,7 +111,7 @@ resource "aws_backup_selection" "data" {
 
 # --- S3: off-site exports (pg_dump archives, data-directory snapshots) ------------------
 resource "aws_s3_bucket" "exports" {
-  #checkov:skip=CKV_AWS_18:Server access logs would need a second bucket; CloudTrail data events cover audits
+  #checkov:skip=CKV_AWS_18:Server access logs would need a second bucket; enable CloudTrail S3 data events at the account level if audits need it
   #checkov:skip=CKV_AWS_144:Cross-region replication is a per-deployment choice (README, "Disaster recovery")
   #checkov:skip=CKV2_AWS_62:Nothing consumes object events for exports
   bucket_prefix = "${local.name}-exports-"

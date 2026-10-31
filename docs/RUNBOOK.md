@@ -237,5 +237,9 @@ resources and needs the user's account and approval. What differs from compose:
   market-data keys are injected only when enabled; the vendor and licence remain the
   user's choice (#11). Rotate a secret by writing a new version and redeploying the
   services that read it; rotating `jwt_secret` signs everyone out.
-* **Redis:** TLS, no AUTH token, reachable only from api, worker and reaper. It carries
-  queue deliveries and caches; PostgreSQL decides what runs (ADR-0002).
+* **Redis:** TLS and AUTH, reachable only from api, worker and reaper. It holds login
+  rate-limit counters, cached bars and RQ job payloads. The token is generated at apply
+  time and stored only in the `redis_url` secret. To rotate it, increase
+  `redis_auth_token_version` (`infra/terraform/README.md`).
+* **Before any apply:** work through the checklist in `infra/terraform/README.md`: Redis
+  AUTH, the Caddyfile and `verify.sh`, `sslmode=verify-full`, and the JWT secret scope.

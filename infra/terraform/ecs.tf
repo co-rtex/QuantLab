@@ -11,7 +11,6 @@ locals {
       { name = "QUANTLAB_ENVIRONMENT", value = "production" },
       { name = "QUANTLAB_COOKIE_SECURE", value = "true" },
       { name = "QUANTLAB_DATA_DIR", value = "/data" },
-      { name = "QUANTLAB_REDIS_URL", value = "rediss://${aws_elasticache_replication_group.main.primary_endpoint_address}:6379/0" },
       # Only the web tier's subnets may state a client address (ADR-0008).
       { name = "QUANTLAB_TRUSTED_PROXIES", value = jsonencode(local.web_cidrs) },
       { name = "QUANTLAB_GIT_SHA", value = var.image_tag },
@@ -27,6 +26,7 @@ locals {
       name      = local.secrets[k].env
       valueFrom = aws_secretsmanager_secret.app[k].arn
     }],
+    [{ name = "QUANTLAB_REDIS_URL", valueFrom = aws_secretsmanager_secret.redis_url.arn }],
     var.llm_enabled ? [{
       name      = local.secrets.anthropic_key.env
       valueFrom = aws_secretsmanager_secret.app["anthropic_key"].arn

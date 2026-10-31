@@ -7,13 +7,13 @@ paid resources, so it needs the user's approval and account (#19, ADR-0012).
 ## What it creates
 | Need | Resource |
 |---|---|
-| TLS edge | Network Load Balancer: a TLS listener with an ACM certificate and an ELB TLS 1.2/1.3 policy, sending **PROXY protocol v2** to Caddy tasks (`edge/`) on :8080. Caddy accepts PROXY headers only from the NLB's subnets, and its security group accepts only the NLB's group. Caddy overwrites `X-Forwarded-For` with the stated client (ADR-0008). Access logs go to the exports bucket under `nlb/`. |
+| TLS edge | Network Load Balancer: a TLS listener with an ACM certificate and an ELB TLS 1.2/1.3 policy, sending **PROXY protocol v2** to Caddy tasks (`edge/`) on :8080. Caddy honours PROXY headers only from the NLB's subnets (from any other source it rejects the header and serves the connection with its own peer address), and its security group admits only the NLB's group. Caddy overwrites `X-Forwarded-For` with the stated client (ADR-0008). Access logs go to the exports bucket under `nlb/`. |
 | Containers | An ECS Fargate cluster (ARM64): `edge`, `web` (its own subnets, which are exactly the API's `QUANTLAB_TRUSTED_PROXIES`), `api`, `worker`, one `reaper` (replaced, never doubled, on deploy), and a one-off `migrate` task. Every container has a read-only root file system, with tmp volumes where it writes. Private DNS (Cloud Map) provides `api.` and `web.<env>.quantlab.internal`. |
 | PostgreSQL | RDS PostgreSQL 17: Multi-AZ, encrypted with a customer-managed KMS key, TLS required (`rds.force_ssl`). **Point-in-time recovery** from 14 days of automated backups (7–35). Deletion protection and a final snapshot. The master password is managed by RDS in Secrets Manager. |
-| Redis | ElastiCache Redis 7.1, two nodes with automatic failover. Encrypted at rest and in transit (TLS required, `rediss://`). No AUTH token, because it would sit in state. Reachable only from api, worker and reaper (ADR-0012). |
+| Redis | ElastiCache Redis 7.1, two nodes with automatic failover. Encrypted at rest and in transit (TLS required, `rediss://`). **AUTH required**: Secrets Manager generates a 64-character token at apply time as an ephemeral value. Terraform passes it only to write-only arguments (`auth_token_wo`, and `secret_string_wo` for the `redis_url` secret), so it is in neither the plan nor the state. Reachable only from api, worker and reaper (ADR-0012). |
 | `QUANTLAB_DATA_DIR` | **EFS**, not S3: the store needs atomic directory renames, hard links and `.trash` on the same file system as `datasets/` (#97). It is encrypted, mounted over TLS through one access point (uid 10001) with IAM authorization, and backed up daily by AWS Backup (35 days). |
 | Object storage | S3 bucket for off-site exports (`pg_dump` archives, data snapshots) and NLB logs: versioned, SSE-KMS, public access blocked, TLS-only policy. |
-| Secrets | Secrets Manager **containers only** (no versions): `jwt_secret`, `metrics_token`, `edge_secret`, `database_url`, plus optional `anthropic_key` and `market_data_key`. These are injected only when `llm_enabled` or `market_data_provider` is set, which they are not by default (#11). |
+| Secrets | Secrets Manager **containers only** (no versions): `jwt_secret`, `metrics_token`, `edge_secret`, `database_url`, plus optional `anthropic_key` and `market_data_key`. The one exception is `redis_url`, written write-only with the generated token. These are injected only when `llm_enabled` or `market_data_provider` is set, which they are not by default (#11). |
 | Network | VPC with public, web, app and data subnets in 2–3 zones, NAT for outbound HTTPS, flow logs, and the default security group emptied. One group per tier: internet → NLB → edge → web → api → {RDS, Redis, EFS}. |
 
 ## Validation (how this was checked)
@@ -22,7 +22,7 @@ paid resources, so it needs the user's approval and account (#19, ADR-0012).
 | Terraform | 1.17.1 (darwin_arm64; SHA-256 checked against HashiCorp's SHA256SUMS) | `terraform init -backend=false` and `terraform validate`: valid. `terraform fmt -check`: clean |
 | hashicorp/aws provider | 6.71.0 (`.terraform.lock.hcl` hashes for linux/darwin × amd64/arm64) | |
 | TFLint | 0.65.0, aws ruleset 0.50.0 | no issues (`preset = "all"`) |
-| Checkov | 3.4.0 (via `uvx`) | 385 passed, 0 failed, 24 skipped. Each skip has an inline `#checkov:skip` reason (Redis AUTH token in state, operator-rotated app secrets, the KMS key policy's `*`, security groups attached via `for_each`, exports-bucket replication/access logs/events, AZ pinning) |
+| Checkov | 3.4.0 (via `uvx`) | 388 passed, 0 failed, 25 skipped. Each skip has an inline `#checkov:skip` reason (checkov not recognizing `auth_token_wo`, operator-rotated app secrets, the KMS key policy's `*`, security groups attached via `for_each`, exports-bucket replication/access logs/events, AZ pinning) |
 | Caddy | — | **`edge/Caddyfile` NOT VALIDATED**: downloading Caddy to run `caddy adapt` was not permitted in this session. Run `caddy adapt --config edge/Caddyfile` (2.10.2) before building the edge image. |
 
 ```sh
@@ -32,6 +32,32 @@ tflint --chdir=infra/terraform --init && tflint --chdir=infra/terraform
 uvx checkov -d infra/terraform --framework terraform --compact
 ```
 CI does not run these yet; that waits on the user's approval of Actions minutes (#17).
+
+## Before apply (all required)
+- [ ] **Redis AUTH.** After the first apply, confirm that the replication group reports
+      `AuthTokenEnabled` and that the `redis_url` secret holds a `rediss://:<token>@…`
+      URL. ElastiCache RBAC with IAM authentication would avoid the shared token, but the
+      app (redis-py) cannot generate IAM tokens yet.
+- [ ] **Edge.** Run `caddy adapt --config infra/terraform/edge/Caddyfile` (Caddy 2.10.2;
+      it has never been run), build the edge image, then run `infra/edge/verify.sh`
+      against the public name through a real NLB (#39). It must show each client's own
+      address, and a forged `X-Forwarded-For` must have no effect.
+- [ ] **PostgreSQL TLS verification.** `rds.force_ssl` makes connections encrypted, but
+      `sslmode=require` does not check the server. Add the RDS CA bundle to the api image
+      and use `sslmode=verify-full&sslrootcert=<path>` in `database_url`.
+- [ ] **JWT secret only where it is needed.** Today every process requires
+      `QUANTLAB_JWT_SECRET` in production (config.py), so worker, reaper and migrate get it
+      too. #117 scopes it to the API.
+- [ ] Real values for `acm_certificate_arn` and `image_tag`. Neither has a default, and the
+      example's placeholders fail validation.
+- [ ] The user's approval of the account, the plan and the cost.
+
+## Rotating the Redis token
+Increase `redis_auth_token_version` and apply. A new token is generated, set on the
+replication group (the default `ROTATE` strategy keeps the old token valid alongside the
+new one) and written to `redis_url`. Redeploy api, worker and reaper so they read the new
+URL. Then apply once more with `auth_token_update_strategy = "SET"` if the old token must
+stop working at once.
 
 ## Remote state (documented, not configured)
 Before a first apply, create an S3 state bucket (versioned, SSE-KMS, public access blocked)
@@ -47,8 +73,9 @@ terraform {
   }
 }
 ```
-State then holds resource ids and ARNs, never secret values. Nothing here writes a secret
-version, an RDS password or a Redis token.
+State then holds resource ids and ARNs, never secret values. The Redis token and the
+`redis_url` value pass only through ephemeral and write-only values, and the RDS password
+is managed by RDS.
 
 ## First deployment (once approved)
 1. Request an ACM certificate for the public host name and set `acm_certificate_arn`.

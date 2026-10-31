@@ -171,8 +171,10 @@ TLS edge that keeps ADR-0008's guarantee: only a trusted hop states the client a
   runs the containers, so there are no hosts to patch.
 * **Edge: client address via PROXY protocol, not a header.** A Network Load Balancer
   terminates TLS with ACM and sends PROXY v2 to Caddy. Caddy's `proxy_protocol` listener
-  wrapper accepts that header only from the NLB's subnets (`fallback_policy reject`), and
-  its security group admits only the NLB's group, so no other host can claim an address.
+  wrapper honours that header only from the NLB's subnets. `fallback_policy reject`
+  rejects the header from any other source, whose connection is then served with its own
+  peer address rather than refused. The edge's security group admits only the NLB's
+  group, so no other host can connect, let alone claim an address.
   Caddy then overwrites `X-Forwarded-For` with `{remote_host}`, now the stated client,
   exactly as in compose. We chose this over the alternative, an ALB that appends
   `X-Forwarded-For` with Caddy using `{client_ip}` and trusting the ALB's ranges, because:
@@ -194,11 +196,17 @@ TLS edge that keeps ADR-0008's guarantee: only a trusted hop states the client a
   mtimes. S3 has none of these primitives. EFS (NFSv4.1) has all of them on one file
   system. Every task mounts one access point (uid 10001) over TLS with IAM authorization.
   S3 holds only off-site exports and load-balancer logs; AWS Backup copies EFS daily.
-* **Secrets without values in state.** Terraform creates Secrets Manager containers and
-  never a version. RDS manages its master password itself. Redis has no AUTH token, since
-  one would sit in state: it carries only delivery ids and caches (ADR-0002), and only the
-  api, worker and reaper groups can reach it. Optional LLM and market-data keys are
-  injected only when enabled, because ECS will not start a task with an empty secret.
+* **Secrets without values in state.** Terraform creates Secrets Manager containers with
+  no value, and RDS manages its master password itself. **Redis requires AUTH.** It holds
+  more than delivery ids: the login rate-limit counters (ADR-0007), cached bars served to
+  backtests, and RQ job payloads, which RQ serializes with pickle (an application-side
+  P1). A token can be kept out of state: Secrets Manager generates it at apply time as an
+  ephemeral value, and Terraform passes it only to write-only arguments (`auth_token_wo`,
+  and `secret_string_wo` for the `redis_url` secret the tasks read). We did not choose
+  ElastiCache RBAC with IAM authentication, which would remove the shared token, because
+  the app's Redis client cannot generate IAM tokens yet. Optional LLM and market-data keys
+  are injected only when enabled, because ECS will not start a task with an empty
+  secret.
 * **Migrations** run as a one-off task per release, never at API start: several API tasks
   starting together would race.
 **Consequences.**
@@ -210,6 +218,14 @@ TLS edge that keeps ADR-0008's guarantee: only a trusted hop states the client a
   downloading Caddy to run `caddy adapt` was denied in the session that wrote it. It must
   be adapted and tested, including the PROXY header from a real NLB and
   `infra/edge/verify.sh` against the public name, before the edge image is used.
-* Accepted risks: Redis without AUTH (network isolation only); outbound HTTPS from every
-  private tier through NAT (VPC endpoints would narrow this); cross-region backup copies are
-  not configured.
+* Before any apply (README, "Before apply"): adapt and verify the Caddyfile behind a real
+  NLB (#39); verify the PostgreSQL server certificate (`sslmode=verify-full` with the RDS
+  CA bundle); scope the JWT secret to the API (#117).
+* Accepted risks:
+  * a shared Redis token rather than IAM authentication;
+  * outbound HTTPS from the edge, web and app tiers through NAT (VPC endpoints would
+    narrow this; the data subnets have no route out);
+  * the edge container runs as root (Fargate's ephemeral volumes are root-owned);
+  * the NLB health check is TCP only, since a PROXY-protocol HTTP check was not
+    verified;
+  * cross-region backup copies are not configured.

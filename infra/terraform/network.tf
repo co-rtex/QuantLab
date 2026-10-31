@@ -117,10 +117,16 @@ resource "aws_route_table_association" "app" {
   route_table_id = aws_route_table.private[count.index].id
 }
 
+# RDS, Redis and EFS need no route out of the VPC.
+resource "aws_route_table" "data" {
+  vpc_id = aws_vpc.main.id
+  tags   = { Name = "${local.name}-data" }
+}
+
 resource "aws_route_table_association" "data" {
   count          = var.az_count
   subnet_id      = aws_subnet.data[count.index].id
-  route_table_id = aws_route_table.private[count.index].id
+  route_table_id = aws_route_table.data.id
 }
 
 resource "aws_flow_log" "vpc" {

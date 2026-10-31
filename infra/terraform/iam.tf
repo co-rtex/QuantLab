@@ -28,11 +28,17 @@ resource "aws_iam_role_policy_attachment" "execution" {
 data "aws_iam_policy_document" "execution_secrets" {
   statement {
     actions   = ["secretsmanager:GetSecretValue"]
-    resources = [for s in aws_secretsmanager_secret.app : s.arn]
+    resources = concat([for s in aws_secretsmanager_secret.app : s.arn], [aws_secretsmanager_secret.redis_url.arn])
   }
   statement {
     actions   = ["kms:Decrypt"]
     resources = [aws_kms_key.main.arn]
+    # Only to read those secrets, never to decrypt other data under the key.
+    condition {
+      test     = "StringEquals"
+      variable = "kms:ViaService"
+      values   = ["secretsmanager.${var.region}.amazonaws.com"]
+    }
   }
 }
 

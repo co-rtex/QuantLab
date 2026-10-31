@@ -1,5 +1,6 @@
-# Secrets Manager entries the tasks read at start. Terraform creates the containers only,
-# never a version, so no secret value exists in code or state. An operator sets each value
+# Secrets Manager entries the tasks read at start. Terraform creates the containers and
+# sets no value, except redis_url (below, write-only), so no secret value exists in code
+# or state. An operator sets each other value
 # once before the first deploy (README.md, "First deployment"). ECS refuses to start a task
 # whose secret has no value, so the optional ones are injected only when enabled
 # (var.llm_enabled, var.market_data_provider), and must then be set first.
@@ -17,6 +18,22 @@ locals {
       desc     = "Optional licensed market-data key; the vendor and licence are the user's choice (#11)"
     }
   }
+}
+
+# QUANTLAB_REDIS_URL with the AUTH token, written through the write-only argument in the
+# same apply that sets the token on the replication group (database.tf).
+resource "aws_secretsmanager_secret" "redis_url" {
+  #checkov:skip=CKV2_AWS_57:Rotated with the Redis token by bumping redis_auth_token_version
+  name                    = "quantlab/${var.environment}/redis_url"
+  description             = "rediss:// URL with the ElastiCache AUTH token (QUANTLAB_REDIS_URL)"
+  kms_key_id              = aws_kms_key.main.arn
+  recovery_window_in_days = 30
+}
+
+resource "aws_secretsmanager_secret_version" "redis_url" {
+  secret_id                = aws_secretsmanager_secret.redis_url.id
+  secret_string_wo         = "rediss://:${ephemeral.aws_secretsmanager_random_password.redis.random_password}@${aws_elasticache_replication_group.main.primary_endpoint_address}:6379/0"
+  secret_string_wo_version = var.redis_auth_token_version
 }
 
 resource "aws_secretsmanager_secret" "app" {

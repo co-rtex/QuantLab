@@ -5,9 +5,11 @@
 #
 # The proxy_protocol listener wrapper replaces the connection's remote address with the
 # one in the PROXY header, but only for connections from QUANTLAB_EDGE_PROXY_CIDRS (the
-# NLB's subnets). It refuses connections from anywhere else, so no other host can claim
-# an address. {remote_host} below is therefore the real client, and it overwrites
-# X-Forwarded-For exactly as in compose.
+# NLB's subnets). `fallback_policy reject` rejects a PROXY header from any other source,
+# so no other host can claim an address. Such a connection is not refused: it is served
+# with its own peer address. Only the NLB can connect at all (the edge's security group
+# admits only the NLB's group). {remote_host} below is therefore the real client, and it
+# overwrites X-Forwarded-For exactly as in compose.
 #
 # NOT VALIDATED: this file has not been checked by `caddy adapt` (README.md, "Validation").
 {
