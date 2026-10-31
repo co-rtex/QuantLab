@@ -17,8 +17,10 @@ from pathlib import Path
 import fakeredis
 import pytest
 from rq import Queue, SimpleWorker
+from rq.callbacks import Callback
 from rq.job import Job, JobStatus
 from rq.serializers import JSONSerializer
+from rq.webhook import Webhook
 
 from quantlab_api.jobs import RQ_OPTIONS, TRUSTED_FUNC, TrustedJob, UntrustedJobError
 
@@ -35,6 +37,11 @@ class Touch:
 
 def noop(*_: object) -> None:
     return None
+
+
+def mark(job: Job, *_: object) -> None:
+    """A failure callback that leaves a file behind if it runs."""
+    Path(job.meta["marker"]).touch()
 
 
 def run(conn: fakeredis.FakeRedis, name: str, **options: object) -> None:
@@ -111,3 +118,48 @@ def test_the_real_job_is_trusted() -> None:
     assert raw is not None
     with pytest.raises(pickle.UnpicklingError):
         pickle.loads(raw)
+
+
+def test_a_failure_callback_from_the_queue_is_not_run(tmp_path: Path) -> None:
+    """Callbacks are imported by name too: an entry that fails on purpose must not get
+    its failure callback run (found by the automated review of #115)."""
+    conn = fakeredis.FakeRedis()
+    marker = tmp_path / "callback-ran"
+
+    def entry(queue: str, **options: object) -> None:
+        Queue(queue, connection=conn, serializer=JSONSerializer, **options).enqueue(  # type: ignore[arg-type]
+            "os.listdir",
+            str(tmp_path / "missing"),
+            on_failure=Callback(mark),
+            meta={"marker": str(marker)},
+        )
+
+    entry("attack")
+    run(conn, "attack", **RQ_OPTIONS)
+    assert not marker.exists()
+
+    entry("control")
+    run(conn, "control", serializer=JSONSerializer)
+    assert marker.exists()
+
+
+def test_callbacks_and_webhooks_from_the_queue_are_dropped() -> None:
+    from quantlab_api.jobs import execute_job
+
+    conn = fakeredis.FakeRedis()
+    job = Queue("q", connection=conn, **RQ_OPTIONS).enqueue(  # type: ignore[arg-type]
+        execute_job,
+        str(uuid.uuid4()),
+        on_success=Callback(noop),
+        on_failure=Callback(noop),
+        on_stopped=Callback(noop),
+        webhooks=[Webhook("http://127.0.0.1:9/exfiltrate", "failed")],
+    )
+    stored = Job.fetch(job.id, connection=conn, serializer=JSONSerializer)
+    assert stored.webhooks and stored.failure_callback is not None  # they are in Redis
+
+    trusted = TrustedJob.fetch(job.id, connection=conn, serializer=JSONSerializer)
+    assert trusted.webhooks == []
+    assert trusted.success_callback is None
+    assert trusted.failure_callback is None
+    assert trusted.stopped_callback is None

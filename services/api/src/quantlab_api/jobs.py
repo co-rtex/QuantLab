@@ -110,15 +110,36 @@ class TrustedJob(RQJob):
 
     RQ's default serializer is pickle, so anyone who could write to Redis could make a
     worker run arbitrary code while it unpickled a job; the JSON serializer closes that.
-    It does not close the other half: RQ stores the callable *by name* and imports it on
-    the worker, so a JSON entry naming ``os.system`` would still run. This class checks
-    the name and the arguments before RQ resolves anything.
+    It does not close the rest: RQ stores the callable *by name* and imports it on the
+    worker, and so it does the success, failure and stopped callbacks, and it delivers
+    any webhooks the entry lists. A JSON entry naming ``os.system``, or failing on purpose
+    with a failure callback, would still run. This class checks the callable and its
+    arguments before RQ resolves anything, never resolves a callback, and never delivers
+    a webhook: the application uses neither.
     """
+
+    def restore(self, raw_data: Any) -> Any:
+        result = super().restore(raw_data)
+        self.webhooks = []  # never registered by QuantLab: an entry's list is not trusted
+        return result
 
     @property
     def func(self) -> Any:
         self._require_trusted()
         return super().func
+
+    # Callbacks are imported by name, like the callable: none is ever run.
+    @property
+    def success_callback(self) -> None:
+        return None
+
+    @property
+    def failure_callback(self) -> None:
+        return None
+
+    @property
+    def stopped_callback(self) -> None:
+        return None
 
     def _require_trusted(self) -> None:
         args, kwargs = self.args, self.kwargs
