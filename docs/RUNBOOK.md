@@ -199,6 +199,10 @@ and ten failed logins would lock everyone out. Step 3 checks this.
    export QUANTLAB_EDGE_SECRET=$(openssl rand -hex 32)   # store it like the JWT secret
    export QUANTLAB_JWT_SECRET=$(openssl rand -hex 32) QUANTLAB_METRICS_TOKEN=$(openssl rand -hex 24)
    export QUANTLAB_REDIS_PASSWORD=$(openssl rand -hex 24)   # hex: safe inside the Redis URL
+   ```
+   A password with other characters (`@`, `/`, `:`, `#`, `%` …) must be percent-encoded
+   where it appears in `QUANTLAB_REDIS_URL`, or the URL is read wrongly.
+   ```
    docker compose -f docker-compose.yml -f infra/edge/compose.yml --profile app up -d --build
    ```
    For a public domain also set `QUANTLAB_EDGE_SITE=quantlab.example.com` and
