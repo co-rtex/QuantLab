@@ -41,7 +41,7 @@ services:
 
   # Exposure means production: the API then refuses placeholder secrets and insecure
   # cookies, and fails closed when no client address reaches it (ADR-0008). Set
-  # QUANTLAB_JWT_SECRET and QUANTLAB_METRICS_TOKEN (docs/RUNBOOK.md).
+  # QUANTLAB_JWT_SECRET, QUANTLAB_METRICS_TOKEN and QUANTLAB_REDIS_PASSWORD (docs/RUNBOOK.md).
   api:
     ports: !reset []
     environment: &edge-env

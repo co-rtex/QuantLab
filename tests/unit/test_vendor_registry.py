@@ -82,6 +82,7 @@ def test_production_refuses_a_provider_without_a_key():
         "jwt_secret": "x" * 40,
         "metrics_token": "m" * 20,
         "cookie_secure": True,
+        "redis_url": "redis://:" + "r" * 20 + "@redis:6379/0",  # production requires AUTH (#115)
     }
     with pytest.raises(ValidationError, match="MARKET_DATA_API_KEY"):
         Settings(_env_file=None, **prod, market_data_provider="massive", market_data_api_key=" ")
