@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useState, type FormEvent } from "react";
+import { useRef, useState, type FormEvent } from "react";
 import { PageHeader } from "@/components/Shell";
 import { ErrorNote, JobProgress, Panel, QueryError, Skeleton, StatusPill, SyntheticTag } from "@/components/ui";
 import { api, ApiError, cancelJob, newIdempotencyKey, type Dataset, type DatasetVersion, type Job } from "@/lib/api";
@@ -9,31 +9,97 @@ import { compact, dateTime, shortHash } from "@/lib/format";
 import { useApi } from "@/lib/useApi";
 import { useCanEdit, useWorkspace } from "@/lib/workspace";
 
+// The API's limit per uploaded file (MAX_UPLOAD_BYTES in routes/datasets.py).
+const MAX_UPLOAD_BYTES = 50 * 2 ** 20;
+
+function pollJob(j: Job | undefined): number | false {
+  return j && (j.status === "queued" || j.status === "running") ? 1000 : false;
+}
+
 export default function DataPage() {
   const { workspace } = useWorkspace();
   const canEdit = useCanEdit();
   const ws = workspace?.id;
+  // One job per form, so starting an import never hides a generation in progress (#114).
   const [jobId, setJobId] = useState<string | null>(null);
-  const job = useApi<Job>(jobId ? `/jobs/${jobId}` : null, {
-    poll: (j) => (j && (j.status === "queued" || j.status === "running") ? 1000 : false),
-  });
-  // Re-fetch the catalog once the ingestion job settles by keying the request on it.
-  const settled = job.data && !["queued", "running"].includes(job.data.status) ? job.data.id : "";
+  const job = useApi<Job>(jobId ? `/jobs/${jobId}` : null, { poll: pollJob });
+  const [csvJobId, setCsvJobId] = useState<string | null>(null);
+  const csvJob = useApi<Job>(csvJobId ? `/jobs/${csvJobId}` : null, { poll: pollJob });
+  // Re-fetch the catalog once an ingestion job settles by keying the request on it.
+  const settledOf = (j: Job | undefined) => (j && !["queued", "running"].includes(j.status) ? j.id : "");
+  const settled = [settledOf(job.data), settledOf(csvJob.data)].filter(Boolean).join("-");
   const datasets = useApi<Dataset[]>(ws ? `/workspaces/${ws}/datasets?after=${settled}` : null);
   const versions = useApi<DatasetVersion[]>(ws ? `/workspaces/${ws}/dataset-versions?after=${settled}` : null);
   const [err, setErr] = useState<ApiError>();
   const [submitting, setSubmitting] = useState(false);
-  const busy = submitting || (jobId !== null && !settled);
+  const [importErr, setImportErr] = useState<ApiError | Error>();
+  // The API's field errors (422), by field, shown at each input as well as in the alert.
+  const fieldErrors = Object.fromEntries(
+    importErr instanceof ApiError && Array.isArray(importErr.details)
+      ? (importErr.details as { loc?: (string | number)[]; msg: string }[]).map((d) => [String((d.loc ?? []).at(-1)), d.msg])
+      : [],
+  ) as Record<string, string>;
+  /** aria attributes tying an import input to its field error, if it has one. */
+  const invalid = (field: string, hint?: string) => ({
+    "aria-invalid": fieldErrors[field] ? true : undefined,
+    "aria-describedby": [hint, fieldErrors[field] ? `csv-${field}-error` : undefined].filter(Boolean).join(" ") || undefined,
+  });
+  const fieldError = (field: string) =>
+    fieldErrors[field] ? (
+      <span id={`csv-${field}-error`} className="mt-0.5 block text-xs text-loss">
+        {fieldErrors[field]}
+      </span>
+    ) : null;
+  const [importing, setImporting] = useState(false);
+  const importingNow = useRef(false);
 
-  async function cancel() {
-    if (!job.data) return;
-    setErr(undefined);
-    try {
-      await cancelJob(job.data.id);
-    } catch (e) {
-      setErr(e as ApiError);
+  /**
+   * Upload a CSV dataset to the streaming endpoint (#4, #28) as it is: the browser never
+   * parses the files. Only their sizes are checked first, against the API's limit, so an
+   * oversized file is refused before it is sent rather than after 50 MB went up.
+   */
+  async function importCsv(e: FormEvent<HTMLFormElement>) {
+    e.preventDefault();
+    if (!ws || importingNow.current) return;
+    const form = new FormData(e.currentTarget);
+    setImportErr(undefined);
+    for (const field of ["bars", "actions"]) {
+      const file = form.get(field);
+      if (!(file instanceof File) || file.size === 0) {
+        form.delete(field); // an empty optional file input
+        continue;
+      }
+      if (file.size > MAX_UPLOAD_BYTES) {
+        setImportErr(new Error(`${file.name} is ${(file.size / 2 ** 20).toFixed(1)} MB. Each file is limited to ${MAX_UPLOAD_BYTES / 2 ** 20} MB.`));
+        return;
+      }
     }
-    job.reload();
+    if (!form.has("bars")) {
+      setImportErr(new Error("Choose the daily bars CSV to import."));
+      return;
+    }
+    importingNow.current = true;
+    setImporting(true);
+    try {
+      const j = await api<Job>(`/workspaces/${ws}/datasets/csv`, { method: "POST", body: form });
+      setCsvJobId(j.id);
+    } catch (x) {
+      setImportErr(x as ApiError);
+    } finally {
+      importingNow.current = false;
+      setImporting(false);
+    }
+  }
+  const busy = submitting || (jobId !== null && !settledOf(job.data));
+
+  async function cancel(q: typeof job, report: (e: ApiError) => void) {
+    if (!q.data) return;
+    try {
+      await cancelJob(q.data.id);
+    } catch (e) {
+      report(e as ApiError);
+    }
+    q.reload();
   }
 
   async function create(e: FormEvent<HTMLFormElement>) {
@@ -127,6 +193,7 @@ export default function DataPage() {
             </div>
           )}
         </Panel>
+        <div className="space-y-6">
         <Panel title="Generate synthetic data">
           <form onSubmit={create} className="space-y-3 text-sm">
             <p className="text-ink-2">
@@ -166,11 +233,81 @@ export default function DataPage() {
             <QueryError q={job} what="the ingestion job's status" />
             {job.data && (
               <div className="pt-2">
-                <JobProgress job={job.data} onCancel={canEdit ? cancel : undefined} />
+                <JobProgress job={job.data} onCancel={canEdit ? () => cancel(job, setErr) : undefined} />
               </div>
             )}
           </form>
         </Panel>
+        {canEdit && (
+          <Panel title="Import CSV">
+            <form onSubmit={importCsv} className="space-y-3 text-sm">
+              <p className="text-ink-2">
+                Daily bars with the columns <code>symbol,date,open,high,low,close,volume</code>, and optionally corporate actions with{" "}
+                <code>symbol,ex_date,kind,value</code> (kind is split or dividend). Each file can be up to {MAX_UPLOAD_BYTES / 2 ** 20} MB. The
+                source and licence you state are kept with the dataset.
+              </p>
+              <div className="grid grid-cols-2 gap-3">
+                <label>
+                  <span className="mb-1 block">Name</span>
+                  <input name="name" required maxLength={120} className="field" {...invalid("name")} />
+                  {fieldError("name")}
+                </label>
+                <label>
+                  <span className="mb-1 block">Short name</span>
+                  <input name="slug" required pattern="[a-z0-9][a-z0-9_\-]{1,62}" title="Lowercase letters, digits, - and _" className="field" {...invalid("slug", "csv-slug-hint")} />
+                  <span id="csv-slug-hint" className="mt-0.5 block text-xs text-ink-3">
+                    Lowercase letters, digits, - and _
+                  </span>
+                  {fieldError("slug")}
+                </label>
+                <label className="col-span-2">
+                  <span className="mb-1 block">Source</span>
+                  <input name="source" required minLength={3} maxLength={300} placeholder="Where the data comes from" className="field" {...invalid("source")} />
+                  {fieldError("source")}
+                </label>
+                <label className="col-span-2">
+                  <span className="mb-1 block">Licence</span>
+                  <input name="license" required minLength={3} maxLength={300} placeholder="The terms you may use it under" className="field" {...invalid("license")} />
+                  {fieldError("license")}
+                </label>
+                <label className="col-span-2">
+                  <span className="mb-1 block">Daily bars (CSV)</span>
+                  <input name="bars" type="file" required accept=".csv,text/csv" className="field" {...invalid("bars")} />
+                  {fieldError("bars")}
+                </label>
+                <label className="col-span-2">
+                  <span className="mb-1 block">Corporate actions (CSV, optional)</span>
+                  <input name="actions" type="file" accept=".csv,text/csv" className="field" {...invalid("actions")} />
+                  {fieldError("actions")}
+                </label>
+              </div>
+              <ErrorNote
+                error={importErr}
+                detail={
+                  importErr instanceof ApiError && Array.isArray(importErr.details) ? (
+                    <ul className="mt-1 list-disc pl-5">
+                      {(importErr.details as { loc?: (string | number)[]; msg: string }[]).map((d, i) => (
+                        <li key={i}>
+                          {(d.loc ?? []).filter((l) => l !== "body").join(".") || "request"}: {d.msg}
+                        </li>
+                      ))}
+                    </ul>
+                  ) : undefined
+                }
+              />
+              <button className="btn btn-primary" aria-busy={importing} aria-disabled={importing || !ws}>
+                {importing ? "Uploading…" : "Import CSV"}
+              </button>
+              <QueryError q={csvJob} what="the import job's status" />
+              {csvJob.data && (
+                <div className="pt-2">
+                  <JobProgress job={csvJob.data} onCancel={canEdit ? () => cancel(csvJob, setImportErr) : undefined} />
+                </div>
+              )}
+            </form>
+          </Panel>
+        )}
+        </div>
       </div>
     </>
   );
