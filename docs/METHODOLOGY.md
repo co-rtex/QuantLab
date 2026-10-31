@@ -52,6 +52,17 @@ them.
 No leverage or shorting is modelled. Cash earns nothing (the risk-free rate is used only in
 risk-adjusted ratios).
 
+**Dividends: strategy vs benchmark.** The two use different reinvestment conventions:
+* The ledger credits dividends as cash, and that cash is only reinvested when the
+  strategy next rebalances.
+* The benchmark series is the compounded total return of the benchmark's own bars, so its
+  dividends are reinvested at the ex-date close.
+
+So a buy-and-hold of the benchmark itself trails the benchmark by exactly the
+reinvestment effect. For example, $20 of dividend cash that misses a later +10% move costs
+$2 (pinned in `tests/unit/test_research_correctness.py`). Excess returns and tracking error
+include this cash drag, which is real for a strategy that does not reinvest.
+
 **Invariants verified by tests**: cash equals the sum of transaction cash flows (ledger
 replay); equity equals cash plus marked positions every day; cash never negative;
 positions never negative; deterministic fingerprints for identical inputs; truncating

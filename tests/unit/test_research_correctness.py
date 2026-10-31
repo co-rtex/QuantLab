@@ -1,0 +1,179 @@
+"""End-to-end research-correctness checks with independent references (issue #35).
+
+Each expected number is computed by hand in the test from share counts and prices, not
+from library helpers. Synthetic data only.
+"""
+
+from __future__ import annotations
+
+import numpy as np
+import pandas as pd
+import pytest
+
+from quantlab.analytics.performance import compute_performance
+from quantlab.backtest.engine import BacktestConfig, run_backtest
+from quantlab.data.schema import normalize_actions
+from quantlab.data.store import content_hash
+from quantlab.strategies.base import MarketView, Strategy, StrategyParams
+from quantlab.strategies.library import REGISTRY, create_strategy
+from tests.conftest import make_bars
+
+FREE = dict(commission_bps=0, slippage_bps=0, fractional_shares=True)
+NONE = normalize_actions(None)
+
+
+def _sessions(bars: pd.DataFrame) -> pd.DatetimeIndex:
+    return pd.DatetimeIndex(sorted(bars["date"].unique()))
+
+
+# ------------------------------------------------------------------- look-ahead
+@pytest.mark.parametrize("key", sorted(REGISTRY))
+def test_close_execution_also_ignores_perturbed_future_data(market, key):
+    """Same rewrite-the-future check as test_backtest, for ``execution="next_close"``.
+
+    With close execution an order decided at close k fills at close k+1, so a one-bar leak
+    would read exactly the bar that fills it; it must not affect anything up to the cut.
+    """
+    cfg = BacktestConfig(rebalance="weekly", execution="next_close", benchmark="SYNIDX")
+    a = run_backtest(market.bars, market.actions, create_strategy(key), cfg)
+    decided = a.weights_target["date"].unique()
+    cut = pd.Timestamp(decided[len(decided) // 2]) if len(decided) else pd.Timestamp("2021-03-26")
+    bars = market.bars.copy()
+    future = bars["date"] > cut
+    shock = pd.Series(
+        np.random.default_rng(5).uniform(0.5, 2.0, bars["symbol"].nunique()),
+        bars["symbol"].unique(),
+    )
+    for c in ("open", "high", "low", "close"):
+        bars.loc[future, c] *= bars.loc[future, "symbol"].map(shock)
+    b = run_backtest(bars, market.actions, create_strategy(key), cfg)
+    for name in ("weights_target", "trades"):
+        x, y = (getattr(r, name) for r in (a, b))
+        pd.testing.assert_frame_equal(
+            x[x["date"] <= cut].reset_index(drop=True), y[y["date"] <= cut].reset_index(drop=True)
+        )
+    assert (a.equity["equity"][:cut] == b.equity["equity"][:cut]).all()
+
+
+# --------------------------------------------------------------- execution timing
+@pytest.mark.parametrize(("execution", "fill"), [("next_open", 10.5), ("next_close", 11.0)])
+def test_fill_price_is_the_next_sessions_open_or_close(execution, fill):
+    bars = make_bars({"A": [10.0, 11.0, 12.0]}, opens={"A": [9.0, 10.5, 11.5]})
+    cfg = BacktestConfig(universe=["A"], execution=execution, initial_capital=1000, **FREE)
+    res = run_backtest(bars, NONE, create_strategy("buy_and_hold"), cfg)
+    t = res.trades.iloc[0]
+    d = _sessions(bars)
+    assert t["decision_date"] == d[0] and t["date"] == d[1]
+    assert t["price"] == fill
+    # Sized on the decision close (10.0): 100 shares wanted; cash allows 1000 / fill.
+    assert t["quantity"] == pytest.approx(min(100.0, 1000 / fill))
+
+
+# --------------------------------------------------- dividends and the benchmark
+def _dividend_case() -> tuple[pd.DataFrame, pd.DataFrame]:
+    # 100 -> ex-dividend $2 (price 98) -> +10% (107.8)
+    bars = make_bars({"A": [100.0, 100.0, 98.0, 107.8]})
+    d = _sessions(bars)
+    acts = normalize_actions(
+        pd.DataFrame([{"symbol": "A", "ex_date": d[2], "kind": "dividend", "value": 2.0}])
+    )
+    return bars, acts
+
+
+def test_ledger_keeps_dividends_in_cash_while_total_return_reinvests():
+    bars, acts = _dividend_case()
+    cfg = BacktestConfig(universe=["A"], benchmark="A", initial_capital=1000, **FREE)
+    res = run_backtest(bars, acts, create_strategy("buy_and_hold"), cfg)
+    # Hand: buy 10 shares at the 2nd open (100). Dividend: 10 x $2 = $20 cash, uninvested.
+    assert res.equity["equity"].iloc[-1] == pytest.approx(10 * 107.8 + 20)  # 1098
+    # Benchmark = total return with the dividend reinvested at the ex-date close (98):
+    # 1000 x (98 + 2)/100 x 107.8/98 = 1100 (it is invested from the first session).
+    assert res.benchmark.iloc[-1] == pytest.approx(1000 * (100 / 100) * (100 / 100) * (107.8 / 98))
+    # The gap is exactly the reinvestment effect: $20 that missed the +10% move.
+    assert res.benchmark.iloc[-1] - res.equity["equity"].iloc[-1] == pytest.approx(20 * 0.1)
+
+
+def test_benchmark_series_is_the_compounded_total_return_of_its_own_bars():
+    bars = make_bars({"A": [10.0] * 6, "IDX": [100.0, 102.0, 99.0, 101.0, 49.5, 52.0]})
+    d = _sessions(bars)
+    acts = normalize_actions(
+        pd.DataFrame(
+            [
+                {"symbol": "IDX", "ex_date": d[2], "kind": "dividend", "value": 1.0},
+                {"symbol": "IDX", "ex_date": d[4], "kind": "split", "value": 2.0},
+            ]
+        )
+    )
+    cfg = BacktestConfig(universe=["A"], benchmark="IDX", initial_capital=1000, **FREE)
+    res = run_backtest(bars, acts, create_strategy("buy_and_hold"), cfg)
+    gross = [1.0, 102 / 100, (99 + 1) / 102, 101 / 99, 2 * 49.5 / 101, 52 / 49.5]
+    np.testing.assert_allclose(res.benchmark.to_numpy(), 1000 * np.cumprod(gross), rtol=1e-12)
+
+
+# ------------------------------------------------------------ survivorship bias
+def test_dropping_names_that_later_delist_inflates_results():
+    # B falls 50% and stops trading; a survivors-only universe silently drops it.
+    a = [10.0] * 12
+    b = [10.0, 10.0, 8.0, 6.0, 5.0, None, None, None, None, None, None, None]
+    bars = make_bars({"A": a, "B": b})
+    cfg = BacktestConfig(
+        rebalance="quarterly", initial_capital=1000, delist_after_missing=3, **FREE
+    )
+    full = run_backtest(bars, NONE, create_strategy("equal_weight"), cfg)
+    survivors = run_backtest(
+        bars[bars["symbol"] == "A"], NONE, create_strategy("equal_weight"), cfg
+    )
+    # Hand: $500 in each at the 2nd open (10). B is liquidated at its last close (5).
+    assert full.equity["equity"].iloc[-1] == pytest.approx(500 + 50 * 5.0)
+    assert survivors.equity["equity"].iloc[-1] == pytest.approx(1000)
+    liq = full.trades[full.trades["note"] == "delisting"].iloc[0]
+    assert liq["symbol"] == "B" and liq["price"] == 5.0  # last close: optimistic by design
+
+
+# ---------------------------------------------------------- missing observations
+def test_a_gap_in_one_symbol_does_not_move_another_symbols_fills_or_marks():
+    a = [10.0, 10.5, 11.0, 11.5, 12.0, 12.5, 13.0, 13.5]
+    b = [20.0, 21.0, 22.0, 23.0, 24.0, 25.0, 26.0, 27.0]
+    gappy_a = [10.0, 10.5, None, None, 12.0, 12.5, 13.0, 13.5]
+    cfg = BacktestConfig(rebalance="weekly", initial_capital=10_000, **FREE)
+
+    class FixedB(Strategy):
+        key, name, description, Params = "fixed_b", "", "", StrategyParams
+
+        def target_weights(self, view: MarketView) -> pd.Series:
+            return pd.Series({"B": 0.5})
+
+    clean = run_backtest(make_bars({"A": a, "B": b}), NONE, FixedB(), cfg)
+    gappy = run_backtest(make_bars({"A": gappy_a, "B": b}), NONE, FixedB(), cfg)
+    pd.testing.assert_frame_equal(clean.trades, gappy.trades)
+    pd.testing.assert_series_equal(clean.equity["equity"], gappy.equity["equity"])
+
+
+# ---------------------------------------------------------- corrected history
+def test_a_corrected_past_bar_changes_the_version_and_spares_earlier_decisions(market):
+    fixed = market.bars.copy()
+    sym = sorted(fixed["symbol"].unique())[2]
+    rows = fixed.index[fixed["symbol"] == sym]
+    when = fixed.loc[rows[len(rows) // 2], "date"]
+    fixed.loc[rows[len(rows) // 2], ["close", "high"]] *= 1.07  # a vendor correction of one bar
+    assert content_hash(fixed, market.actions) != content_hash(market.bars, market.actions)
+    cfg = BacktestConfig(rebalance="monthly")
+    before = run_backtest(market.bars, market.actions, create_strategy("momentum"), cfg)
+    after = run_backtest(fixed, market.actions, create_strategy("momentum"), cfg)
+    early = [r.weights_target[r.weights_target["date"] < when] for r in (before, after)]
+    pd.testing.assert_frame_equal(early[0].reset_index(drop=True), early[1].reset_index(drop=True))
+
+
+# ------------------------------------------------------------- reproducibility
+def test_results_do_not_depend_on_input_row_order(market):
+    cfg = BacktestConfig(rebalance="monthly", benchmark="SYNIDX")
+    a = run_backtest(market.bars, market.actions, create_strategy("low_volatility"), cfg)
+    shuffled_bars = market.bars.sample(frac=1.0, random_state=1).reset_index(drop=True)
+    shuffled_acts = market.actions.sample(frac=1.0, random_state=2).reset_index(drop=True)
+    b = run_backtest(shuffled_bars, shuffled_acts, create_strategy("low_volatility"), cfg)
+    assert a.fingerprint() == b.fingerprint()
+    pd.testing.assert_series_equal(a.benchmark, b.benchmark)
+    assert content_hash(market.bars, market.actions) == content_hash(shuffled_bars, shuffled_acts)
+    pa = compute_performance(a.equity["equity"], a.benchmark).to_dict()
+    pb = compute_performance(b.equity["equity"], b.benchmark).to_dict()
+    assert pa == pb
