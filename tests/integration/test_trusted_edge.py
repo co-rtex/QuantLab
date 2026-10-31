@@ -174,7 +174,9 @@ def test_without_an_edge_one_client_cannot_lock_everyone_out(monkeypatch):
             json={"email": "victim@example.com", "password": "Correct-horse-9"},
         )
         assert ok.status_code == 200, ok.text
-        # The account limit (3 x per-minute limit) still bounds guessing on one account.
+        # The account limit (3 x per-minute limit) still bounds guessing on one account by
+        # anyone without the victim's device cookie (#55).
+        web.cookies.clear()
         guesses = [
             web.post(
                 "/api/v1/auth/login",

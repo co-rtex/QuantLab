@@ -19,7 +19,7 @@ from quantlab_api.db import get_engine
 from quantlab_api.errors import install_error_handlers
 from quantlab_api.jobs import redis_conn
 from quantlab_api.limits import BodySizeLimitMiddleware
-from quantlab_api.observability import configure_logging, request_context_middleware
+from quantlab_api.observability import configure_logging, log, request_context_middleware
 from quantlab_api.routes import (
     auth,
     datasets,
@@ -36,6 +36,10 @@ from quantlab_api.routes import (
 from quantlab_api.tracing import setup_tracing
 
 API_PREFIX = "/api/v1"
+
+
+def _brief(exc: BaseException) -> str:
+    return f"{type(exc).__name__}: {str(exc)[:300]}"
 
 
 def create_app() -> FastAPI:
@@ -83,18 +87,22 @@ def create_app() -> FastAPI:
 
     @api.get("/ready", tags=["system"])
     def ready() -> JSONResponse:
+        # Anonymous callers learn only which dependency is down, not how (the exception
+        # names the driver and often the host); operators read the detail in the log.
         checks: dict[str, str] = {}
         try:
             with get_engine().connect() as c:
                 c.execute(text("SELECT 1"))
             checks["database"] = "ok"
         except Exception as exc:
-            checks["database"] = f"error: {type(exc).__name__}"
+            checks["database"] = "error"
+            log.warning("ready_check_failed", component="database", error=_brief(exc))
         try:
             redis_conn().ping()
             checks["redis"] = "ok"
         except Exception as exc:
-            checks["redis"] = f"error: {type(exc).__name__}"
+            checks["redis"] = "error"
+            log.warning("ready_check_failed", component="redis", error=_brief(exc))
         ok = all(v == "ok" for v in checks.values())
         return JSONResponse(
             {"status": "ok" if ok else "degraded", "checks": checks}, status_code=200 if ok else 503
