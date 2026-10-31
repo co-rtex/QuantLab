@@ -120,3 +120,24 @@ def test_walk_forward_with_every_fold_failing_returns_an_undefined_result():
     assert len(out["folds"]) >= 1
     assert all(f.get("error") for f in out["folds"])
     assert out["mean_oos_sharpe"] is None
+
+
+# ------------------------------------------------------ #41 follow-ups (lead review)
+def test_rolling_volatility_is_undefined_during_warm_up():
+    e = _walk(60)
+    out = rolling_metrics(e, 20)
+    # The first window-1 returns have no full window: undefined, not 0.
+    assert out["rolling_vol"].iloc[:19].isna().all()
+    assert out["rolling_sharpe"].iloc[:19].isna().all()
+    assert out["rolling_vol"].iloc[19:].notna().all()
+
+
+@pytest.mark.parametrize(("sd", "defined"), [(1e-13, False), (1e-10, True)])
+def test_beta_uses_the_same_zero_dispersion_rule_as_everything_else(sd, defined):
+    rng = np.random.default_rng(3)
+    idx = pd.bdate_range("2021-01-01", periods=300)
+    b = pd.Series(100 * np.cumprod(1 + rng.normal(0, sd, 300)), index=idx)
+    e = _walk(300)
+    m = compute_performance(e.set_axis(idx), b)
+    # var 1e-20 (sd 1e-10) was "zero variance" under the old 1e-18 variance cutoff.
+    assert (m["beta"] is not None) is defined

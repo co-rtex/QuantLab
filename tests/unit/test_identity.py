@@ -435,3 +435,21 @@ def test_universe_takes_a_later_listing_but_not_a_later_rename():
     # NEW is I1's *later* name: at a 2020 start I1 traded as OLD, so asking for NEW must
     # not select it by the name it will have (today's-ticker bias). It is unresolved.
     assert resolve_universe(h, ["NEW"], "2020-06-01", "2022-12-30") == ([], ["NEW"])
+
+
+def test_content_hash_normalizes_the_history_it_is_given():
+    from quantlab.data.store import content_hash
+
+    raw, acts, h = _rename_case()
+    loose = h.drop(columns="valid_to").assign(symbol=h["symbol"].str.lower())
+    loose["valid_to"] = h["valid_to"].astype(object)
+    # Raw (lower-case, unsorted) input hashes like the normalized history; no KeyError.
+    shuffled = loose.sample(frac=1.0, random_state=1)
+    assert content_hash(raw, acts, shuffled) == content_hash(raw, acts, h)
+    no_end = h[h["valid_to"].isna()].drop(columns="valid_to")
+    content_hash(raw, acts, no_end)  # a history without valid_to is accepted
+
+
+def test_resolution_strips_whitespace_around_keys():
+    h = _hist([("I1", "FB", "2012-05-18", None)])
+    assert resolve(h, " fb ", "2020-01-02") == "I1"

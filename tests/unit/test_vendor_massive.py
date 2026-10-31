@@ -76,6 +76,7 @@ class FakeMassive:
         self.requests: list[str] = []
         self.faults: dict[str, list[tuple[int, dict[str, str]]]] = {}
         self.overrides: dict[str, Callable[[dict], dict]] = {}
+        self.extra_inactive: list[dict] = []  # more rows for active=false reference pages
 
     def fail(self, path_fragment: str, *statuses: tuple[int, dict[str, str]]) -> None:
         self.faults[path_fragment] = list(statuses)
@@ -115,10 +116,18 @@ class FakeMassive:
             ]
             if active:
                 rows.append({"ticker": "NOFIGI", "name": "No identifier", "active": True})
+            else:
+                rows += self.extra_inactive
             return {"results": rows, "status": "OK", "count": len(rows)}
         if path.startswith("/vX/reference/tickers/"):
-            figi = path.split("/")[4]
-            events = next(ev for f, ev, _, _ in SECURITIES if f == figi)
+            # Documented ids: ticker, CUSIP or *composite* FIGI (BBC... in this fake). A
+            # share-class FIGI is not a documented id, so it is not found.
+            id_ = path.split("/")[4]
+            figi = id_.replace("BBC", "BBG", 1) if id_.startswith("BBC") else None
+            match = [ev for f, ev, _, _ in SECURITIES if f == figi]
+            if not match:
+                return {"status": "NOT_FOUND"}
+            events = match[0]
             return {
                 "results": {
                     "name": figi,
@@ -392,7 +401,12 @@ def test_rate_limiter_is_consulted_for_every_request(fake):
             },
             "missing field 'c'",
         ),
-        ("/v2/aggs/", lambda b: {**b, "adjusted": True}, "split-adjusted"),
+        ("/v2/aggs/", lambda b: {**b, "adjusted": True}, "not confirmed unadjusted"),
+        (
+            "/v2/aggs/",
+            lambda b: {k: v for k, v in b.items() if k != "adjusted"},
+            "not confirmed unadjusted",
+        ),
         (
             "/v2/aggs/",
             lambda b: {**b, "results": [{**r, "o": "12.5"} for r in b["results"]]},
@@ -489,3 +503,235 @@ def test_malformed_vendor_actions_block_ingestion(fake):
     res = ingest(p.by_instrument(history), ["BBGSYN000001"], "2024-01-02", "2024-01-31")
     with pytest.raises(QualityGateError, match="split_price_mismatch"):
         enforce_gates(assess_quality(res.bars, res.actions))
+
+
+# ------------------------------------------------------------ #50 correctness fixes
+def test_a_renamed_active_security_is_not_truncated_or_delisted(fake):
+    # The vendor lists the old ticker as an inactive row, "delisted" on the rename date.
+    fake.extra_inactive.append(
+        {
+            "ticker": "OLDA",
+            "name": "Synthetic Security 1",
+            "active": False,
+            "delisted_utc": "2024-01-09T21:00:00Z",
+            "share_class_figi": "BBGSYN000001",
+            "composite_figi": "BBCSYN000001",
+            "market": "stocks",
+            "type": "CS",
+        }
+    )
+    p, _ = _provider(fake)
+    _, history, master = _identity(p)
+    m = master.set_index("instrument_id")
+    assert pd.isna(m.loc["BBGSYN000001", "delisting_date"])  # still trading as NEWA
+    assert pd.isna(
+        history.set_index(["instrument_id", "symbol"]).loc[("BBGSYN000001", "NEWA"), "valid_to"]
+    )
+    bars, _ = p.fetch_instrument(history, "BBGSYN000001", "2024-01-02", "2024-01-31")
+    assert list(bars["date"]) == list(SESSIONS)  # all 21 sessions, not 7
+
+
+def test_ticker_events_are_requested_by_composite_figi(fake):
+    p, _ = _provider(fake)
+    _identity(p)
+    events = [u for u in fake.requests if "/vX/reference/tickers/" in u]
+    assert events and all("/BBC" in u for u in events)  # never the share-class FIGI
+
+
+def test_a_security_without_a_composite_figi_is_skipped_not_guessed(fake):
+    p, _ = _provider(fake)
+    ref = pd.concat([p.reference(active=True), p.reference(active=False)], ignore_index=True)
+    ref.loc[ref["share_class_figi"] == "BBGSYN000003", "composite_figi"] = None
+    history, _ = p.identity(ref)
+    assert "BBGSYN000003" not in set(history["instrument_id"])
+    assert p.skipped == ["BBGSYN000003"]
+
+
+def test_malformed_ticker_change_and_missing_currency_are_schema_errors(fake):
+    fake.overrides["/vX/reference/tickers/"] = lambda b: {
+        **b,
+        "results": {
+            **b["results"],
+            "events": [
+                {"type": "ticker_change", "date": "2024-01-02", "ticker_change": {"symbol": "X"}}
+            ],
+        },
+    }
+    p, _ = _provider(fake)
+    with pytest.raises(VendorSchemaError, match="ticker_change has no ticker"):
+        p.ticker_events("BBCSYN000001")
+    fake.overrides.clear()
+    fake.overrides["/stocks/v1/dividends"] = lambda b: {
+        **b,
+        "results": [{k: v for k, v in r.items() if k != "currency"} for r in b["results"]],
+    }
+    with pytest.raises(VendorSchemaError, match="missing field 'currency'"):
+        p.fetch_actions("OLDA", "2024-01-02", "2024-01-31")
+
+
+def test_paths_are_quoted(fake):
+    p, _ = _provider(fake)
+    p.fetch_bars("A/B", "2024-01-02", "2024-01-05")
+    assert any("/v2/aggs/ticker/A%2FB/range/" in u for u in fake.requests)
+
+
+def test_read_errors_during_the_body_are_retryable(monkeypatch):
+    import http.client
+    import ssl
+
+    from quantlab.data.vendors import http as vendor_http
+
+    class Resp:
+        status = 200
+        headers: dict[str, str] = {}
+
+        def __init__(self, exc):
+            self.exc = exc
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def read(self, n=-1):
+            raise self.exc
+
+    for exc in (
+        http.client.IncompleteRead(b"partial"),
+        ssl.SSLError("bad record mac"),
+        ConnectionResetError("reset"),
+    ):
+        monkeypatch.setattr(vendor_http._OPENER, "open", lambda *a, e=exc, **k: Resp(e))
+        with pytest.raises(TransientProviderError):
+            urllib_transport("https://api.massive.com/v3/x", 1.0)
+
+
+def test_oversized_responses_are_refused(monkeypatch):
+    from quantlab.data.vendors import http as vendor_http
+
+    class Big:
+        status = 200
+        headers: dict[str, str] = {}
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def read(self, n=-1):
+            return b"x" * n  # always as much as asked for
+
+    monkeypatch.setattr(vendor_http, "MAX_RESPONSE_BYTES", 1000)
+    monkeypatch.setattr(vendor_http._OPENER, "open", lambda *a, **k: Big())
+    with pytest.raises(PermanentProviderError, match="larger than"):
+        urllib_transport("https://api.massive.com/v3/x", 1.0)
+
+
+def test_url_encoded_keys_are_redacted(fake):
+    key = "ab+c/d="
+
+    def transport(url, timeout):
+        fake.requests.append(url)
+        return HttpResponse(500, {}, b"")
+
+    api = JsonApi(BASE_URL, key, transport=transport, sleep=lambda s: None)
+    with pytest.raises(TransientProviderError) as exc:
+        api.get("/v3/reference/tickers")
+    msg = str(exc.value)
+    assert "%2B" in fake.requests[0]  # the key really is encoded in the URL
+    for form in (key, "ab%2Bc%2Fd%3D", "ab%2Bc/d%3D"):
+        assert form not in msg
+
+
+def test_checkpoint_stops_at_the_last_completed_session(fake):
+    from quantlab.data.providers import ingest
+
+    p, _ = _provider(fake)
+    _, history, _ = _identity(p)
+    # A backfill run during the session on Wed 2024-01-17 with end in the future.
+    res = ingest(
+        p.by_instrument(history),
+        ["BBGSYN000001"],
+        "2024-01-02",
+        "2024-03-01",
+        now=pd.Timestamp("2024-01-17 11:00", tz="America/New_York"),
+    )
+    assert res.checkpoint.done_through["BBGSYN000001"] == "2024-01-16"
+
+
+# ------------------------------------------------------ lead review of #73 (should-fix)
+class _Sock:
+    """A socket whose bytes come from a buffer, for a real http.client.HTTPResponse."""
+
+    def __init__(self, raw: bytes) -> None:
+        import io
+
+        self.buf = io.BytesIO(raw)
+
+    def makefile(self, mode: str, *a: object, **k: object):
+        return self.buf
+
+
+def test_a_truncated_body_on_a_real_http_response_is_retryable(monkeypatch):
+    import http.client
+
+    from quantlab.data.vendors import http as vendor_http
+
+    body = b'{"results": []'  # 14 of the 36 bytes promised
+    raw = b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 36\r\n\r\n" + body
+
+    def open_(*a, **k):
+        resp = http.client.HTTPResponse(_Sock(raw))  # type: ignore[arg-type]
+        resp.begin()
+        return resp
+
+    monkeypatch.setattr(vendor_http._OPENER, "open", open_)
+    with pytest.raises(TransientProviderError, match="truncated"):
+        urllib_transport("https://api.massive.com/v3/x", 1.0)
+
+
+def _chain(exc: BaseException) -> str:
+    out, seen = [], exc
+    while seen is not None:
+        out.append(f"{type(seen).__name__}: {seen}")
+        seen = seen.__cause__ or seen.__context__
+    return " | ".join(out)
+
+
+def test_permanent_network_errors_are_not_retried_and_never_carry_the_key(monkeypatch):
+    import http.client
+    import ssl
+    import urllib.error
+
+    from quantlab.data.vendors import http as vendor_http
+
+    key = "ab+c/d="
+    url = f"https://api.massive.com/v3/x?apiKey={urllib.parse.quote_plus(key)}"
+    cases = [
+        http.client.InvalidURL(f"URL can't contain control characters. {url!r}"),
+        urllib.error.URLError(ssl.SSLCertVerificationError(1, "certificate verify failed")),
+    ]
+    for err in cases:
+        monkeypatch.setattr(
+            vendor_http._OPENER, "open", lambda *a, e=err, **k: (_ for _ in ()).throw(e)
+        )
+        with pytest.raises(PermanentProviderError) as exc:
+            urllib_transport(url, 1.0)
+        assert not isinstance(exc.value, TransientProviderError)
+        text = _chain(exc.value)
+        assert urllib.parse.quote_plus(key) not in text and key not in text
+        assert exc.value.__context__ is None and exc.value.__cause__ is None
+
+
+def test_transient_errors_carry_no_context_with_the_url(monkeypatch):
+    from quantlab.data.vendors import http as vendor_http
+
+    url = "https://api.massive.com/v3/x?apiKey=SECRET%2BKEY"
+    err = ConnectionResetError(f"reset while fetching {url}")
+    monkeypatch.setattr(vendor_http._OPENER, "open", lambda *a, **k: (_ for _ in ()).throw(err))
+    with pytest.raises(TransientProviderError) as exc:
+        urllib_transport(url, 1.0)
+    assert "SECRET" not in _chain(exc.value)
+    assert exc.value.__context__ is None

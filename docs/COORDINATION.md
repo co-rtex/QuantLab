@@ -32,7 +32,8 @@ Work items are issues labelled `owner:*`, `P0`/`P1`/`P2`, `status:*` and `area:*
 | `docs/METHODOLOGY.md` | Agent 3 |
 | `benchmarks/**` | Agent 3 for the market-data part of #24 (leased) |
 | `services/api/src/quantlab_api/observability.py`, `db.py`, `apps/web/playwright.config.ts` | Lead |
-| `packages/quantlab/src/quantlab/assistant/**`, other web pages | Unassigned (lead assigns per issue) |
+| `packages/quantlab/src/quantlab/assistant/**`, `tests/unit/test_assistant.py`, the verifier section of `docs/AI_EVAL.md` | Agent 2 for #15 (leased) |
+| Other web pages | Unassigned (lead assigns per issue) |
 
 ## Shared files (lead-owned, leased one holder at a time)
 
@@ -42,19 +43,19 @@ follow-up docs commit. A lease ends when the PR that used it merges or closes.
 
 | Shared file | Current holder | For |
 |---|---|---|
-| `services/api/src/quantlab_api/models.py` | Agent 3 | #9 part C (M2) |
-| `services/api/src/quantlab_api/schemas.py` | Agent 3 | #9 part C (M2), #12 report API, and removal of the dead `MemberIn` |
-| `services/api/src/quantlab_api/config.py` | Agent 2 | #8 follow-up: dev-secret recovery race, `os.link` fallback |
+| `services/api/src/quantlab_api/models.py` | — | (#62 merged) |
+| `services/api/src/quantlab_api/schemas.py` | — | (#62 merged) |
+| `services/api/src/quantlab_api/config.py` | — | (#70 merged) |
 | `services/api/src/quantlab_api/jobs.py` | — | (#40, #47 merged) |
-| `services/api/src/quantlab_api/tasks.py` | Agent 3 | #9 part C (#27, #48 merged) |
+| `services/api/src/quantlab_api/tasks.py` | — | (#62 merged) |
 | `services/api/alembic/env.py` | — | (#37 merged) |
 | `scripts/case_study.py` | — | (Agent 2's invitation fix merged in #37) |
-| `services/api/src/quantlab_api/main.py` | Agent 3 | #9 part C (#62): reconciliation router. **Queue:** Agent 2, #8 PR B (`/ready`) |
+| `services/api/src/quantlab_api/main.py` | Agent 2 | #8 PR B (`/ready`) |
 | `services/api/alembic/versions/**` | see migration slots | |
 | `docker-compose.yml`, `Makefile`, `scripts/stack-env.sh` | — | |
 | `pyproject.toml`, `uv.lock`, `apps/web/package*.json` | — | |
 | `.github/workflows/**` | lead only | |
-| `DECISIONS.md` | Agent 2 | #55: the ADR-0008 section and a new ADR-0010 |
+| `DECISIONS.md` | — | (#69 merged) |
 | `STATUS.md`, `ROADMAP.md`, `PROJECT_SPEC.md`, `docs/ARCHITECTURE.md`, this file | lead only | |
 
 Workers report status in their PR description and issue comments, not in `STATUS.md`.
@@ -66,7 +67,7 @@ Alembic revisions form one linear chain, so only one migration may be in flight 
 | Slot | Holder | Issue | State |
 |---|---|---|---|
 | M1 | Agent 2 | #5 invitations, revision `7c3e5a1d9b20` → `4f1c2a9e7b10` | **merged** (#37, `9e76ff3`) |
-| M2 | Agent 3 | #9 part C, instrument identity in the catalog | **open** since 2026-10-31: `down_revision = "7c3e5a1d9b20"` |
+| M2 | Agent 3 | #9 part C, revision `9a4c6e2f1b37` → `7c3e5a1d9b20` | **merged** (#62, `925cc1c`) |
 
 Rules: request the slot on the issue before running `alembic revision`; set `down_revision`
 to the current head on `main` at the time; include a working `downgrade`; the migration
