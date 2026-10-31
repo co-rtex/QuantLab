@@ -10,7 +10,9 @@
 #   make up                            # the Makefile does this automatically
 set -eu
 
-top=$(git rev-parse --show-toplevel)
+# Outside a git checkout (an exported tarball) fall back to the current directory, which
+# gets the main checkout's defaults, instead of failing and leaving every port empty.
+top=$(git rev-parse --show-toplevel 2>/dev/null || pwd)
 if [ -f "$top/.git" ]; then
   default_slot=$(( $(printf %s "$top" | cksum | cut -d' ' -f1) % 89 + 1 ))
 else
@@ -39,6 +41,8 @@ emit QUANTLAB_JAEGER_PORT "$jaeger"
 emit QUANTLAB_OTLP_PORT "$otlp"
 emit QUANTLAB_PROMETHEUS_PORT "$prom"
 emit QUANTLAB_GRAFANA_PORT "$grafana"
+# URLs follow an overridden port (QUANTLAB_PG_PORT=... make up), not just the slot's.
+pg=${QUANTLAB_PG_PORT:-$pg} redis=${QUANTLAB_REDIS_PORT:-$redis} web=${QUANTLAB_WEB_PORT:-$web}
 emit QUANTLAB_DATABASE_URL "postgresql+psycopg://quantlab:quantlab@localhost:$pg/quantlab"
 emit QUANTLAB_REDIS_URL "redis://localhost:$redis/0"
 emit E2E_BASE_URL "http://localhost:$web"
