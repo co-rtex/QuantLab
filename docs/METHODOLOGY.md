@@ -89,7 +89,15 @@ data after a decision date leaves that decision unchanged (no look-ahead).
 | Gross ("before costs") | equity plus cumulative commissions and slippage paid; an approximation that ignores compounding of the saved costs |
 
 Undefined statistics (zero variance, fewer than two observations, no drawdown, no losing
-trades) are reported as `null` with a reason, never as `0`.
+trades) are reported as `null` with a reason, never as `0`. "Zero variance" means a
+per-period standard deviation at or below `1e-12`, so floating-point residue is never
+annualized into a statistic: an exact index tracker has tracking error `0` and an
+undefined information ratio. When there are fewer than two observations or the initial
+wealth is not positive, *every* metric (and every benchmark metric) is undefined with
+that reason. Rolling volatility and Sharpe (`analytics.summary.rolling_metrics`) use the
+same risk-free and annualization conventions, and the same zero-dispersion rule per
+window. A walk-forward whose every out-of-sample fold fails returns
+`error: "every out-of-sample fold failed"` with all OOS statistics undefined.
 
 Trade statistics use FIFO lot matching with commissions allocated per share; open lots
 are restated at each split (shares times ratio, cost divided by ratio). Sells that match
