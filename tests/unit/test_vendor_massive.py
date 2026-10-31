@@ -659,3 +659,79 @@ def test_checkpoint_stops_at_the_last_completed_session(fake):
         now=pd.Timestamp("2024-01-17 11:00", tz="America/New_York"),
     )
     assert res.checkpoint.done_through["BBGSYN000001"] == "2024-01-16"
+
+
+# ------------------------------------------------------ lead review of #73 (should-fix)
+class _Sock:
+    """A socket whose bytes come from a buffer, for a real http.client.HTTPResponse."""
+
+    def __init__(self, raw: bytes) -> None:
+        import io
+
+        self.buf = io.BytesIO(raw)
+
+    def makefile(self, mode: str, *a: object, **k: object):
+        return self.buf
+
+
+def test_a_truncated_body_on_a_real_http_response_is_retryable(monkeypatch):
+    import http.client
+
+    from quantlab.data.vendors import http as vendor_http
+
+    body = b'{"results": []'  # 14 of the 36 bytes promised
+    raw = b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 36\r\n\r\n" + body
+
+    def open_(*a, **k):
+        resp = http.client.HTTPResponse(_Sock(raw))  # type: ignore[arg-type]
+        resp.begin()
+        return resp
+
+    monkeypatch.setattr(vendor_http._OPENER, "open", open_)
+    with pytest.raises(TransientProviderError, match="truncated"):
+        urllib_transport("https://api.massive.com/v3/x", 1.0)
+
+
+def _chain(exc: BaseException) -> str:
+    out, seen = [], exc
+    while seen is not None:
+        out.append(f"{type(seen).__name__}: {seen}")
+        seen = seen.__cause__ or seen.__context__
+    return " | ".join(out)
+
+
+def test_permanent_network_errors_are_not_retried_and_never_carry_the_key(monkeypatch):
+    import http.client
+    import ssl
+    import urllib.error
+
+    from quantlab.data.vendors import http as vendor_http
+
+    key = "ab+c/d="
+    url = f"https://api.massive.com/v3/x?apiKey={urllib.parse.quote_plus(key)}"
+    cases = [
+        http.client.InvalidURL(f"URL can't contain control characters. {url!r}"),
+        urllib.error.URLError(ssl.SSLCertVerificationError(1, "certificate verify failed")),
+    ]
+    for err in cases:
+        monkeypatch.setattr(
+            vendor_http._OPENER, "open", lambda *a, e=err, **k: (_ for _ in ()).throw(e)
+        )
+        with pytest.raises(PermanentProviderError) as exc:
+            urllib_transport(url, 1.0)
+        assert not isinstance(exc.value, TransientProviderError)
+        text = _chain(exc.value)
+        assert urllib.parse.quote_plus(key) not in text and key not in text
+        assert exc.value.__context__ is None and exc.value.__cause__ is None
+
+
+def test_transient_errors_carry_no_context_with_the_url(monkeypatch):
+    from quantlab.data.vendors import http as vendor_http
+
+    url = "https://api.massive.com/v3/x?apiKey=SECRET%2BKEY"
+    err = ConnectionResetError(f"reset while fetching {url}")
+    monkeypatch.setattr(vendor_http._OPENER, "open", lambda *a, **k: (_ for _ in ()).throw(err))
+    with pytest.raises(TransientProviderError) as exc:
+        urllib_transport(url, 1.0)
+    assert "SECRET" not in _chain(exc.value)
+    assert exc.value.__context__ is None

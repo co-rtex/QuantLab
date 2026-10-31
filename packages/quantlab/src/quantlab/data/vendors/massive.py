@@ -159,6 +159,11 @@ class MassiveProvider:
         Securities without a ``share_class_figi`` cannot be given a permanent id, and those
         without a ``composite_figi`` cannot have their ticker history looked up; both are
         left out (reported by :meth:`unidentified` and ``self.skipped``).
+
+        ``reference`` must carry the *current* ``active`` flags: build it from
+        ``reference(active=True)`` and ``reference(active=False)`` without ``date=``. A
+        reference taken as of a past date marks securities delisted since then as active,
+        so their delisting is lost and the universe is survivorship-biased.
         """
         hist_rows: list[dict[str, Any]] = []
         master_rows: list[dict[str, Any]] = []

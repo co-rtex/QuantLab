@@ -126,6 +126,14 @@ Sources:
   * Dividends must state a currency (USD only).
   * A security counts as delisted only when none of its reference rows is active, so a
     rename's inactive old-ticker row does not truncate it.
+  * `identity()` needs the *current* `active` flags: build its input from
+    `reference(active=True)` and `reference(active=False)` without `date=`. A reference as
+    of a past date marks later delistings active, which loses them and biases the universe
+    toward survivors.
+  * Network failures: a truncated body (unread `Content-Length`) and connection errors are
+    retried; an invalid URL and a failed certificate check are not. Errors are raised
+    outside the `except` block with the URL removed, so neither the message nor the
+    chained `__context__` carries the key.
 * **Not wired yet:** a `MASSIVE_API_KEY` setting and a dataset job. Both need leases from
   the lead (`config.py`, `tasks.py`).
 
