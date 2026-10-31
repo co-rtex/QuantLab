@@ -22,6 +22,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import secrets
 import socket
 import time
 import traceback
@@ -100,8 +101,29 @@ def now() -> datetime:
     return datetime.now(UTC)
 
 
+_identity: str | None = None
+
+
 def worker_identity() -> str:
-    return f"{socket.gethostname()}:{os.getpid()}"
+    """This process's worker name: ``QUANTLAB_WORKER_NAME``, or host, pid and a random
+    suffix chosen once per process start (#162).
+
+    Host and pid alone repeat across restarts: a container keeps its hostname and runs the
+    worker as pid 1, so the new process asked RQ for the name its dead predecessor still
+    held, and exited until that registration expired (``worker_ttl`` + 60 s, 8 minutes).
+    The name is fixed for the life of the process and a forked work horse inherits it, so
+    a job's ``worker_id`` is the RQ worker's name. It never contains ':' (RQ's key
+    separator) and fits ``jobs.worker_id``.
+    """
+    global _identity
+    if _identity is None:
+        name = os.environ.get("QUANTLAB_WORKER_NAME") or (
+            f"{socket.gethostname().replace(':', '-')}-{os.getpid()}-{secrets.token_hex(4)}"
+        )
+        if ":" in name or len(name) > 128:
+            raise ValueError("QUANTLAB_WORKER_NAME must be at most 128 characters, without ':'")
+        _identity = name
+    return _identity
 
 
 # --------------------------------------------------------------------------- queueing

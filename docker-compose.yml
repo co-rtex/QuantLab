@@ -1,5 +1,7 @@
 # Project name and host ports come from scripts/stack-env.sh (via make) so each git
 # worktree gets its own containers, volumes and ports; the defaults are the main checkout.
+# The core services are `restart: unless-stopped` (#162): Docker restarts one that crashes
+# or is OOM-killed. `docker compose stop` / `down` still stop them, and they stay stopped.
 name: ${COMPOSE_PROJECT_NAME:-quantlab}
 
 x-app-env: &app-env
@@ -20,6 +22,7 @@ x-app-env: &app-env
 services:
   postgres:
     image: postgres:17-alpine
+    restart: unless-stopped
     environment:
       POSTGRES_USER: quantlab
       POSTGRES_PASSWORD: quantlab
@@ -34,6 +37,7 @@ services:
 
   redis:
     image: redis:7-alpine
+    restart: unless-stopped
     # The password comes from the environment at start, never from the image (#115).
     environment:
       REDIS_PASSWORD: ${QUANTLAB_REDIS_PASSWORD:-quantlab-dev}
@@ -49,6 +53,7 @@ services:
 
   api:
     build: { context: ., dockerfile: services/api/Dockerfile }
+    restart: unless-stopped
     environment:
       <<: *app-env
       PROMETHEUS_MULTIPROC_DIR: /tmp/prometheus
@@ -67,6 +72,7 @@ services:
 
   worker:
     build: { context: ., dockerfile: services/api/Dockerfile }
+    restart: unless-stopped
     environment: *app-env
     command: ["quantlab-worker"]
     volumes: [appdata:/data]
@@ -80,6 +86,7 @@ services:
 
   reaper:
     build: { context: ., dockerfile: services/api/Dockerfile }
+    restart: unless-stopped
     environment: *app-env
     command: ["quantlab-cli", "reaper", "--interval", "15"]
     # The reaper sweeps uploads, orphaned versions and the trash in the data directory, so
@@ -91,6 +98,7 @@ services:
 
   web:
     build: { context: apps/web, dockerfile: Dockerfile }
+    restart: unless-stopped
     environment:
       API_INTERNAL_URL: http://api:8000
     ports: ["127.0.0.1:${QUANTLAB_WEB_PORT:-3000}:3000"]
