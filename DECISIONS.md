@@ -220,7 +220,7 @@ TLS edge that keeps ADR-0008's guarantee: only a trusted hop states the client a
   `infra/edge/verify.sh` against the public name, before the edge image is used.
 * Before any apply (README, "Before apply"): adapt and verify the Caddyfile behind a real
   NLB (#39); verify the PostgreSQL server certificate (`sslmode=verify-full` with the RDS
-  CA bundle); scope the JWT secret to the API (#117).
+  CA bundle). The JWT secret is already scoped to the API (#117, merged in #128).
 * Accepted risks:
   * a shared Redis token rather than IAM authentication;
   * outbound HTTPS from the edge, web and app tiers through NAT (VPC endpoints would
