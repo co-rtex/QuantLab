@@ -90,8 +90,42 @@ test("a result whose dataset cannot be checked is never shown as real", async ({
   test.setTimeout(180_000);
   const { dv, id, name } = await workspaceWithExperiment(page, "unknown");
   const row = page.getByRole("row").filter({ hasText: name });
+  const list = "**/api/v1/workspaces/*/experiments?*";
   const versions = "**/api/v1/workspaces/*/dataset-versions";
   const failure = { status: 500, contentType: "application/json", body: JSON.stringify({ error: { code: "internal_error", message: "Internal server error" } }) };
+  /** Serve the experiments list with each row's is_synthetic replaced (undefined drops it). */
+  const rowsWith = async (flag: boolean | null | undefined) => {
+    await page.unroute(list);
+    await page.route(list, async (route) => {
+      const body = await (await route.fetch()).json();
+      body.items = body.items.map((e: Record<string, unknown>) => {
+        const rest = { ...e };
+        delete rest.is_synthetic;
+        return flag === undefined ? rest : { ...rest, is_synthetic: flag };
+      });
+      await route.fulfill({ contentType: "application/json", body: JSON.stringify(body) });
+    });
+  };
+
+  // The row says so itself (#106), with no dataset-version lookup at all.
+  const lookups: string[] = [];
+  page.on("request", (r) => {
+    if (/\/workspaces\/[^/]+\/dataset-versions/.test(r.url())) lookups.push(r.url());
+  });
+  await page.goto("/experiments");
+  await expect(row.getByText("Synthetic data")).toBeVisible();
+  expect(lookups).toEqual([]);
+  await rowsWith(null);
+  await page.goto("/experiments");
+  await expect(row.getByText("Synthetic status unknown")).toBeVisible();
+  await audit(page, "experiments list, synthetic status unknown");
+  await rowsWith(false);
+  await page.goto("/experiments");
+  await expect(row).toBeVisible();
+  await expect(row.getByText(/Synthetic/)).toHaveCount(0);
+
+  // An API without the field: the dataset-version list decides, failing toward a label.
+  await rowsWith(undefined);
 
   // Loading: the version list has not arrived yet.
   let release: () => void = () => {};
@@ -110,7 +144,6 @@ test("a result whose dataset cannot be checked is never shown as real", async ({
   await page.route(versions, (route) => route.fulfill(failure));
   await page.goto("/experiments");
   await expect(row.getByText("Synthetic status unknown")).toBeVisible();
-  await audit(page, "experiments list, synthetic status unknown");
   await page.unroute(versions);
 
   // Missing: the list does not contain the experiment's version.
@@ -119,15 +152,16 @@ test("a result whose dataset cannot be checked is never shown as real", async ({
   await expect(row.getByText("Synthetic status unknown")).toBeVisible();
   await page.unroute(versions);
 
-  // Positively real: no label.
+  // Positively real in the version list: no label.
   await page.route(versions, async (route) => {
-    const list = await (await route.fetch()).json();
-    await route.fulfill({ contentType: "application/json", body: JSON.stringify(list.map((v: { id: string }) => (v.id === dv ? { ...v, is_synthetic: false } : v))) });
+    const all = await (await route.fetch()).json();
+    await route.fulfill({ contentType: "application/json", body: JSON.stringify(all.map((v: { id: string }) => (v.id === dv ? { ...v, is_synthetic: false } : v))) });
   });
   await page.goto("/experiments");
   await expect(row).toBeVisible();
   await expect(row.getByText(/Synthetic/)).toHaveCount(0);
   await page.unroute(versions);
+  await page.unroute(list);
 
   // The experiment page, when its dataset version cannot be loaded.
   await page.route(`**/api/v1/dataset-versions/${dv}`, (route) => route.fulfill(failure));

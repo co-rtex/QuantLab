@@ -103,6 +103,8 @@ export interface Job {
   payload: Record<string, unknown>;
 }
 export interface Experiment {
+  // Whether its dataset is synthetic (#106); null when that could not be checked.
+  is_synthetic?: boolean | null;
   id: string;
   name: string;
   kind: string;

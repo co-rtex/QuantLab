@@ -20,8 +20,8 @@ export default function ExperimentsPage() {
   const qs = new URLSearchParams({ limit: String(PAGE), offset: String(offset) });
   if (status) qs.set("status", status);
   if (q) qs.set("q", q);
-  const synthetic = useSynthetic();
   const exps = useApi<Page<Experiment>>(workspace ? `/workspaces/${workspace.id}/experiments?${qs}` : null, { poll: 4000 });
+  const synthetic = useSynthetic(exps.data?.items);
 
   return (
     <>
@@ -88,7 +88,7 @@ export default function ExperimentsPage() {
                           {e.name}
                         </Link>
                         {e.parent_id && <span className="ml-1.5 text-xs text-ink-3">reproduction</span>}
-                        <SyntheticLabel inline status={synthetic(e.dataset_version_id)} />
+                        <SyntheticLabel inline status={synthetic(e)} />
                       </td>
                       <td className="text-ink-2">{strategyLabel(e.strategy_key)}</td>
                       <td>

@@ -17,6 +17,7 @@ interface PortfolioRow {
   name: string;
   benchmark: string | null;
   dataset_version_id: string;
+  is_synthetic?: boolean | null;
   transactions: number;
   created_at: string;
 }
@@ -25,8 +26,8 @@ export default function PortfoliosPage() {
   const router = useRouter();
   const { workspace } = useWorkspace();
   const ws = workspace?.id;
-  const synthetic = useSynthetic();
   const list = useApi<PortfolioRow[]>(ws ? `/workspaces/${ws}/portfolios` : null);
+  const synthetic = useSynthetic(list.data);
   const versions = useApi<DatasetVersion[]>(ws ? `/workspaces/${ws}/dataset-versions` : null);
   const [dv, setDv] = useState<string>("");
   const dvId = dv || versions.data?.[0]?.id || null;
@@ -81,7 +82,7 @@ export default function PortfoliosPage() {
                       <Link className="font-medium text-cobalt hover:underline" href={`/portfolios/${p.id}`}>
                         {p.name}
                       </Link>
-                      <SyntheticLabel inline status={synthetic(p.dataset_version_id)} />
+                      <SyntheticLabel inline status={synthetic(p)} />
                     </td>
                     <td>{p.benchmark ?? "—"}</td>
                     <td className="r num">{p.transactions}</td>
