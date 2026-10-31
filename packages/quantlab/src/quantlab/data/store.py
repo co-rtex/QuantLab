@@ -26,7 +26,12 @@ from typing import Any
 
 import pandas as pd
 
-from quantlab.data.schema import normalize_actions, normalize_bars
+from quantlab.data.schema import (
+    ACTION_COLUMNS,
+    ACTION_DATE_COLUMNS,
+    normalize_actions,
+    normalize_bars,
+)
 
 FORMAT_VERSION = 1
 ROW_GROUP_ROWS = 50_000
@@ -40,7 +45,10 @@ def content_hash(bars: pd.DataFrame, actions: pd.DataFrame) -> str:
         h.update(col.encode())
         h.update(pd.util.hash_pandas_object(b[col], index=False).to_numpy().tobytes())
     a = actions.sort_values(["symbol", "ex_date", "kind"]).reset_index(drop=True)
-    for col in ["symbol", "ex_date", "kind", "value"]:
+    # Optional action dates enter the hash only when some are known, so versions written
+    # before these columns existed keep their hash.
+    dated = [c for c in ACTION_DATE_COLUMNS if c in a.columns and a[c].notna().any()]
+    for col in [*ACTION_COLUMNS, *dated]:
         h.update(col.encode())
         h.update(pd.util.hash_pandas_object(a[col], index=False).to_numpy().tobytes())
     return h.hexdigest()
