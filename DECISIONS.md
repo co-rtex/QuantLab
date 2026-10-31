@@ -202,8 +202,8 @@ TLS edge that keeps ADR-0008's guarantee: only a trusted hop states the client a
   no value, and RDS manages its master password itself. **Redis requires AUTH.** It holds
   more than delivery ids: the login rate-limit counters (ADR-0007), cached bars served to
   backtests, and RQ job payloads. Since #122 those are JSON, and a worker runs only the
-  allowlisted `execute_job(uuid)`; before that they were pickled. A token can be kept out of state: Secrets Manager generates it at apply time as an
-  ephemeral value, and Terraform passes it only to write-only arguments (`auth_token_wo`,
+  allowlisted `execute_job(uuid)`; before that they were pickled. A token can be kept out
+  of state: Secrets Manager generates it at apply time as an ephemeral value, and Terraform passes it only to write-only arguments (`auth_token_wo`,
   and `secret_string_wo` for the `redis_url` secret the tasks read). We did not choose
   ElastiCache RBAC with IAM authentication, which would remove the shared token, because
   the app's Redis client cannot generate IAM tokens yet. Optional LLM and market-data keys
