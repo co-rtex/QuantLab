@@ -5,6 +5,9 @@ import { api, ApiError } from "./api";
 
 type Poll<T> = number | ((d: T | undefined) => number | false);
 
+// The retry delay for a polling query whose first request failed transiently (#16).
+const FIRST_RETRY_MS = 1000;
+
 interface Loaded<T> {
   path: string | null;
   data?: T;
@@ -46,7 +49,11 @@ export function useApi<T>(path: string | null, opts: { poll?: Poll<T> } = {}) {
       const p = pollRef.current;
       // Decide from the last good data: a transient error used to pass `undefined` here,
       // which stopped function-based polls for good (jobs then looked stuck forever).
-      const delay = typeof p === "function" ? p(last) : p;
+      let delay = typeof p === "function" ? p(last) : p;
+      // With no good data yet a function poll cannot tell whether to go on, and stopped:
+      // one failed first poll after "Run validation suite" left the panel blank while
+      // the job finished (#16). A polling query keeps trying, with backoff.
+      if (!delay && p !== undefined && failures && last === undefined) delay = FIRST_RETRY_MS;
       if (delay) timer = setTimeout(tick, failures ? Math.min(delay * 2 ** failures, 30_000) : delay);
     };
     tick();
