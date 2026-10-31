@@ -147,11 +147,17 @@ def lock_idempotency_key(db: Session, workspace_id: uuid.UUID, key: str | None) 
     before ``submit_job``'s workspace and user locks, always in that order. Requests
     without a key are not serialized.
     """
-    if key and db.get_bind().dialect.name == "postgresql":
-        db.execute(
-            text("SELECT pg_advisory_xact_lock(hashtextextended(:k, 0))"),
-            {"k": f"idempotency:{workspace_id}:{key}"},
-        )
+    if key:
+        advisory_lock(db, f"idempotency:{workspace_id}:{key}")
+
+
+def advisory_lock(db: Session, name: str) -> None:
+    """A PostgreSQL advisory lock named ``name``, held until the transaction ends.
+
+    Callers that take several take them in a fixed order (an idempotency key first).
+    """
+    if db.get_bind().dialect.name == "postgresql":
+        db.execute(text("SELECT pg_advisory_xact_lock(hashtextextended(:k, 0))"), {"k": name})
 
 
 def submit_job(
