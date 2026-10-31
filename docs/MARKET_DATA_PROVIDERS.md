@@ -134,8 +134,12 @@ Sources:
     retried; an invalid URL and a failed certificate check are not. Errors are raised
     outside the `except` block with the URL removed, so neither the message nor the
     chained `__context__` carries the key.
-* **Not wired yet:** a `MASSIVE_API_KEY` setting and a dataset job. Both need leases from
-  the lead (`config.py`, `tasks.py`).
+* **Wired but inert (#11):** `quantlab.data.vendors.registry` registers Massive (bearer
+  auth, documented in the quickstart); the `dataset.vendor` job runs only when provider,
+  key, licence and plan are all configured (docs/RUNBOOK.md). It identifies securities
+  with the current `active` flags, ingests by permanent id, fails rather than store a
+  partial universe, runs the #10 gates, and stores the symbol history and master. No API
+  route or UI offers it yet, and the vendor and licence remain the user's choice.
 
 ## Licensing rules for this repository
 

@@ -110,8 +110,18 @@ class Settings(BaseSettings):
     # workspaces. Both caps are enforced transactionally under row locks.
     max_active_jobs_per_user: int = Field(50, ge=1)
     max_workspaces_per_user: int = Field(5, ge=1)
+    # Licensed market data (#11). Inert unless a registered provider is named AND its key,
+    # licence and plan are set: the vendor and licence are the user's choice. The key is
+    # read only from the environment or secrets, never stored in a job payload or logged.
+    market_data_provider: str | None = None
+    market_data_api_key: SecretStr | None = None
+    market_data_license: str | None = None  # recorded in every version's provenance
+    market_data_plan: str | None = None
+    market_data_requests_per_minute: float | None = Field(None, gt=0)
 
-    @field_validator("metrics_token", "anthropic_api_key", "jwt_secret", mode="before")
+    @field_validator(
+        "metrics_token", "anthropic_api_key", "jwt_secret", "market_data_api_key", mode="before"
+    )
     @classmethod
     def _blank_is_unset(cls, v: object) -> object:
         """Compose passes unset variables as empty strings; treat those as not configured."""
@@ -119,6 +129,23 @@ class Settings(BaseSettings):
             return None
         raw = v.get_secret_value() if isinstance(v, SecretStr) else str(v)
         return None if not raw.strip() else v
+
+    @field_validator(
+        "market_data_provider", "market_data_license", "market_data_plan", mode="before"
+    )
+    @classmethod
+    def _blank_text_is_unset(cls, v: object) -> object:
+        return None if v is None or not str(v).strip() else str(v).strip()
+
+    @field_validator("market_data_provider")
+    @classmethod
+    def _registered_provider(cls, v: str | None) -> str | None:
+        """A misspelt provider fails at startup instead of silently staying disabled."""
+        if v is None:
+            return None
+        from quantlab.data.vendors.registry import get_vendor
+
+        return get_vendor(v).name
 
     @model_validator(mode="after")
     def _production_guards(self) -> Settings:
@@ -136,6 +163,11 @@ class Settings(BaseSettings):
                 )
             if not self.cookie_secure:
                 raise ValueError("QUANTLAB_COOKIE_SECURE must be true in production")
+            if self.market_data_provider and self.market_data_api_key is None:
+                raise ValueError(
+                    "QUANTLAB_MARKET_DATA_API_KEY must be set (non-blank) when "
+                    "QUANTLAB_MARKET_DATA_PROVIDER is"
+                )
         return self
 
     @property
