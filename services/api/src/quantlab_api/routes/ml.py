@@ -14,7 +14,7 @@ from quantlab.ml.pipeline import MODELS, MLConfig
 from quantlab_api import artifacts
 from quantlab_api.config import get_settings
 from quantlab_api.errors import ApiError
-from quantlab_api.jobs import enqueue, submit_job
+from quantlab_api.jobs import enqueue, lock_idempotency_key, submit_job
 from quantlab_api.models import Job, MLRun, Role
 from quantlab_api.routes.datasets import load_version
 from quantlab_api.schemas import MAX_OFFSET, JobOut
@@ -85,6 +85,7 @@ def create_ml_run(
     ihash = hashlib.sha256(
         json.dumps({"dataset": dv.version_hash, "config": doc}, sort_keys=True).encode()
     ).hexdigest()
+    lock_idempotency_key(db, workspace_id, idempotency_key)
     if idempotency_key:
         prior_job = db.scalar(
             select(Job).where(
@@ -130,9 +131,8 @@ def create_ml_run(
         request_id=getattr(request.state, "request_id", None),
         timeout_seconds=1800,
         dispatch=False,
+        on_created=lambda j: setattr(run, "job_id", j.id),
     )
-    run.job_id = job.id
-    db.commit()
     enqueue(job)
     return _out(db, run)
 

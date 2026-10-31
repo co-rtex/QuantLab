@@ -8,12 +8,71 @@ the source of truth; tests in `tests/unit` pin each definition to a golden examp
 * **Bars** are stored raw (as traded). Each bar carries `available_at`, the instant it
   became knowable (session close, 16:00 New York, expressed in UTC).
 * **Corporate actions**: splits (`value` = new shares per old share) and cash dividends
-  (`value` = cash per pre-split share), both effective at the ex-date open.
-* **Total return identity** used everywhere: `(s_t * C_t + D_t) / C_{t-1} = 1 + r_t`.
-* **Adjustment** (`quantlab.data.adjust`): backward factor `f_t = C_t / (s_t C_t + D_t)`
-  per event. Adjusting *as of* date `a` uses only events with ex-date `<= a`. Adjusted
-  returns are identical for every as-of date; adjusted price levels are not, so strategies
-  receive the as-of view.
+  (`value` = cash per share held at the ex-date open), both effective at the ex-date open.
+  Optional `declared_date`, `record_date` and `pay_date` are kept for provenance and
+  validated at ingestion; the engine and the adjuster act on the ex-date only.
+* **Placement** (`quantlab.data.adjust.place_actions`): an action takes effect on the
+  first bar *of its own symbol* dated on or after its ex-date. For clean data that is the
+  ex-date. If the ex-date is a non-session day, or a session where the symbol printed no
+  bar, the action applies at the symbol's next bar: nothing traded in between, so the
+  holders and the price discontinuity are the same. Actions dated before a symbol's first
+  bar or after its last bar are outside its history and are not applied (a warning).
+* **Ordering**: actions placed on one bar are composed in ex-date order into one
+  equivalent event per share held before the bar: `S = Π s_i` and `D = Σ (Π_{j<i} s_j) d_i`,
+  where a split multiplies the running share count and a dividend pays `d_i` per share held
+  at that point. On a *shared* ex-date the dividend comes first (per pre-split share). So
+  a split on Saturday followed by a dividend on Sunday, quoted per post-split share, pays
+  `s * d` per pre-split share at Monday's open.
+* **Total return identity** used everywhere: `(S_t * C_t + D_t) / C_prev = 1 + r_t`, where
+  `C_prev` is the symbol's previous bar. After a gap that bar is several sessions back, so
+  the first bar after a gap carries the whole gap's return; a row without a bar has none.
+  Compounded total returns therefore always equal the ratio of adjusted closes.
+* **Adjustment** (`quantlab.data.adjust`): backward factor `f_t = C_t / (S_t C_t + D_t)`
+  per bar with events. `C_t` is always a real post-event close, because events sit on bars
+  of their own symbol. Adjusting *as of* row `a` uses only events placed on rows `<= a`.
+  Adjusted returns are identical for every as-of date; adjusted price levels are not, so
+  strategies receive the as-of view.
+* **Ingestion gates** (`quantlab.data.quality`): a check with status `fail` blocks the
+  dataset (`enforce_gates` raises `QualityGateError` with a per-check report). Gates are
+  reserved for input that is malformed by construction, so that legitimate market data
+  never blocks a dataset. The gates are:
+  * Invalid bars: non-finite, non-positive, negative volume, duplicate rows, or OHLC
+    inconsistent by more than half a tick (Reg NMS Rule 612 increments: $0.005 for prices
+    of $1 or more, $0.00005 below). These checks existed before #10 and were reported but
+    not enforced; they now block.
+  * Duplicate corporate actions: an identical repeated row, or two splits on one ex-date.
+    A same-amount regular and special dividend must be supplied as one row.
+  * Split ratios equal to 1 or outside `[1/10000, 10000]`.
+  * A dividend of at least the previous close.
+  * A dividend of at least 10% of the previous close, less than half reflected in the
+    price, that the price rose through or that is at least half the price (for example,
+    cents entered as dollars).
+  * A split bar whose gross total return is still 2x or 1/2x or worse (3x or 1/3x for a
+    reverse split, which distressed issuers often do on −30% to −60% days): a wrong ratio,
+    a wrong ex-date or a phantom split.
+
+  Pay or record dates *before* the ex-date are allowed: for distributions of 25% or more
+  the ex-date is the first business day after the payable date (FINRA Rule 11140(b)).
+
+  The following are warnings only:
+  * Missing sessions, a bar dated on a non-session day, stale prices.
+  * An ex-date without a bar (the action applies at the next bar).
+  * Actions the engine never applies: for a symbol without bars, or dated before its first
+    or after its last bar. Full-history vendor action files with windowed bars, announced
+    future actions and terminal distributions all look like this.
+  * Impossible action dates (declared after the ex, record or pay date, or paid before the
+    record date): they are provenance only.
+  * A dividend of 2% or more less than half reflected in the price, below the gate.
+  * A split bar moving more than 25%, below the gate.
+  * Other moves above 50%.
+  * A move within 2.5% of a k-for-1 or 1-for-k split signature (k ≥ 2) on a bar without a
+    split.
+
+  The last warning is the signature of an unrecorded split. It stays a warning because a
+  genuine −50% or +100% day (a trial readout, a takeover, a one-tick move in a penny
+  stock) produces the same prices: telling them apart needs a second source
+  (reconciliation, #12). Spin-offs are not modelled (only splits and cash dividends), so a
+  parent's ex-date drop shows up as a large move.
 * **Calendar**: rule-based NYSE full-day holidays (verified against published session
   counts for 2021–2024). Early closes and one-off closures are not modelled.
 * **Instrument identity** (`quantlab.data.identity`): research series are keyed by a
@@ -83,8 +142,9 @@ the source of truth; tests in `tests/unit` pin each definition to a golden examp
 
 Per session `k`:
 
-1. Corporate actions at the open: dividend on pre-split shares, then split. Pending orders
-   decided before a split are restated in post-split shares.
+1. Corporate actions placed on this session (see *Placement* above), applied at the open
+   as one equivalent event: dividend `D` on the shares held before the open, then split
+   `S`. Pending orders decided before a split are restated in post-split shares.
 2. A held symbol that has printed no bar for `delist_after_missing` consecutive sessions
    (default 5) is treated as delisted and liquidated at its last close. The rule uses only
    past data; recovery values in real delistings may be lower.
@@ -102,12 +162,24 @@ Per session `k`:
    `close[k]` and equity at `close[k]`.
 
 Symbols that only list after the backtest window are excluded (recorded in
-`meta.not_listed_in_window`). Corporate actions whose ex-date matches no bar are counted in
-`meta.unmatched_corporate_actions`; they are not applied, and the data quality report flags
-them.
+`meta.not_listed_in_window`). `meta.corporate_actions` counts the universe's actions by
+placement: `on_ex_date`, `applied_next_session` (ex-date without a bar for the symbol,
+applied at its next bar) and `outside_history` (before the symbol's first bar or after
+its last bar; not applied).
 
 No leverage or shorting is modelled. Cash earns nothing (the risk-free rate is used only in
 risk-adjusted ratios).
+
+**Dividends: strategy vs benchmark.** The two use different reinvestment conventions:
+* The ledger credits dividends as cash, and that cash is only reinvested when the
+  strategy next rebalances.
+* The benchmark series is the compounded total return of the benchmark's own bars, so its
+  dividends are reinvested at the ex-date close.
+
+So a buy-and-hold of the benchmark itself trails the benchmark by exactly the
+reinvestment effect. For example, $20 of dividend cash that misses a later +10% move costs
+$2 (pinned in `tests/unit/test_research_correctness.py`). Excess returns and tracking error
+include this cash drag, which is real for a strategy that does not reinvest.
 
 **Invariants verified by tests**: cash equals the sum of transaction cash flows (ledger
 replay); equity equals cash plus marked positions every day; cash never negative;
@@ -135,7 +207,15 @@ data after a decision date leaves that decision unchanged (no look-ahead).
 | Gross ("before costs") | equity plus cumulative commissions and slippage paid; an approximation that ignores compounding of the saved costs |
 
 Undefined statistics (zero variance, fewer than two observations, no drawdown, no losing
-trades) are reported as `null` with a reason, never as `0`.
+trades) are reported as `null` with a reason, never as `0`. "Zero variance" means a
+per-period standard deviation at or below `1e-12`, so floating-point residue is never
+annualized into a statistic: an exact index tracker has tracking error `0` and an
+undefined information ratio. When there are fewer than two observations or the initial
+wealth is not positive, *every* metric (and every benchmark metric) is undefined with
+that reason. Rolling volatility and Sharpe (`analytics.summary.rolling_metrics`) use the
+same risk-free and annualization conventions, and the same zero-dispersion rule per
+window. A walk-forward whose every out-of-sample fold fails returns
+`error: "every out-of-sample fold failed"` with all OOS statistics undefined.
 
 Trade statistics use FIFO lot matching with commissions allocated per share; open lots
 are restated at each split (shares times ratio, cost divided by ratio). Sells that match
@@ -144,7 +224,21 @@ no open lot are not counted as round trips.
 Parameter selection (walk-forward in-sample scoring) and the sensitivity grid score each
 run from the session before its first holding, so strategies with long look-backs are not
 penalised for warm-up time spent in cash. Reported experiment statistics still cover the
-whole requested window, as that is what the account experienced.
+whole requested window, as that is what the account experienced. The selected parameter
+set is always one of the grid points; parameter sets are compared with every default
+filled in.
+
+**Probabilistic and deflated Sharpe** (`quantlab.research.stats`, Bailey and López de
+Prado). The statistic is the per-period Sharpe of excess returns,
+`mean(r - rf_p) / std(r - rf_p)`, which is the annualized Sharpe divided by `sqrt(252)`.
+`PSR(SR*) = Φ((SR - SR*) sqrt(n - 1) / sqrt(1 - γ3 SR + (γ4 - 1)/4 SR²))`, where γ3 and
+γ4 are the sample skewness and (non-excess) kurtosis. The DSR is the PSR against
+`SR* = E[max SR]` of the N grid trials under the null. Every trial Sharpe *and* the
+selected strategy's PSR/DSR use the same inputs: each run's invested window (as above)
+and the configured risk-free rate. Before #14 the selected strategy used its full window,
+including warm-up cash, with no risk-free rate, which overstated both probabilities.
+`psr_vs_zero` is the probability that the true excess Sharpe is positive. The output
+records `observations` and `selected_sharpe_per_period`, so the inputs can be audited.
 
 Regime analysis classifies each day using trailing benchmark volatility and trend, with
 volatility cut points taken from expanding quantiles, so no day's regime depends on later
@@ -181,7 +275,11 @@ solving.
 
 * No survivorship-free real data source is configured; the synthetic generator includes
   delistings to demonstrate the effect.
-* Delisting liquidation at last close is optimistic for bankruptcies.
+* Delisting liquidation at last close is optimistic for bankruptcies. The same applies to
+  ML labels: an asset that delists inside the label horizon exits at its last close
+  (`quantlab.ml.pipeline.build_panel`). This does not leak information, but it overstates
+  returns compared with real delisting returns, which are not modelled until permanent
+  instrument identity (#9) supplies them.
 * Dividends are credited at the ex-date rather than the pay date.
 * No borrowing, shorting, margin, taxes or market impact beyond linear slippage.
 * Daily bars only.

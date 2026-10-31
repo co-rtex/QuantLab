@@ -1,0 +1,76 @@
+# Trusted TLS edge overlay (#3, ADR-0008, docs/RUNBOOK.md "Exposing a deployment").
+#
+#   export QUANTLAB_EDGE_SECRET=$(openssl rand -hex 32)
+#   docker compose -f docker-compose.yml -f infra/edge/compose.yml --profile app up -d --build
+#
+# The edge is then the only published port. Web, API, Postgres and Redis publish nothing,
+# and only the edge and web share the `edge` network, so a client can reach the web tier
+# (which trusts the edge's X-Forwarded-For) only through Caddy. The web tier also refuses
+# any request without the edge secret, so a mistakenly published web port fails closed.
+# QUANTLAB_EDGE_BIND stays 127.0.0.1 until the edge is verified (scripts/verify-edge.sh).
+
+services:
+  edge:
+    image: caddy:2.10.2-alpine
+    # Refuse to start without a real secret: an empty one would be sent and accepted.
+    command:
+      - sh
+      - -c
+      - >-
+        [ "$${#QUANTLAB_EDGE_SECRET}" -ge 32 ] ||
+        { echo "QUANTLAB_EDGE_SECRET must be at least 32 characters" >&2; exit 1; };
+        exec caddy run --config /etc/caddy/Caddyfile --adapter caddyfile
+    environment:
+      QUANTLAB_EDGE_SECRET: ${QUANTLAB_EDGE_SECRET:-}
+      QUANTLAB_EDGE_SITE: ${QUANTLAB_EDGE_SITE:-localhost}
+      QUANTLAB_EDGE_TLS: ${QUANTLAB_EDGE_TLS:-internal}
+    ports: ["${QUANTLAB_EDGE_BIND:-127.0.0.1}:${QUANTLAB_EDGE_PORT:-8443}:443"]
+    volumes:
+      - ./infra/edge/Caddyfile:/etc/caddy/Caddyfile:ro
+      - edgedata:/data
+    networks: [edge]
+    depends_on: [web]
+    restart: unless-stopped
+    profiles: ["app"]
+
+  web:
+    environment:
+      QUANTLAB_EDGE_SECRET: ${QUANTLAB_EDGE_SECRET:?set QUANTLAB_EDGE_SECRET (openssl rand -hex 32)}
+    ports: !reset []
+    networks: [default, edge]
+
+  # Exposure means production: the API then refuses placeholder secrets and insecure
+  # cookies, and fails closed when no client address reaches it (ADR-0008). Set
+  # QUANTLAB_JWT_SECRET and QUANTLAB_METRICS_TOKEN (docs/RUNBOOK.md).
+  api:
+    ports: !reset []
+    environment: &edge-env
+      QUANTLAB_ENVIRONMENT: ${QUANTLAB_ENVIRONMENT:-production}
+      QUANTLAB_COOKIE_SECURE: "true"
+
+  worker:
+    environment: *edge-env
+
+  reaper:
+    environment: *edge-env
+
+  postgres:
+    ports: !reset []
+
+  redis:
+    ports: !reset []
+
+  jaeger:
+    ports: !reset []
+
+  prometheus:
+    ports: !reset []
+
+  grafana:
+    ports: !reset []
+
+networks:
+  edge: {}
+
+volumes:
+  edgedata:

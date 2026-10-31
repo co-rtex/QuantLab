@@ -6,20 +6,35 @@ from sqlalchemy import select
 from quantlab_api.config import get_settings
 from quantlab_api.errors import ApiError
 from quantlab_api.models import Role, User, Workspace, WorkspaceMember
+from quantlab_api.observability import log
+from quantlab_api.routes.invitations import invitee_router as invitee_routes
 from quantlab_api.schemas import LoginIn, RegisterIn, TokenOut, UserOut
 from quantlab_api.security import (
     COOKIE_NAME,
     DB,
     CurrentUser,
     audit,
-    client_ip,
     create_access_token,
     hash_password,
     login_limiter,
+    rate_limit_address,
     verify_password,
 )
 
 router = APIRouter(prefix="/auth", tags=["auth"])
+
+
+def _throttle_address(request: Request) -> str | None:
+    """The address to throttle on, or None (no TLS edge in development: ADR-0008).
+
+    In production an unknown address means the edge is missing or misconfigured, so the
+    request is refused rather than served without a per-address limit.
+    """
+    ip = rate_limit_address(request)
+    if ip is None and get_settings().environment == "production":
+        log.error("edge_missing", path=request.url.path)
+        raise ApiError(503, "edge_required", "The service is misconfigured; try again later")
+    return ip
 
 
 def _issue(response: Response, user: User) -> TokenOut:
@@ -39,8 +54,14 @@ def _issue(response: Response, user: User) -> TokenOut:
 
 @router.post("/register", response_model=TokenOut, status_code=201)
 def register(body: RegisterIn, request: Request, response: Response, db: DB) -> TokenOut:
-    ip = client_ip(request)
-    login_limiter.check(f"register:{ip}", get_settings().rate_limit_login_per_minute)
+    limit = get_settings().rate_limit_login_per_minute
+    ip = _throttle_address(request)
+    if ip is not None:
+        login_limiter.check(f"register:{ip}", limit)
+    else:
+        # Development without an edge: a coarse cap on everyone's registrations together.
+        # It can delay sign-ups but never locks existing users out of their accounts.
+        login_limiter.check("register:unknown", limit * 10)
     email = body.email.lower()
     if db.scalar(select(User).where(User.email == email)):
         raise ApiError(409, "email_taken", "An account with this email already exists")
@@ -74,12 +95,17 @@ def register(body: RegisterIn, request: Request, response: Response, db: DB) -> 
 
 @router.post("/login", response_model=TokenOut)
 def login(body: LoginIn, request: Request, response: Response, db: DB) -> TokenOut:
-    ip = client_ip(request)
+    ip = _throttle_address(request)
     limit = get_settings().rate_limit_login_per_minute
     # Every attempt counts against the client address. Only *failed* attempts count against
-    # the account, with a higher threshold, so a third party cannot lock out a real user by
-    # spending the account's budget, while distributed guessing is still throttled.
-    login_limiter.check(f"login:ip:{ip}", limit)
+    # the account, with a higher threshold, so distributed guessing is still throttled.
+    # A client that reaches the API from many addresses can still spend an account's
+    # budget (ADR-0008); what the edge guarantees is that it cannot choose those addresses.
+    # Without a known address (development without a TLS edge) only the account limit
+    # applies: one shared bucket for everyone would let ten failed logins lock every user
+    # out. Production refuses such requests instead (_throttle_address).
+    if ip is not None:
+        login_limiter.check(f"login:ip:{ip}", limit)
     acct_key = f"login:fail:{body.email.lower()}"
     # Reserve atomically before verifying; refunded below if the login succeeds.
     if not login_limiter.reserve(acct_key, limit * 3):
@@ -122,3 +148,6 @@ def logout(
 @router.get("/me", response_model=UserOut)
 def me(user: CurrentUser) -> User:
     return user
+
+
+router.include_router(invitee_routes)

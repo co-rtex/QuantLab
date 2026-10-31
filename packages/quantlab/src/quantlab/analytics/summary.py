@@ -10,6 +10,8 @@ import numpy as np
 import pandas as pd
 
 from quantlab.analytics.performance import (
+    PERIODS_PER_YEAR,
+    ZERO_DISPERSION,
     compute_performance,
     cost_and_turnover,
     drawdown_episodes,
@@ -52,11 +54,25 @@ def monthly_returns(equity: pd.Series) -> list[dict[str, Any]]:
     return [{"year": d.year, "month": d.month, "return": float(v)} for d, v in r.items()]
 
 
-def rolling_metrics(equity: pd.Series, window: int = 126) -> pd.DataFrame:
+def rolling_metrics(
+    equity: pd.Series,
+    window: int = 126,
+    *,
+    risk_free_rate: float = 0.0,
+    periods_per_year: int = PERIODS_PER_YEAR,
+) -> pd.DataFrame:
+    """Rolling volatility and Sharpe with the conventions of ``compute_performance``.
+
+    The Sharpe ratio is NaN (undefined) in windows whose returns have no dispersion.
+    """
+    P = periods_per_year
+    rf_p = (1 + risk_free_rate) ** (1 / P) - 1
     r = simple_returns(equity)
-    vol = r.rolling(window).std(ddof=1) * math.sqrt(252)
-    sharpe = r.rolling(window).mean() / r.rolling(window).std(ddof=1) * math.sqrt(252)
-    return pd.DataFrame({"rolling_vol": vol, "rolling_sharpe": sharpe})
+    sd = r.rolling(window).std(ddof=1)
+    sd = sd.where(sd > ZERO_DISPERSION, 0.0)  # rolling sums leave ~1e-17 on flat windows
+    excess_mean = r.rolling(window).mean() - rf_p
+    sharpe = (excess_mean / sd.where(sd > 0)) * math.sqrt(P)
+    return pd.DataFrame({"rolling_vol": sd * math.sqrt(P), "rolling_sharpe": sharpe})
 
 
 def analyze_backtest(res: BacktestResult, factors: pd.DataFrame | None = None) -> dict[str, Any]:

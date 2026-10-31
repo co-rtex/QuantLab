@@ -10,7 +10,7 @@ from sqlalchemy import func, select
 from quantlab.research.integrity import build_integrity_report
 from quantlab_api import artifacts
 from quantlab_api.errors import ApiError
-from quantlab_api.jobs import payload_hash, submit_job
+from quantlab_api.jobs import advisory_lock, lock_idempotency_key, payload_hash, submit_job
 from quantlab_api.models import (
     Experiment,
     ExperimentResult,
@@ -56,6 +56,11 @@ def start_validation(
         raise ApiError(409, "not_ready", "Run validation after the backtest completes")
     params = {"suite_version": SUITE_VERSION, "seed": 0}
     phash = payload_hash(SUITE, params)
+    lock_idempotency_key(db, exp.workspace_id, idempotency_key)
+    # Validation is deduplicated per experiment, not per key: without this, two requests
+    # with no key (or different keys) both inserted a run (unique violation, 500) or both
+    # requeued a failed one (two jobs for one run).
+    advisory_lock(db, f"validation:{exp.id}")
     run = db.scalar(
         select(ResearchRun).where(
             ResearchRun.experiment_id == exp.id,
@@ -71,8 +76,14 @@ def start_validation(
                 Job.workspace_id == exp.workspace_id, Job.idempotency_key == idempotency_key
             )
         )
-        if prior is not None:  # same request replayed: report what happened, rerun nothing
-            return _run_out(db, run)
+        if prior is not None:
+            if prior.payload.get("research_run_id") != str(run.id):
+                raise ApiError(
+                    409,
+                    "idempotency_conflict",
+                    "Idempotency-Key was already used with a different request",
+                )
+            return _run_out(db, run)  # same request replayed: report it, rerun nothing
     if run is None:
         run = ResearchRun(experiment_id=exp.id, kind=SUITE, params=params, params_hash=phash)
         db.add(run)
@@ -98,9 +109,8 @@ def start_validation(
         request_id=getattr(request.state, "request_id", None),
         timeout_seconds=1800,
         dispatch=False,
+        on_created=lambda j: setattr(run, "job_id", j.id),
     )
-    run.job_id = job.id
-    db.commit()
     from quantlab_api.jobs import enqueue
 
     enqueue(job)

@@ -1,8 +1,14 @@
 import { NextResponse, type NextRequest } from "next/server";
 
-const PUBLIC = ["/login", "/register"];
+import { edgeRequiredResponse, fromEdge } from "@/lib/edge";
+
+// /invite handles signed-out visitors itself: it must keep the token from the URL fragment.
+const PUBLIC = ["/login", "/register", "/invite"];
 
 export function proxy(request: NextRequest) {
+  // Behind the TLS edge, pages too are served only through it (the API proxy checks itself,
+  // since this matcher skips api/: Next buffers proxied bodies here, which would truncate uploads).
+  if (!fromEdge(request.headers)) return edgeRequiredResponse();
   const { pathname } = request.nextUrl;
   const hasSession = request.cookies.has("quantlab_session");
   if (!hasSession && !PUBLIC.includes(pathname)) {

@@ -21,16 +21,18 @@ Work items are issues labelled `owner:*`, `P0`/`P1`/`P2`, `status:*` and `area:*
 
 | Path | Owner |
 |---|---|
-| `services/api/src/quantlab_api/security.py`, `limits.py`, `routes/auth.py` | Agent 2 |
+| `services/api/src/quantlab_api/security.py`, `limits.py`, `uploads.py`, `invitations.py`, `routes/auth.py`, `routes/invitations.py` | Agent 2 |
 | `services/api/src/quantlab_api/routes/workspaces.py` (members, invitations) | Agent 2 |
-| `services/api/src/quantlab_api/routes/datasets.py` | **Agent 2 until #4 and #7 merge**, then Agent 3 |
+| `services/api/src/quantlab_api/routes/datasets.py` | **Agent 2 until #7 merges** (#4 merged), then Agent 3 |
 | `apps/web/src/app/api/[...path]/route.ts`, `apps/web/src/proxy.ts`, `infra/edge/**` | Agent 2 |
 | Web pages for login, settings, members, invitations | Agent 2 |
 | `routes/experiments.py`, `routes/ml.py`, `routes/research.py` (idempotency only, #6) | Agent 2 while #6 is open |
 | `packages/quantlab/src/quantlab/data/**`, `services/api/src/quantlab_api/marketdata.py` | Agent 3 |
 | `packages/quantlab/src/quantlab/{backtest,analytics,research,ml,portfolio,optimize,strategies}/**` | Agent 3 |
 | `docs/METHODOLOGY.md` | Agent 3 |
-| `packages/quantlab/src/quantlab/assistant/**`, other web pages, `benchmarks/**` | Unassigned (lead assigns per issue) |
+| `benchmarks/**` | Agent 3 for the market-data part of #24 (leased) |
+| `services/api/src/quantlab_api/observability.py`, `db.py`, `apps/web/playwright.config.ts` | Lead |
+| `packages/quantlab/src/quantlab/assistant/**`, other web pages | Unassigned (lead assigns per issue) |
 
 ## Shared files (lead-owned, leased one holder at a time)
 
@@ -40,11 +42,13 @@ follow-up docs commit. A lease ends when the PR that used it merges or closes.
 
 | Shared file | Current holder | For |
 |---|---|---|
-| `services/api/src/quantlab_api/models.py` | — | |
-| `services/api/src/quantlab_api/schemas.py` | — | |
+| `services/api/src/quantlab_api/models.py` | Agent 3 | #9 part C (M2) |
+| `services/api/src/quantlab_api/schemas.py` | Agent 3 | #9 part C (M2) |
 | `services/api/src/quantlab_api/config.py` | — | |
-| `services/api/src/quantlab_api/jobs.py` | — | |
-| `services/api/src/quantlab_api/tasks.py` | — | |
+| `services/api/src/quantlab_api/jobs.py` | Agent 2 | #43 idempotency fingerprint (#6 merged as #40) |
+| `services/api/src/quantlab_api/tasks.py` | Agent 2 | #7 CSV retry / ambiguous-commit cleanup (#27 merged). **Queue:** Agent 3 (#9 part C) after #7 merges |
+| `services/api/alembic/env.py` | — | (#37 merged) |
+| `scripts/case_study.py` | — | (Agent 2's invitation fix merged in #37) |
 | `services/api/src/quantlab_api/main.py` | — | |
 | `services/api/alembic/versions/**` | see migration slots | |
 | `docker-compose.yml`, `Makefile`, `scripts/stack-env.sh` | — | |
@@ -61,8 +65,8 @@ Alembic revisions form one linear chain, so only one migration may be in flight 
 
 | Slot | Holder | Issue | State |
 |---|---|---|---|
-| M1 | Agent 2 | #5 invitations | reserved, not started |
-| M2 | Agent 3 | #9 instrument identity | queued; may start only after M1 merges or the lead re-sequences |
+| M1 | Agent 2 | #5 invitations, revision `7c3e5a1d9b20` → `4f1c2a9e7b10` | **merged** (#37, `9e76ff3`) |
+| M2 | Agent 3 | #9 part C, instrument identity in the catalog | **open** since 2026-10-31: `down_revision = "7c3e5a1d9b20"` |
 
 Rules: request the slot on the issue before running `alembic revision`; set `down_revision`
 to the current head on `main` at the time; include a working `downgrade`; the migration
@@ -90,10 +94,22 @@ database.
 stack peaks around 1.7 GB, and three full stacks at once caused API OOM kills
 (2026-10-30). Rules:
 * For pytest, run `make up` (Postgres + Redis only, under 100 MB).
-* Run at most **one** full `app-up` stack per agent, with `QUANTLAB_API_WORKERS=2`, and
-  `make down` as soon as E2E finishes.
-* An OOM-killed API (`docker inspect <api> --format '{{.State.OOMKilled}}'`) invalidates
-  an E2E result. Rerun it; don't report it as a pass or as a code regression.
+* Full-stack runs are **serialized machine-wide**. Use `make e2e-serial`: it takes the
+  lock in `scripts/fullstack-lock.sh` (shared by every worktree through git's common
+  directory), runs `app-up` with `QUANTLAB_API_WORKERS=2`, Playwright with one worker
+  (`E2E_WORKERS=n` to override), then `down`. `scripts/fullstack-lock.sh status` shows
+  the holder. A manual `make app-up` must be wrapped in
+  `scripts/fullstack-lock.sh run ...` too.
+* Playwright defaults to one worker. With 4 parallel spec files, each registration's
+  Argon2id hash (64 MiB × 4 lanes, about 170 ms uncontended) queued behind the others,
+  and registrations took 25 s.
+* An E2E failure is a regression only if the API wasn't OOM-killed
+  (`docker inspect <api> --format '{{.State.OOMKilled}}'`), it reproduces with the failing
+  spec run alone, and the report includes `uptime` load. **CI does not run Playwright
+  (#17)**, so green CI is not E2E evidence.
+* Integration tests **fail** when Postgres is unreachable. `make e2e-serial` and `make down`
+  stop the project's Postgres too, so run `make up` again before pytest.
+  `QUANTLAB_ALLOW_SKIP_INTEGRATION=1` skips them explicitly (unit-only runs).
 
 ## Branches, commits and PRs
 

@@ -40,17 +40,21 @@ Owners, file ownership and migration slots: [docs/COORDINATION.md](docs/COORDINA
 
 | P | Issue | Owner | Depends on |
 |---|---|---|---|
-| P0 | #3 Trusted TLS edge overwriting X-Forwarded-For (**security gate: no public exposure until closed**) | Agent 2 | — → #8, #19 |
-| P0 | #4 Authenticate before parsing multipart uploads | Agent 2 | — → #7 |
-| P0 | #5 Invitations instead of add-member (migration M1) | Agent 2 | — |
-| P0 | #9 Permanent instrument identity (migration M2) | Agent 3 | M1 merged or re-sequenced → #11, #12 |
-| P0 | #10 Corporate-action validation gates | Agent 3 | soft: #9 → #11 |
-| P0 | #12 Reconciliation report against a second source | Agent 3 | #9 |
-| P0 | #11 Licensed vendor adapter (live part blocked on credentials) | Agent 3 | #9, #10 |
-| P1 | #6 Idempotent retries: 409s and phantom rows | Agent 2 | — |
-| P1 | #7 CSV retry and ambiguous-commit cleanup | Agent 2 | #4 |
-| P1 | #13 Undefined-aware statistics (tracking-error noise) | Agent 3 | — |
-| P1 | #14 Deflated Sharpe input consistency | Agent 3 | — |
+| P0 | ✅ #3 Trusted TLS edge (#32) | Agent 2 | — |
+| P0 | **#39 Security gate**: fail closed on an untrusted peer, exact-match remote probe, verified from a second machine on an address-preserving host (**no public exposure until closed**) | Agent 2 + user host | #3 → #19 |
+| P0 | ✅ #4 Authenticate before parsing multipart uploads (#28) | Agent 2 | — |
+| P0 | ✅ #5 Invitations instead of add-member (#37, migration M1) | Agent 2 | — |
+| P0 | #9 Permanent instrument identity: ✅ part A (#31); part B delisting returns; part C catalog (M2 open) | Agent 3 | C: tasks.py after #7 → #11 |
+| P0 | ✅ #10 Corporate-action validation gates (#27) | Agent 3 | — |
+| P0 | #12 Reconciliation report (draft #34, lead review bar posted) | Agent 3 | #31 ✅ |
+| P0 | #11 Vendor adapter (draft #33; live part blocked on credentials) | Agent 3 | #31 ✅, #27 ✅ |
+| P1 | ✅ #6 Idempotent retries (#40) | Agent 2 | — |
+| P1 | #43 Idempotency fingerprint scope, empty-key 500 | Agent 2 | — |
+| P1 | #7 CSV retry and ambiguous-commit cleanup | Agent 2 | #27 ✅ (tasks.py leased) |
+| P1 | ✅ #13 Undefined-aware statistics (#29) | Agent 3 | — |
+| P1 | ✅ #14 Deflated Sharpe input consistency (#30) | Agent 3 | — |
+| P1 | ✅ #35 Research-correctness suite (#36) | Agent 3 | — |
+| P2 | #41 Review follow-ups for #29, #30, #31, #36 | Agent 3 | — |
 | P1 | #16 E2E flake in the validation panel | Lead | — → #17 |
 | P1 | #17 Playwright E2E in CI | Lead | #16 |
 | P1 | #15 Assistant verifier and hosted eval (eval blocked on key) | Unassigned | — |
@@ -58,7 +62,7 @@ Owners, file ownership and migration slots: [docs/COORDINATION.md](docs/COORDINA
 | P1 | #19 Terraform, validated and never applied | Lead | #3 |
 | P1 | #20 External load test (needs a separate host) | Unassigned | — |
 | P1 | #21 Storage lifecycle on workspace deletion | Unassigned | #9 |
-| P2 | #8 Security hardening batch | Agent 2 | #3 |
+| P2 | #8 Security hardening batch (traceback locals ✅ #38) | Agent 2 | — |
 | P2 | #22 Per-worktree isolation hardening | Lead | — |
 | P2 | #23 Frontend completeness and synthetic labels | Unassigned | — |
 | P2 | #24 Benchmark methodology, golden tests | Unassigned | — |
