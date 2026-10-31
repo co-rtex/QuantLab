@@ -46,9 +46,13 @@ def one_rate_limit_window(monkeypatch: pytest.MonkeyPatch) -> None:
     Argon2-hashed logins or registrations against a per-minute limit, and on a slow runner
     the minute rolled over mid-series: the expected 429 became a 201 (seen in CI).
     """
+    from quantlab_api.jobs import redis_conn
     from quantlab_api.security import login_limiter
 
     monkeypatch.setattr(login_limiter, "_bucket", lambda key, window: f"ql:rl:{key}:pinned")
+    # The first increment also sets a TTL of one window: keep the pinned count for the
+    # whole test, however long its hashing takes.
+    monkeypatch.setattr(redis_conn(), "expire", lambda *args, **kwargs: True)
 
 
 @pytest.fixture

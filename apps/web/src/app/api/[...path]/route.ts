@@ -5,7 +5,7 @@ import { edgeClientAddress, edgeRequiredResponse, fromEdge } from "@/lib/edge";
 // Same-origin proxy to the QuantLab API so the httpOnly session cookie is first-party.
 // The upstream URL is read at request time, which keeps container images portable.
 const FORWARD_REQUEST = ["content-type", "authorization", "idempotency-key", "x-request-id", "cookie"];
-// content-security-policy: the API sandboxes HTML reports with a CSP; dropping it here served
+// content-security-policy: the API serves HTML reports under a sandboxing CSP; dropping it here served
 // them same-origin with the app and no policy.
 const FORWARD_RESPONSE = [
   "content-type",
@@ -17,31 +17,35 @@ const FORWARD_RESPONSE = [
 // Largest body the API accepts (CSV import, services/api/src/quantlab_api/limits.py).
 const MAX_BODY_BYTES = 110 * 1024 * 1024;
 
-/** Read the request body, refusing anything larger than MAX_BODY_BYTES without buffering it. */
-async function readCapped(req: NextRequest): Promise<ArrayBuffer | null> {
+class BodyTooLarge extends Error {}
+
+/**
+ * The request body as a stream that errors once it passes MAX_BODY_BYTES. Streaming instead
+ * of buffering (#8): every request used to be held in memory, up to 110 MiB each, before
+ * the API was even asked, so anonymous clients could make this server hold that much per
+ * connection. The API applies its own, tighter limits to what it reads.
+ */
+function cappedBody(req: NextRequest): ReadableStream<Uint8Array> | null | undefined {
   const declared = Number(req.headers.get("content-length") ?? "0");
   if (declared > MAX_BODY_BYTES) return null;
-  if (!req.body) return new ArrayBuffer(0);
-  const reader = req.body.getReader();
-  const chunks: Uint8Array[] = [];
+  if (!req.body) return undefined;
   let size = 0;
-  for (;;) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    size += value.byteLength;
-    if (size > MAX_BODY_BYTES) {
-      await reader.cancel();
-      return null;
-    }
-    chunks.push(value);
-  }
-  const out = new Uint8Array(size);
-  let offset = 0;
-  for (const c of chunks) {
-    out.set(c, offset);
-    offset += c.byteLength;
-  }
-  return out.buffer;
+  return req.body.pipeThrough(
+    new TransformStream<Uint8Array, Uint8Array>({
+      transform(chunk, controller) {
+        size += chunk.byteLength;
+        if (size > MAX_BODY_BYTES) controller.error(new BodyTooLarge());
+        else controller.enqueue(chunk);
+      },
+    }),
+  );
+}
+
+function tooLarge(): Response {
+  return Response.json(
+    { error: { code: "payload_too_large", message: "Request body is too large." } },
+    { status: 413 },
+  );
 }
 
 async function forward(req: NextRequest, ctx: { params: Promise<{ path: string[] }> }) {
@@ -68,23 +72,23 @@ async function forward(req: NextRequest, ctx: { params: Promise<{ path: string[]
   const client = edgeClientAddress(req.headers);
   if (client) headers.set("x-forwarded-for", client);
   const hasBody = !["GET", "HEAD"].includes(req.method);
-  const body = hasBody ? await readCapped(req) : undefined;
-  if (body === null) {
-    return Response.json(
-      { error: { code: "payload_too_large", message: "Request body is too large." } },
-      { status: 413 },
-    );
-  }
+  const body = hasBody ? cappedBody(req) : undefined;
+  if (body === null) return tooLarge();
   let res: Response;
   try {
     res = await fetch(url, {
       method: req.method,
       headers,
       body,
+      // Required by Node's fetch to send a stream body.
+      duplex: "half",
       cache: "no-store",
       redirect: "manual",
-    });
-  } catch {
+    } as RequestInit & { duplex: "half" });
+  } catch (e) {
+    if (e instanceof BodyTooLarge || (e instanceof Error && e.cause instanceof BodyTooLarge)) {
+      return tooLarge();
+    }
     return Response.json(
       { error: { code: "upstream_unavailable", message: "The QuantLab API is not reachable." } },
       { status: 502 },

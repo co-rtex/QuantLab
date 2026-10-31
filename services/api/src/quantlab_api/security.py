@@ -100,6 +100,8 @@ def current_user(request: Request, db: Annotated[Session, Depends(get_db)]) -> U
     if user is None or not user.is_active or claims.get("ver") != user.token_version:
         raise ApiError(401, "invalid_token", "Invalid credentials")
     request.state.user_id = str(user.id)
+    # For long requests that re-check the session after reading their body.
+    request.state.token_version = user.token_version
     return user
 
 
@@ -259,26 +261,27 @@ def _in(nets: list[Network], host: str) -> bool:
     return any(ip in n for n in nets)
 
 
-def _forwarded_client(request: Request) -> tuple[str, str | None]:
-    """(socket peer, client address a trusted proxy stated or None).
+def _forwarded_client(request: Request) -> tuple[str, str | None, bool]:
+    """(socket peer, client address or None, whether the peer is a trusted proxy).
 
     Only a configured proxy may state the client address. Its ``X-Forwarded-For`` is read
     from the right, skipping further trusted proxies, so entries a client prepended itself
-    are never used.
+    are never used. One lookup of the trusted networks answers everything, so a resolver
+    update in between cannot make the answers disagree.
     """
     peer = request.client.host if request.client else "unknown"
     nets = trusted_proxies.networks()
     if not _in(nets, peer):
         trusted_proxies.missed(peer)
-        return peer, peer
+        return peer, peer, False
     hops = [h.strip() for h in request.headers.get("x-forwarded-for", "").split(",")]
     for hop in reversed([h for h in hops if h]):
         if not _in(nets, hop):
             try:
-                return peer, str(ipaddress.ip_address(hop))
+                return peer, str(ipaddress.ip_address(hop)), True
             except ValueError:
-                return peer, None
-    return peer, None
+                return peer, None, True
+    return peer, None, True
 
 
 def _bucket(address: str) -> str:
@@ -300,7 +303,7 @@ def _bucket(address: str) -> str:
 
 def client_ip(request: Request) -> str:
     """The client address for audit records: the stated address, else the socket peer."""
-    peer, client = _forwarded_client(request)
+    peer, client, _ = _forwarded_client(request)
     return client or peer
 
 
@@ -319,10 +322,10 @@ def rate_limit_address(request: Request) -> str | None:
     ``QUANTLAB_TRUSTED_PROXIES``), and its address would again be everyone's bucket.
     Callers then fail closed (``routes/auth.py``).
     """
-    peer, address = _forwarded_client(request)
+    _, address, via_proxy = _forwarded_client(request)
     if address is None:
         return None
-    if get_settings().environment == "production" and not _in(trusted_proxies.networks(), peer):
+    if get_settings().environment == "production" and not via_proxy:
         return None
     return _bucket(address)
 

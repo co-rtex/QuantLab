@@ -64,6 +64,7 @@ sys.exit(0 if norm(sys.argv[1]) == norm(sys.argv[2]) else 1)
 if [ "${1:-}" = "--check-remote-probe" ]; then
   usage="usage: verify.sh --check-remote-probe MARKER REMOTE_IP"
   marker=$(printf '%s' "${2:?$usage}" | tr -cd 'a-z0-9-')
+  [ -n "$marker" ] || { echo "FAIL  MARKER must contain a-z, 0-9 or -"; exit 2; }
   expected=${3:?$usage}
   ip=$(probe_ip "$marker")
   if [ -z "$ip" ]; then echo "FAIL  no failed login for remote@$marker.example.com reached the API"; exit 1; fi
