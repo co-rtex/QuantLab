@@ -1,6 +1,6 @@
 # Status (authoritative handoff)
 
-_Last updated: 2026-10-30 (lead integration: #1 and #2 merged, coordination established)_
+_Last updated: 2026-10-31 (lead integration cycle 2: #28 #32 #36 #29 #30 #31 #38 merged)_
 
 ## Where things stand
 All roadmap phases 0–10 are implemented. An independent audit on 2026-10-30
@@ -12,11 +12,15 @@ prioritized backlog supersedes the old next-steps list and is now tracked as Git
 issues #3-#25 (dependency order in [ROADMAP.md](ROADMAP.md)). Multi-agent ownership,
 leases and migration slots: [docs/COORDINATION.md](docs/COORDINATION.md).
 
-> **Security gate (P0, #3): do not expose any deployment publicly.** Without a TLS edge
-> that overwrites `X-Forwarded-For`, a client reaching the web tier chooses the address
-> the API rate-limits on (it can target a victim's bucket and spend a victim account's
-> login-failure budget). Compose binds every port to 127.0.0.1; keep it that way until #3
-> is closed and verified live.
+> **Security gate (P0, #39): do not expose any deployment publicly.** The trusted TLS edge
+> (#3, PR #32) is merged, but exposure stays prohibited until #39 closes. #39 requires:
+> * production fails closed on an untrusted peer;
+> * the remote probe is an exact-match check;
+> * the edge passes `infra/edge/verify.sh --check-remote-probe` from a **second machine**,
+>   on a Docker host that preserves client addresses.
+>
+> This Mac runs Docker Desktop, where that probe correctly fails, so nothing verified here
+> can clear the gate. Compose binds every port to 127.0.0.1.
 
 | Area | State |
 |---|---|
@@ -29,37 +33,57 @@ leases and migration slots: [docs/COORDINATION.md](docs/COORDINATION.md).
 | Quality | Three independent reviews (financial core, service layer, full audit 2026-10-30) with every fixed finding regression-tested; axe WCAG 2.1 AA audit clean on 12 pages |
 
 ## Integrated on main
-* #1 independent audit (18 fixes, per-worktree isolation), merge `656510d`.
-* #2 account-wide quotas: `QUANTLAB_MAX_ACTIVE_JOBS_PER_USER` (default 50, effective cap
-  is min with the per-workspace cap) and `QUANTLAB_MAX_WORKSPACES_PER_USER` (default 5,
-  including the default workspace), both enforced under row locks. Merge `c4f5460`.
-* Both had independent read-only reviews (financial core; security/service) with no
-  blockers. Their should-fix findings are issues #3, #6, #8, #10, #13 and #15.
+* Cycle 1: #1 audit (`656510d`), #2 account-wide quotas (`c4f5460`).
+* Cycle 2 (2026-10-31), in merge order:
+  * #28 CSV uploads authenticated before the multipart body is read (#4).
+  * #32 trusted TLS edge (Caddy overlay; ADR-0008 rewritten). Closes #3 but **not** the
+    gate (#39).
+  * #36 hand-computed research-correctness suite (#35).
+  * #29 undefined statistics instead of rounding noise (#13).
+  * #30 deflated Sharpe on a matched window and rf (#14).
+  * #31 permanent instrument identity, part A of #9: library and store only.
+  * #38 tracebacks no longer log frame locals. Before this, a 500 during login logged the
+    plaintext password.
+* Every merge had an independent read-only lead review: no blockers. Should-fix items are
+  tracked in #8 (Agent 2), #39 (gate) and #41 (Agent 3).
 
-## Last verified (2026-10-30, #2 head `588a537`, tree identical to main `c4f5460`)
-* CI on main and on both PRs: python (ruff, mypy --strict, pytest with Postgres), web
-  (lint, typecheck, build) and docker are green.
-* Local, isolated stack (slot 85): ruff, format and mypy are clean; **206 tests passed**.
-  `tests/golden/` is empty; the golden cases live in `tests/unit` (#24).
-* Playwright: **11/12** on a fresh stack. `workflow.spec.ts` (the regime panel after
-  validation) fails only in full-suite runs, and fails identically on the pre-audit
-  `1373f53`, so it is pre-existing (#16). E2E isn't in CI yet (#17).
-* Earlier runs had the API OOM-killed: three full stacks in the 3.8 GiB Docker VM. Peak
-  API memory is the same before and after the PRs (about 810 MiB), so it isn't a
-  regression. See the memory budget in docs/COORDINATION.md.
-* Measurements: docs/BENCHMARKS.md and docs/AI_EVAL.md (unchanged by the integration).
+## Last verified (2026-10-31, main `e7d3d82`)
+* The combined trial merge of #28, #32, #36, #29, #30 and #31 on `40565cd` gave a tree
+  **identical** to main after the merges (`93ca7be`):
+  * ruff, format and mypy clean;
+  * **pytest 314 passed** (Postgres, slot 85);
+  * web lint, typecheck and build clean; `edge.test.mts` 4/4;
+  * **Playwright 12/12** with `--workers=1`, at load 6.5–16, OOMKilled=false.
+* #38 on top: ruff and mypy clean; the logging, security and edge suites (31) passed. The
+  new test fails on the previous main.
+* CI is green on main at `93ca7be`. It doesn't run Playwright (#17).
+* Agent 2's earlier E2E failures were resource starvation, not regressions:
+  * 4 parallel Playwright workers, each registration an Argon2id hash (64 MiB × 4 lanes),
+    load 9–12;
+  * registrations took 25 s, against 0.56 s alone;
+  * each failing spec passed when rerun alone;
+  * OOMKilled was false in every run.
 
-## Next steps (highest value first; issues carry owners and acceptance criteria)
-1. Agent 2, P0: #3 trusted edge (security gate), #4 auth before multipart parsing,
-   #5 invitations (migration slot M1). Then #6, #7, #8.
-2. Agent 3, P0: #9 permanent instrument identity (migration slot M2 after M1),
-   #10 corporate-action gates. Then #12 reconciliation and #11 vendor adapter (live part
-   blocked on credentials). P1: #13, #14.
-3. Lead: #16 E2E flake, #17 E2E in CI, #22 isolation hardening, #25 job-deletion
-   semantics. Later: #19 Terraform (after #3).
-4. Unassigned, queued: #15 assistant verifier and hosted eval, #18 frontend errors,
-   #20 external load test, #21 storage lifecycle, #23 frontend completeness,
-   #24 benchmarks.
+  Full-stack runs are now serialized with `make e2e-serial` (docs/COORDINATION.md).
+
+## Next steps (issues carry owners and acceptance criteria)
+1. **Agent 2:**
+   * #37 invitations (M1): needs a merge from main after #32, then lead review.
+   * Then #39 gate code items, #6 (jobs.py lease), #7 (after #27, tasks.py lease), and the
+     #8 nits.
+2. **Agent 3:**
+   * #27 corporate-action gates (tasks.py lease): needs a merge from main after #31.
+   * Then merge main into the stacked drafts #34 (#12) and #33 (#11) for review.
+   * #9 part B (delisting returns; no migration). Part C waits for M2, which opens after M1.
+   * #41 review follow-ups. #24 market-data benchmarks (quiet window only).
+3. **Lead:**
+   * integrate #37, #27, #34 and #33;
+   * #17 E2E in CI;
+   * #16 (likely parallel-worker contention; passes serially);
+   * #22 isolation hardening;
+   * #25 job-deletion semantics.
+4. **Unassigned:** #15, #18, #20, #21, #23, the benchmark half of #24. **Later:** #19
+   Terraform, after #39.
 
 ## Blockers
 No LLM API key, market-data API key or cloud credentials (docs/BLOCKERS.md).
