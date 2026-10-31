@@ -469,63 +469,245 @@ def _candidates(f: Fact) -> list[tuple[float, float]]:
 
 
 # Sentence boundaries: end punctuation followed by space, or a line break. Decimal points
-# ("0.46") are not followed by whitespace, so they never split a sentence.
-_SENTENCE = re.compile(r"(?<=[.!?;])\s+|\n+")
-# Verbs that assert a gain. A number next to one must not be supported only by a negative
-# fact: that is how a drawdown gets restated as a profit.
-_GAIN = re.compile(r"\b(gain(?:ed|s)?|rose|grew|increased|profit(?:ed|s)?|earned)\b", re.I)
+# ("0.46") are not followed by whitespace, so they never split a sentence, and neither does
+# the space before a citation ("... regimes. [F34]" keeps its citation).
+_SENTENCE = re.compile(r"(?<=[.!?;])\s+(?!\[F\d+\])|\n+")
+
+# What kind of quantity each fact is, so prose that names a quantity can only be backed by a
+# fact of that kind (#15): "Total return was 28.3% [F2]" is unsupported when F2 is the
+# drawdown, even though 28.3% is F2's magnitude. Keys not listed are unrestricted.
+_KIND_OF_KEY: list[tuple[str, str]] = [
+    ("total_return", "return"),
+    ("cagr", "return"),
+    ("excess_total_return", "return"),
+    ("benchmark_total_return", "return"),
+    ("worst_day", "return"),
+    ("cost_drag_cagr", "costs"),
+    ("total_costs", "costs"),
+    ("breakeven_cost", "costs"),
+    ("annual_turnover", "turnover"),
+    ("total_dividends", "dividends"),
+    ("max_drawdown", "drawdown"),
+    ("drawdown_", "drawdown"),
+    ("volatility", "volatility"),
+    ("tracking_error", "tracking error"),
+    ("information_ratio", "information ratio"),
+    ("sortino", "sortino"),
+    ("calmar", "calmar"),
+    ("sharpe", "sharpe"),
+    ("wf_in_sharpe", "sharpe"),
+    ("wf_oos_sharpe", "sharpe"),
+    ("sharpe_ci_", "sharpe"),
+    ("deflated_sharpe", "sharpe"),
+    ("beta", "beta"),
+    ("alpha", "alpha"),
+    ("historical_var", "var"),
+    ("historical_es", "shortfall"),
+    ("top_contributor_", "pnl"),
+    ("bottom_contributor_", "pnl"),
+    ("sessions", "sessions"),
+]
+
+# Words that name a kind of quantity in prose. Longer phrases come first.
+_KIND_WORDS: list[tuple[str, re.Pattern[str]]] = [
+    ("tracking error", re.compile(r"\btracking error\b", re.I)),
+    ("information ratio", re.compile(r"\binformation ratio\b", re.I)),
+    ("shortfall", re.compile(r"\bexpected shortfall\b|\bshortfall\b", re.I)),
+    ("var", re.compile(r"\bvalue at risk\b|\bVaR\b")),
+    ("drawdown", re.compile(r"\bdraw-?downs?\b", re.I)),
+    ("volatility", re.compile(r"\bvolatility\b|\bvol\b", re.I)),
+    ("sharpe", re.compile(r"\bsharpe\b", re.I)),
+    ("sortino", re.compile(r"\bsortino\b", re.I)),
+    ("calmar", re.compile(r"\bcalmar\b", re.I)),
+    ("beta", re.compile(r"\bbeta\b", re.I)),
+    ("alpha", re.compile(r"\balpha\b", re.I)),
+    ("turnover", re.compile(r"\bturnover\b", re.I)),
+    ("dividends", re.compile(r"\bdividends?\b", re.I)),
+    ("costs", re.compile(r"\bcosts?\b|\bfees?\b|\bcommissions?\b|\bslippage\b", re.I)),
+    ("pnl", re.compile(r"\bP&L\b|\bPnL\b|\bprofit and loss\b", re.I)),
+    ("sessions", re.compile(r"\bsessions\b|\btrading days\b", re.I)),
+    (
+        "return",
+        re.compile(
+            r"\b(?:total )?returns?\b|\breturned\b|\bCAGR\b|\bprofit(?:s|able|ed)?\b|"
+            r"\bmade\b|\bearned\b|\bgain(?:s|ed)?\b|\blost\b|\blos(?:s|ses)\b|\blosing\b",
+            re.I,
+        ),
+    ),
+]
+
+# Verbs that assert a gain or a loss govern the first number after them.
+# Verbs that assert a return's gain or loss state a sign for any figure they govern
+# ("returned 28.3%" is a gain, whatever is cited). Neutral movement verbs ("grew", "fell")
+# state a sign only for signed kinds: a drawdown that "grew to 28.3%" deepened.
+_GAIN_RETURN = re.compile(r"\b(?:gain(?:ed|s)?|profit(?:ed|s)?|earned|made|returned)\b", re.I)
+_GAIN = re.compile(r"\b(?:rose|grew|increased|up)\b", re.I)
+_LOSS_RETURN = re.compile(r"\b(?:lost|los(?:s|ses)|losing)\b", re.I)
+_LOSS = re.compile(r"\b(?:fell|declined|dropped|down|shed)\b", re.I)
+# Kinds where a gain or loss verb states the sign of the quantity itself. For a drawdown,
+# "grew to 28.3%" describes a deeper (more negative) drawdown, so verbs say nothing.
+_SIGNED_KINDS = {"return", "pnl", "alpha"}
+_LABEL_MARK = re.compile(r"\x00L(\d+)\x00")
+
+
+def _kind(f: Fact) -> str | None:
+    """The kind of quantity a fact is: from its key, else (for numeric facts) from the first
+    kind word in its label. Text facts (integrity findings) have no kind."""
+    for prefix, kind in _KIND_OF_KEY:
+        if f.key == prefix or (prefix.endswith("_") and f.key.startswith(prefix)):
+            return kind
+    if isinstance(f.value, (int, float)):
+        found = [(m.start(), kind) for kind, p in _KIND_WORDS for m in p.finditer(f.label)]
+        if found:
+            return min(found)[1]
+    return None
+
+
+Mention = tuple[int, int, str | None, "Fact | None"]
+
+
+def _mentions(body: str, cited: list[Fact]) -> list[Mention]:
+    """(start, end, kind, fact) for each quantity named in ``body``: a cited fact's own
+    label (bound to that fact) or a kind word such as "drawdown" or "returned"."""
+    out: list[Mention] = []
+    for m in _LABEL_MARK.finditer(body):
+        f = cited[int(m.group(1))]
+        out.append((m.start(), m.end(), _kind(f), f))
+    for kind, pattern in _KIND_WORDS:
+        out += [(m.start(), m.end(), kind, None) for m in pattern.finditer(body)]
+    return out
+
+
+Binding = tuple[str | None, "Fact | None"]
+
+
+def _assign(
+    mentions: list[Mention], numbers: list[tuple[int, int]]
+) -> dict[tuple[int, int], list[Binding]]:
+    """Give each mention to the adjacent number it is closest to (the following one on a
+    tie: "Sharpe 0.46, drawdown 28.3%"). A number must be supported under every mention
+    it gets, so a kind word placed after a number cannot rebind it away from the one
+    before it: in "Total return was 28.3% drawdown" both words go to 28.3%, and they
+    disagree."""
+    out: dict[tuple[int, int], list[Binding]] = {n: [] for n in numbers}
+    for m in mentions:
+        prev = [n for n in numbers if n[1] <= m[0]]
+        nxt = [n for n in numbers if n[0] >= m[1]]
+        options = []
+        if prev:
+            p = max(prev, key=lambda n: n[1])
+            options.append((m[0] - p[1], 1, p))
+        if nxt:
+            q = min(nxt, key=lambda n: n[0])
+            options.append((q[0] - m[1], 0, q))
+        if options:
+            out[min(options)[2]].append((m[2], m[3]))
+    return out
 
 
 def verify_answer(text: str, facts: list[Fact]) -> dict[str, Any]:
-    """Check that every number in ``text`` is supported by a fact.
+    """Check that every number in ``text`` is supported by a fact cited next to it.
 
-    * A sentence that cites facts must take its numbers from those facts, not from any
-      fact in the pool: "gained 39.4% [F6]" is unsupported when F6 is the Sharpe ratio,
-      even though a -39.4% drawdown exists elsewhere.
-    * Prose may state a negative fact's magnitude ("a 28.3% drawdown"), but an explicitly
-      negative number needs a negative fact, and a gain verb needs a non-negative one.
+    * A sentence that states a number must cite at least one fact, and each number must
+      come from a fact cited in that sentence, not from any fact in the pool.
+    * The number must come from the fact the sentence talks about: next to a cited fact's
+      label, only that fact; next to a word that names a kind of quantity ("returned",
+      "drawdown", "Sharpe"), only a fact of that kind. "The strategy returned 28.3% [F2]"
+      is unsupported when F2 is the -28.3% drawdown.
+    * Signs: an explicitly negative number needs a negative fact. For returns and P&L, a
+      gain verb needs a non-negative fact and a loss verb a negative one; prose may state a
+      negative fact's magnitude ("a 28.3% drawdown", "the drawdown grew to 28.3%").
     """
     by_id = {f.id: f for f in facts}
-    claims, unsupported = [], []
-    for sentence in _SENTENCE.split(text):
-        cited_here = [by_id[c] for c in re.findall(r"\[(F\d+)\]", sentence) if c in by_id]
-        scope = cited_here or facts
-        pool = [(v, tol, f) for f in scope for v, tol in _candidates(f)]
-        body = _CITE.sub(" ", _DATE.sub(" ", sentence))
+    claims: list[str] = []
+    unsupported: list[str] = []
+    # A text fact quoted in full (an integrity finding) may itself contain sentences; keep
+    # it in one piece so it stays with the citation that follows it.
+    for f in facts:
+        if isinstance(f.value, str) and f.value in text and _SENTENCE.search(f.value):
+            text = text.replace(f.value, _SENTENCE.sub("\x01", f.value))
+    for sentence in (s.replace("\x01", " ") for s in _SENTENCE.split(text)):
+        cited = list(
+            dict.fromkeys(by_id[c] for c in re.findall(r"\[(F\d+)\]", sentence) if c in by_id)
+        )
+        body = sentence
+        # A cited fact's label quoted in the sentence names that fact exactly. Longest
+        # labels first, so "Total return minus SYNIDX" is not read as "Total return".
+        for i, f in sorted(enumerate(cited), key=lambda t: -len(t[1].label)):
+            body = re.sub(re.escape(f.label), f"\x00L{i}\x00", body, flags=re.I)
+        body = _CITE.sub(" ", _DATE.sub(" ", body))
         body = re.sub(r"#\d+", " ", body)  # ordinal references such as "Drawdown #1"
         body = re.sub(r"\b\d+(?:\.\d+)?%? (?:bootstrap|confidence)", " ", body)  # "95% ..."
-        gain_ends = [g.end() for g in _GAIN.finditer(body)]
+        mentions = _mentions(body, cited)
+        verbs = {
+            name: [g.end() for g in pattern.finditer(body)]
+            for name, pattern in (
+                ("gain", _GAIN),
+                ("loss", _LOSS),
+                ("gain_return", _GAIN_RETURN),
+                ("loss_return", _LOSS_RETURN),
+            )
+        }
+        assigned = _assign(mentions, [(m.start(), m.end()) for m in _NUM.finditer(body)])
         prev_end = 0
         for m in _NUM.finditer(body):
-            # A gain verb governs the first number after it ("gained 15.2% with a 28.3%
-            # drawdown" asserts a gain of 15.2% only).
-            gain = any(prev_end <= e <= m.start() for e in gain_ends)
-            prev_end = m.end()
             raw = m.group(1)
             try:
                 x = float(raw.replace("$", "").replace(",", ""))
             except ValueError:
                 continue
-            claims.append(raw + (m.group(2) or ""))
-            ok = False
-            for v, tol, f in pool:
-                if abs(abs(x) - abs(v)) > tol:
-                    continue
-                signed = f.value if isinstance(f.value, (int, float)) else v
-                if x < 0 and signed > 0:
-                    continue  # "-15.2%" for a +15.2% fact
-                if gain and x > 0 and signed < 0 and v not in f.label_numbers:
-                    continue  # "gained 28.3%" for a -28.3% fact
-                ok = True
-                break
-            if not ok:
-                unsupported.append(raw + (m.group(2) or ""))
-    cited = set(re.findall(r"\[(F\d+)\]", text))
+            claim = raw + (m.group(2) or "")
+            claims.append(claim)
+            # A verb governs the first number after it ("gained 15.2% with a 28.3%
+            # drawdown" asserts a gain of 15.2% only).
+            said = {k: any(prev_end <= e <= m.start() for e in v) for k, v in verbs.items()}
+            prev_end = m.end()
+            bindings: list[Binding | None] = list(assigned[(m.start(), m.end())]) or [None]
+            if all(_supported(x, cited, b, said) for b in bindings):
+                continue
+            unsupported.append(claim)
+    cited_ids = set(re.findall(r"\[(F\d+)\]", text))
     known = {f.id for f in facts}
     return {
         "numeric_claims": len(claims),
         "unsupported": unsupported,
-        "unknown_citations": sorted(cited - known),
-        "cited": sorted(cited & known),
-        "grounded": not unsupported and not (cited - known),
+        "unknown_citations": sorted(cited_ids - known),
+        "cited": sorted(cited_ids & known),
+        "grounded": not unsupported and not (cited_ids - known),
     }
+
+
+def _supported(
+    x: float,
+    cited: list[Fact],
+    bound: tuple[str | None, Fact | None] | None,
+    said: dict[str, bool],
+) -> bool:
+    """Whether a cited fact supports the number ``x`` as the sentence states it, given the
+    gain and loss verbs (``said``) that govern it."""
+    if bound is not None and bound[1] is not None:
+        scope = [bound[1]]  # next to a fact's own label: that fact, nothing else
+    elif bound is not None and bound[0] is not None:
+        scope = [f for f in cited if _kind(f) in (bound[0], None)]
+    else:
+        scope = cited
+    for f in scope:
+        kind = _kind(f)
+        for v, tol in _candidates(f):
+            if abs(abs(x) - abs(v)) > tol:
+                continue
+            if isinstance(f.value, str) or v in f.label_numbers:
+                return True  # quoted text, or a number from the label template
+            signed = float(f.value) if isinstance(f.value, (int, float)) else v
+            if x < 0 and signed > 0:
+                continue  # "-15.2%" for a +15.2% fact
+            # Unknown kinds keep the conservative rule: any verb states the sign.
+            signed_kind = kind in _SIGNED_KINDS or kind is None
+            gain = said["gain_return"] or (signed_kind and said["gain"])
+            loss = said["loss_return"] or (signed_kind and said["loss"])
+            if x > 0 and gain and signed < 0:
+                continue  # "returned 28.3%" for a -28.3% fact
+            if x > 0 and loss and signed > 0:
+                continue  # "lost 15.2%" for a +15.2% fact
+            return True
+    return False

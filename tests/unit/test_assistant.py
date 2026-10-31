@@ -1,3 +1,5 @@
+import re
+
 import pytest
 
 from quantlab.analytics.summary import analyze_backtest
@@ -7,6 +9,7 @@ from quantlab.assistant.evals import (
     FailingProvider,
     FaithfulProvider,
     HallucinatingProvider,
+    LabelBypassProvider,
     MalformedProvider,
     MisattributingProvider,
     evaluate,
@@ -177,3 +180,82 @@ def test_label_text_is_never_numeric_evidence():
     ]
     assert not verify_answer("It returned 99% [F1]", f)["grounded"]
     assert verify_answer("VaR (95%) was 2.00% [F2]", f)["grounded"]
+
+
+ISSUE_15_FACTS = [
+    Fact("F1", "sharpe", "Sharpe ratio", 0.4567, "ratio", "s"),
+    Fact("F2", "max_drawdown", "Maximum drawdown", -0.283, "pct", "d"),
+    Fact("F3", "total_return", "Total return (net of costs)", 0.152, "pct", "t"),
+]
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "Total return was 28.3% [F2].",
+        "The strategy returned 28.3% [F2].",
+        "The strategy made a 28.3% profit [F2].",
+        "The strategy returned 28.3%.",
+        "The strategy lost 15.2% [F3].",
+        "Sharpe was 28.3% [F2].",
+        "The strategy returned 28.3% [F2] [F3].",
+        # A kind word after the number must not rebind it (security review of #15).
+        "Total return was 28.3% drawdown [F2].",
+        "The strategy returned 28.3% drawdown-adjusted [F2].",
+        # Return verbs state a sign whatever the number is bound to.
+        "The portfolio gained a 28.3% drawdown [F2].",
+        "The strategy made 28.3% at its worst drawdown [F2].",
+    ],
+)
+def test_issue_15_bypasses_are_rejected(text):
+    """Each was accepted by the PR #1 verifier: the number matches a fact's magnitude, but
+    the sentence names the wrong quantity, contradicts its sign, or cites nothing."""
+    assert not verify_answer(text, ISSUE_15_FACTS)["grounded"], text
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "The drawdown grew to 28.3% [F2].",
+        "Max drawdown increased to 28.3% [F2].",
+        "Total return was 15.2% [F3].",
+        "The strategy returned 15.2% [F3].",
+        "The strategy made a 15.2% profit [F3].",
+        "It returned 15.2% [F3] with a 28.3% drawdown [F2] and a Sharpe of 0.46 [F1].",
+        "Maximum drawdown was -28.30% [F2].",
+        "Total return (net of costs): 15.20% [F3]",
+    ],
+)
+def test_issue_15_legitimate_phrasings_pass(text):
+    """Including the two false rejects from the issue ("grew"/"increased" for a deeper
+    drawdown)."""
+    assert verify_answer(text, ISSUE_15_FACTS)["grounded"], text
+
+
+@pytest.mark.parametrize("variant", sorted(LabelBypassProvider.TEMPLATES))
+def test_label_bypass_providers_never_reach_the_user(facts, variant):
+    out = evaluate(facts, LabelBypassProvider(variant))
+    assert out["unsupported_claims_shown"] == 0
+    assert out["passed"] == out["cases"]
+    in_scope = [
+        r for r, c in zip(out["rows"], CASES, strict=True) if not c.advice and not c.out_of_scope
+    ]
+    assert all(r["provider_used"] == "deterministic" for r in in_scope)
+
+
+@pytest.mark.parametrize("variant", sorted(LabelBypassProvider.TEMPLATES))
+def test_label_bypasses_reuse_real_figures(facts, variant):
+    """They are not hallucinations: every number they state is some fact's magnitude, so a
+    magnitude-only check accepts them. Only label, sign and citation binding catch them."""
+    from quantlab.assistant.service import system_prompt
+
+    text = LabelBypassProvider(variant).complete(system_prompt(facts), "How did it do?")
+    numbers = [float(n) for n in re.findall(r"\d+(?:\.\d+)?", re.sub(r"\[F\d+\]", "", text))]
+    assert numbers
+    magnitudes = [
+        abs(f.value) * (100 if f.unit == "pct" else 1)
+        for f in facts
+        if isinstance(f.value, (int, float))
+    ]
+    for n in numbers:
+        assert any(abs(n - m) <= 0.0051 for m in magnitudes), (text, n)

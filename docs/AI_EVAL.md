@@ -53,6 +53,58 @@ unrelated fact; semantic checking of that kind needs a hosted-model evaluation. 
 case because its naive keyword matching cites facts outside the requested topic; that is
 a property of the stand-in, and shows the suite measures relevance as well as accuracy.
 
+## Verifier binding (2026-10-31, #15)
+
+The PR #1 verifier accepted a number if its magnitude matched a fact cited in the same
+sentence, applied sign checks only after a short list of gain verbs, and matched uncited
+sentences against every fact. These sentences passed it, given F1 Sharpe 0.4567,
+F2 maximum drawdown -28.3% and F3 total return +15.2%:
+
+| Sentence | Old verifier | New verifier | Why it is wrong |
+|---|---|---|---|
+| Total return was 28.3% [F2]. | accepted | rejected | names a return, cites the drawdown |
+| The strategy returned 28.3% [F2]. | accepted | rejected | same, with a return verb |
+| The strategy made a 28.3% profit [F2]. | accepted | rejected | same |
+| The strategy returned 28.3%. | accepted | rejected | no citation |
+| The strategy lost 15.2% [F3]. | accepted | rejected | "lost" for a +15.2% return |
+| The drawdown grew to 28.3% [F2]. | **rejected** | accepted | correct: a deeper drawdown |
+| Max drawdown increased to 28.3% [F2]. | **rejected** | accepted | correct |
+
+The new rules (`assistant/grounding.py`, `verify_answer`):
+* A sentence that states a number must cite a fact. Each number must come from a fact
+  cited in that sentence.
+* Each number is bound to what the sentence says it is. A cited fact's own label next to
+  it binds it to that fact. A word naming a kind of quantity ("returned", "drawdown",
+  "Sharpe", "costs") binds it to facts of that kind. Each word goes to the adjacent
+  number it is closest to, and a number must satisfy every word it gets. So a kind word
+  placed after a number cannot rebind it ("Total return was 28.3% drawdown [F2]" is
+  rejected; a security review found that case in an earlier draft).
+* Signs: return verbs ("returned", "made", "earned", "gained", "profit", "lost") state a
+  sign for whatever they govern. Neutral movement verbs ("grew", "fell") state one only
+  for returns, P&L and alpha, so a drawdown may "grow".
+
+Adversarial stand-ins (`LabelBypassProvider` in `assistant/evals.py`) write each bypass
+with real figures from the evidence. Every number they state is some fact's magnitude,
+which a test checks, so a magnitude check alone cannot catch them. Run on the same facts
+as the results table (momentum on synthetic data, 42 facts), counting in-scope answers
+whose provider text reached the user rather than the deterministic fallback:
+
+| Provider | Old verifier | New verifier |
+|---|---|---|
+| bypass-label | 10/10 shown | 0/10 |
+| bypass-returned | 10/10 shown | 0/10 |
+| bypass-profit | 10/10 shown | 0/10 |
+| bypass-loss | 10/10 shown | 0/10 |
+| bypass-uncited | 0/10 (the service already rejected uncited answers) | 0/10 |
+| faithful (no false rejects) | 10/10 shown | 10/10 shown |
+
+With the new verifier every provider passes 14/14, except the faithful stand-in (13/14,
+unchanged: its keyword matching cites outside the requested topic). The deterministic
+engine passes 14/14 with 100 numeric claims, down from 102: numbers inside a quoted
+fact label, such as the 95 in "VaR (95%)", are no longer counted as claims. The caveat
+above still applies: these scores use the product verifier. The independent judge and
+the hosted-model run in #15 remain blocked on `QUANTLAB_ANTHROPIC_API_KEY`.
+
 ## Not yet measured
 
 No hosted model was evaluated: no LLM credentials are configured in this environment
