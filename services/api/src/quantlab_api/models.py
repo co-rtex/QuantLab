@@ -143,6 +143,8 @@ class Instrument(Base):
             "dataset_version_id",
             "symbol",
             "instrument_id",
+            # Named explicitly, off the uq_<table>_<first column> convention: that would
+            # give "uq_instruments_dataset_version_id", the old two-column key's name.
             name="uq_instruments_version_symbol_instrument",
             postgresql_nulls_not_distinct=True,
         ),

@@ -24,6 +24,8 @@ depends_on: str | Sequence[str] | None = None
 
 TABLE = "instruments"
 OLD = "uq_instruments_dataset_version_id"
+# Deliberately not the naming convention's uq_<table>_<first column>, which would reuse
+# OLD's name for a different key (see models.Instrument).
 NEW = "uq_instruments_version_symbol_instrument"
 
 
