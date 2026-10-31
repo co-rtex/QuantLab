@@ -16,6 +16,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+import os
 import subprocess
 import sys
 import time
@@ -30,7 +31,9 @@ import numpy as np
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import harness
 
-API = "http://localhost:8000"
+# Default: the main checkout's stack. For a worktree's stack, set QUANTLAB_BENCH_API to
+# its API port (QUANTLAB_API_PORT from scripts/stack-env.sh).
+API = os.environ.get("QUANTLAB_BENCH_API", "http://localhost:8000")
 OUT = Path(__file__).resolve().parent / "results"
 
 
