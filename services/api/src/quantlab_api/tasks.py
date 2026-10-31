@@ -238,6 +238,134 @@ def synthetic_dataset_task(ctx: JobContext) -> Finalizer:
     return finalize
 
 
+@handler("dataset.vendor")
+def vendor_dataset_task(ctx: JobContext) -> Finalizer:
+    """Version daily data from the configured licensed vendor (#11). Inert by default.
+
+    Refuses permanently unless a registered provider, its key, licence and plan are all
+    configured: the vendor and licence are the user's choice. The payload names only the
+    dataset, the window and optional tickers. The key is read from settings when the job
+    runs and goes only into the HTTP client's Authorization header, so it is never in the
+    payload, a heartbeat, a log line, provenance or an error message.
+
+    Every security is identified by a permanent id (delisted ones included, using the
+    vendor's current active flags), fetched across its tickers, checked by the #10 gates
+    and stored with its symbol history and master. If any security fails permanently the
+    job fails rather than storing a partial universe, which would be survivorship-biased.
+    """
+    from quantlab.data.identity import symbols_as_of
+    from quantlab.data.providers import PermanentProviderError, ingest
+    from quantlab_api import marketdata
+
+    p = ctx.payload
+    settings = get_settings()
+    try:
+        vendor = marketdata.configured_vendor(settings)
+    except marketdata.MarketDataNotConfiguredError as exc:
+        raise PermanentJobError(str(exc)) from None
+    start, end = pd.Timestamp(p["start"]), pd.Timestamp(p["end"])
+    if not start <= end:
+        raise PermanentJobError("start must not be after end")
+    ctx.heartbeat(0.05, "loading the security master", force=True)
+    try:
+        ref = pd.concat(
+            [vendor.reference(active=True), vendor.reference(active=False)], ignore_index=True
+        )
+    except PermanentProviderError as exc:  # messages are already redacted by the client
+        raise PermanentJobError(f"vendor reference data: {exc}") from None
+    # A TransientProviderError (rate limit, outage) propagates and the job is retried.
+    wanted = sorted({str(t).upper() for t in p.get("tickers") or []})
+    if wanted:
+        missing = sorted(set(wanted) - set(ref["ticker"]))
+        if missing:
+            raise PermanentJobError(
+                f"{len(missing)} requested tickers not in the vendor's reference data: "
+                + ", ".join(missing[:20])
+            )
+        # Keep every row of each matching security, not only the rows of the named ticker:
+        # a renamed security's old ticker row is inactive, and alone it reads as delisted.
+        figis = ref.loc[ref["ticker"].isin(wanted), "share_class_figi"].dropna()
+        named = ref["ticker"].isin(wanted) & ref["share_class_figi"].isna()
+        ref = ref[ref["share_class_figi"].isin(set(figis)) | named]
+    # Checked before identity(), which makes one request per security.
+    n_securities = int(ref["share_class_figi"].nunique())
+    if n_securities > settings.max_dataset_assets:
+        raise PermanentJobError(
+            f"{n_securities} securities exceed the configured limit "
+            f"({settings.max_dataset_assets}); name tickers to narrow the request"
+        )
+    try:
+        history, master = vendor.identity(ref)
+    except PermanentProviderError as exc:
+        raise PermanentJobError(f"vendor reference data: {exc}") from None
+    ids = sorted(history["instrument_id"].unique())
+    if not ids:
+        raise PermanentJobError("no identifiable securities for this request")
+
+    def progress(k: int, n: int, _sym: str) -> None:
+        ctx.heartbeat(0.1 + 0.7 * k / max(n, 1), f"fetched {k} of {n} securities")
+
+    result = ingest(vendor.by_instrument(history), ids, start, end, on_progress=progress)
+    if result.symbols_failed:
+        sample = "; ".join(f"{k}: {v}" for k, v in list(result.symbols_failed.items())[:3])
+        if any(v.startswith("TransientProviderError") for v in result.symbols_failed.values()):
+            # Retryable (the job runs again from scratch; nothing has been stored).
+            raise RuntimeError(f"vendor temporarily failing for some securities ({sample})")
+        raise PermanentJobError(
+            f"{len(result.symbols_failed)} of {len(ids)} securities failed ({sample}); "
+            "nothing was stored, because a partial universe would be survivorship-biased"
+        )
+    # Ingested by permanent id; stored by the ticker valid on each date, with the history.
+    bars = result.bars.assign(
+        symbol=symbols_as_of(history, result.bars["symbol"], result.bars["date"])
+    )
+    actions = result.actions.assign(
+        symbol=symbols_as_of(history, result.actions["symbol"], result.actions["ex_date"])
+    )
+    if bars["symbol"].isna().any() or actions["symbol"].isna().any():
+        raise PermanentJobError("vendor data dated outside its ticker intervals")
+    provenance = {
+        **vendor.describe(),
+        "source": "licensed vendor",
+        "window": [str(start.date()), str(end.date())],
+        "tickers": wanted or None,
+        # Full counts, with a sample: securities left out of the version and why.
+        "unidentified_count": len(unidentified := vendor.unidentified(ref)),
+        "unidentified": unidentified[:50],
+        "skipped_no_composite_figi_count": len(skipped := list(getattr(vendor, "skipped", []))),
+        "skipped_no_composite_figi": skipped[:50],
+        # Not part of the version hash (content only): an identical re-fetch reuses the
+        # existing version, which keeps the provenance of its first fetch.
+        "requests": dict(vendor.api.stats),
+        "fetched_at": datetime.now(UTC).isoformat(),
+    }
+    ctx.heartbeat(0.85, "validating and writing dataset version", force=True)
+    quality = gate_quality(bars, actions)
+    dataset_id = uuid.UUID(p["dataset_id"])
+
+    def finalize(db: Session) -> dict[str, Any]:
+        ds = db.get(Dataset, dataset_id)
+        if ds is None:
+            raise PermanentJobError("dataset was deleted")
+        dv = register_version(
+            db,
+            ds,
+            bars,
+            actions,
+            provenance,
+            None,
+            quality=quality,
+            symbol_history=history,
+            master=master,
+        )
+        return {
+            "message": f"dataset version {dv.version_hash[:12]} ready ({dv.quality_status})",
+            "dataset_version_id": str(dv.id),
+        }
+
+    return finalize
+
+
 @dataclass(frozen=True)
 class ExperimentInputs:
     """What a job simulates: bars and actions keyed by instrument, and the config with
