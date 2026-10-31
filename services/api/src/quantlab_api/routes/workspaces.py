@@ -8,11 +8,12 @@ from sqlalchemy.orm import Session
 
 from quantlab_api.config import get_settings
 from quantlab_api.errors import ApiError
+from quantlab_api.invitations import MemberRoleIn
 from quantlab_api.models import AuditEvent, Role, User, Workspace, WorkspaceMember
+from quantlab_api.routes.invitations import owner_router as invitation_routes
 from quantlab_api.schemas import (
     MAX_OFFSET,
     AuditOut,
-    MemberIn,
     MemberOut,
     Page,
     WorkspaceIn,
@@ -126,26 +127,29 @@ def _locked_owner_count(db: Session, workspace_id: uuid.UUID) -> int:
     )
 
 
-@router.post("/{workspace_id}/members", response_model=MemberOut, status_code=201)
-def add_member(
-    workspace_id: uuid.UUID, body: MemberIn, user: CurrentUser, db: DB, request: Request
+# Members join only by accepting an invitation (routes/invitations.py, #5). Adding an
+# account directly by email let any owner probe which addresses are registered and add
+# people to a workspace without their consent.
+
+
+@router.patch("/{workspace_id}/members/{user_id}", response_model=MemberOut)
+def set_member_role(
+    workspace_id: uuid.UUID,
+    user_id: uuid.UUID,
+    body: MemberRoleIn,
+    user: CurrentUser,
+    db: DB,
+    request: Request,
 ) -> MemberOut:
+    """Change an existing member's role."""
     require_workspace(db, user, workspace_id, Role.owner)
-    target = db.scalar(select(User).where(User.email == body.email.lower()))
-    if target is None:
-        raise ApiError(404, "user_not_found", "No user with that email")
-    m = db.get(WorkspaceMember, (workspace_id, target.id))
-    if m is None:
-        m = WorkspaceMember(workspace_id=workspace_id, user_id=target.id, role=Role(body.role))
-        db.add(m)
-    else:
-        if (
-            m.role == Role.owner
-            and body.role != "owner"
-            and _locked_owner_count(db, workspace_id) <= 1
-        ):
-            raise ApiError(409, "last_owner", "A workspace needs at least one owner")
-        m.role = Role(body.role)
+    m = db.get(WorkspaceMember, (workspace_id, user_id), with_for_update=True)
+    target = db.get(User, user_id)
+    if m is None or target is None:
+        raise ApiError(404, "not_found", "Member not found")
+    if m.role == Role.owner and body.role != "owner" and _locked_owner_count(db, workspace_id) <= 1:
+        raise ApiError(409, "last_owner", "A workspace needs at least one owner")
+    m.role = Role(body.role)
     audit(
         db,
         request,
@@ -153,7 +157,7 @@ def add_member(
         user=user,
         workspace_id=workspace_id,
         target_type="user",
-        target_id=target.id,
+        target_id=user_id,
         role=body.role,
     )
     db.commit()
@@ -200,3 +204,6 @@ def audit_log(
     return Page(
         items=[AuditOut.model_validate(r) for r in rows], total=total, limit=limit, offset=offset
     )
+
+
+router.include_router(invitation_routes)

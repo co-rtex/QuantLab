@@ -7,7 +7,7 @@ from datetime import UTC, datetime, timedelta
 import jwt
 
 from quantlab_api.config import get_settings
-from tests.integration.conftest import register, workspace_id
+from tests.integration.conftest import join_workspace, register, workspace_id
 
 
 def test_register_login_me_logout(client):
@@ -82,12 +82,7 @@ def test_roles_enforced(client):
     owner = register(client, "owner@example.com")
     viewer = register(client, "viewer@example.com")
     ws = workspace_id(client, owner)
-    r = client.post(
-        f"/api/v1/workspaces/{ws}/members",
-        headers=owner,
-        json={"email": "viewer@example.com", "role": "viewer"},
-    )
-    assert r.status_code == 201
+    join_workspace(client, owner, ws, viewer, "viewer@example.com", "viewer")
     assert client.get(f"/api/v1/workspaces/{ws}", headers=viewer).json()["role"] == "viewer"
     create = client.post(
         f"/api/v1/workspaces/{ws}/strategies",

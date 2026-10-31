@@ -15,6 +15,19 @@ interface Member {
   display_name: string;
   role: string;
 }
+interface Invitation {
+  id: string;
+  email: string;
+  role: string;
+  status: string;
+  expires_at: string;
+}
+interface MailboxItem {
+  to: string;
+  subject: string;
+  accept_path: string;
+  sent_at: string;
+}
 interface AuditEvent {
   id: string;
   action: string;
@@ -31,6 +44,9 @@ export default function SettingsPage() {
   const isOwner = workspace?.role === "owner";
   const members = useApi<Member[]>(ws ? `/workspaces/${ws}/members` : null);
   const audit = useApi<Page<AuditEvent>>(ws && isOwner ? `/workspaces/${ws}/audit?limit=30` : null);
+  const invitations = useApi<Invitation[]>(ws && isOwner ? `/workspaces/${ws}/invitations` : null);
+  // Development only (404 in production): stands in for the email an invitee would receive.
+  const mailbox = useApi<MailboxItem[]>("/auth/invitations/dev-mailbox");
   const [err, setErr] = useState<ApiError>();
   const [msg, setMsg] = useState<string>();
 
@@ -40,13 +56,36 @@ export default function SettingsPage() {
     const f = new FormData(form);
     setErr(undefined);
     try {
-      await api(`/workspaces/${ws}/members`, { method: "POST", json: { email: f.get("email"), role: f.get("role") } });
+      await api(`/workspaces/${ws}/invitations`, { method: "POST", json: { email: f.get("email"), role: f.get("role") } });
       form.reset();
-      members.reload();
-      setMsg("Member added.");
+      invitations.reload();
+      setMsg(`Invitation sent to ${f.get("email")}. They join once they accept it.`);
     } catch (x) {
       setErr(x as ApiError);
     }
+  }
+
+  async function revoke(id: string) {
+    setErr(undefined);
+    try {
+      await api(`/workspaces/${ws}/invitations/${id}`, { method: "DELETE" });
+      invitations.reload();
+      setMsg("Invitation withdrawn.");
+    } catch (x) {
+      setErr(x as ApiError);
+    }
+  }
+
+  async function setRole(m: Member, role: string) {
+    setErr(undefined);
+    try {
+      await api(`/workspaces/${ws}/members/${m.user_id}`, { method: "PATCH", json: { role } });
+      setMsg(`${m.display_name} is now ${role === "owner" ? "an" : "a"} ${role}.`);
+      await refresh();
+    } catch (x) {
+      setErr(x as ApiError);
+    }
+    members.reload();
   }
 
   async function createWorkspace(e: FormEvent<HTMLFormElement>) {
@@ -93,7 +132,22 @@ export default function SettingsPage() {
                 <tr key={m.user_id}>
                   <td>{m.display_name}</td>
                   <td className="text-ink-2">{m.email}</td>
-                  <td>{m.role}</td>
+                  <td>
+                    {isOwner ? (
+                      <select
+                        aria-label={`Role of ${m.display_name}`}
+                        value={m.role}
+                        onChange={(e) => setRole(m, e.target.value)}
+                        className="field py-0.5"
+                      >
+                        <option value="viewer">viewer</option>
+                        <option value="editor">editor</option>
+                        <option value="owner">owner</option>
+                      </select>
+                    ) : (
+                      m.role
+                    )}
+                  </td>
                 </tr>
               ))}
             </tbody>
@@ -101,7 +155,7 @@ export default function SettingsPage() {
           {isOwner && (
             <form onSubmit={invite} className="mt-4 flex flex-wrap items-end gap-2 text-sm">
               <label className="min-w-56 flex-1">
-                <span className="mb-1 block">Add an existing user by email</span>
+                <span className="mb-1 block">Invite by email</span>
                 <input name="email" type="email" required className="field" />
               </label>
               <label>
@@ -112,8 +166,39 @@ export default function SettingsPage() {
                   <option value="owner">Owner</option>
                 </select>
               </label>
-              <button className="btn btn-primary">Add member</button>
+              <button className="btn btn-primary">Send invitation</button>
             </form>
+          )}
+          {isOwner && invitations.data && invitations.data.length > 0 && (
+            <div className="mt-4">
+              <h3 className="mb-1 text-sm font-semibold">Pending invitations</h3>
+              <table className="data">
+                <thead>
+                  <tr>
+                    <th>Email</th>
+                    <th>Role</th>
+                    <th>Expires</th>
+                    <th>
+                      <span className="sr-only">Actions</span>
+                    </th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {invitations.data.map((i) => (
+                    <tr key={i.id}>
+                      <td className="text-ink-2">{i.email}</td>
+                      <td>{i.role}</td>
+                      <td>{i.status === "expired" ? "expired" : dateTime(i.expires_at)}</td>
+                      <td>
+                        <button className="btn btn-quiet py-0.5" onClick={() => revoke(i.id)}>
+                          Withdraw
+                        </button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
           )}
           <p className="mt-3 text-xs text-ink-3">Viewers can read results. Editors can run experiments. Owners manage members and see the audit log.</p>
         </Panel>
@@ -133,6 +218,20 @@ export default function SettingsPage() {
               Sign out on all devices
             </button>
           </Panel>
+          {mailbox.data && mailbox.data.length > 0 && (
+            <Panel title="Invitations to you" aside="Development mailbox">
+              <ul className="space-y-2 text-sm">
+                {mailbox.data.map((m) => (
+                  <li key={m.accept_path}>
+                    <a href={m.accept_path} className="underline">
+                      {m.subject}
+                    </a>
+                    <span className="ml-2 text-xs text-ink-3">{dateTime(m.sent_at)}</span>
+                  </li>
+                ))}
+              </ul>
+            </Panel>
+          )}
           <Panel title="New workspace">
             <form onSubmit={createWorkspace} className="flex gap-2 text-sm">
               <label className="flex-1">

@@ -6,6 +6,7 @@ from sqlalchemy import select
 from quantlab_api.config import get_settings
 from quantlab_api.errors import ApiError
 from quantlab_api.models import Role, User, Workspace, WorkspaceMember
+from quantlab_api.routes.invitations import invitee_router as invitee_routes
 from quantlab_api.schemas import LoginIn, RegisterIn, TokenOut, UserOut
 from quantlab_api.security import (
     COOKIE_NAME,
@@ -122,3 +123,6 @@ def logout(
 @router.get("/me", response_model=UserOut)
 def me(user: CurrentUser) -> User:
     return user
+
+
+router.include_router(invitee_routes)

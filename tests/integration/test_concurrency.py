@@ -7,7 +7,7 @@ from collections import Counter
 from collections.abc import Callable
 from typing import Any
 
-from tests.integration.conftest import register, workspace_id
+from tests.integration.conftest import join_workspace, register, workspace_id
 
 
 def _race(n: int, call: Callable[[Any, int], Any]) -> list[Any]:
@@ -115,12 +115,7 @@ def test_two_owners_demoting_or_removing_each_other_leave_one_owner(client):
                 "a": client.get("/api/v1/auth/me", headers=a).json()["id"],
                 "b": client.get("/api/v1/auth/me", headers=b).json()["id"],
             }
-            r = client.post(
-                f"/api/v1/workspaces/{ws}/members",
-                headers=a,
-                json={"email": f"b-{tag}@example.com", "role": "owner"},
-            )
-            assert r.status_code == 201, r.text
+            join_workspace(client, a, ws, b, f"b-{tag}@example.com", "owner")
             # Each owner targets the other one.
             plan = [(a, "b"), (b, "a")]
 
@@ -130,14 +125,14 @@ def test_two_owners_demoting_or_removing_each_other_leave_one_owner(client):
                     return c.delete(
                         f"/api/v1/workspaces/{ws}/members/{uid[other]}", headers=h
                     ).status_code
-                return c.post(
-                    f"/api/v1/workspaces/{ws}/members",
+                return c.patch(
+                    f"/api/v1/workspaces/{ws}/members/{uid[other]}",
                     headers=h,
-                    json={"email": f"{other}-{tag}@example.com", "role": "viewer"},
+                    json={"role": "viewer"},
                 ).status_code
 
             codes = sorted(_race(2, act))
-            assert codes not in ([201, 201], [204, 204]), (action, codes)
+            assert codes not in ([200, 200], [204, 204]), (action, codes)
             assert _owner_count(ws) == 1, (action, codes)
 
 
