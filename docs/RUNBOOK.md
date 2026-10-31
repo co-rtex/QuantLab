@@ -42,23 +42,49 @@ at this Redis.
 
 ## Incidents
 
+Job timing runs on PostgreSQL's clock, not any host's (#130). That covers leases,
+heartbeats, retry backoffs, the reaper's cutoffs, claims and `created_at`. When reading
+these columns, compare them with `SELECT now()` in the database, not with `date` on a host.
+A worker, reaper or API host with a skewed clock no longer moves any job deadline.
+
 ### Jobs stuck in `queued`
-1. `GET /api/v1/ready`: if Redis is down, submissions are still recorded durably.
-2. Restore Redis; the reaper re-delivers queued jobs older than 2 minutes
-   (`reaper_cycle redelivered=N`). Duplicate deliveries are harmless (atomic claim).
-3. If no reaper is running, run `quantlab-cli reaper --interval 15`, or execute one job
-   synchronously for diagnosis: `quantlab-cli run-job <job-id>`.
+0. **Check it isn't waiting out a retry.** A job whose `message` reads
+   `retrying in Ns after <error>` is in its backoff: 2 s, then 4 s, and so on, never more
+   than 60 s. It isn't stuck. Its `jobs.not_before` column holds when it may run (#123), and
+   no worker claims it before then, however early a delivery arrives.
+1. `GET /api/v1/ready`: if Redis is down, submissions are still recorded durably. Redis
+   requires AUTH (#115). A replacement Redis must use the same `QUANTLAB_REDIS_PASSWORD`
+   (`--requirepass`), or readiness stays 503 with `ready_check_failed component=redis` and
+   an authentication error, and nothing can be enqueued.
+2. Restore Redis. The reaper then re-delivers each queued job (`reaper_cycle
+   redelivered=N`) once all of these hold, in database time:
+   * it was created more than 2 minutes ago;
+   * its last delivery or heartbeat was more than 2 minutes ago;
+   * its backoff, if any, has passed.
+
+   Duplicate deliveries are harmless (atomic claim).
+3. If no reaper is running, run `quantlab-cli reaper --interval 15`. To execute one job
+   synchronously for diagnosis, use `quantlab-cli run-job <job-id>`. It goes through the
+   same claim as a worker, so it prints `skipped` and runs nothing for a job that isn't
+   claimable: one still in its backoff, one cancelled, or one another worker holds a live
+   lease on.
 
 ### Jobs stuck in `running`
-A worker died mid-job. Its lease (default 60 s) expires; the reaper requeues the job (or
-fails it once `max_attempts` is reached, or marks it `timed_out` past `timeout_seconds`).
+A worker died mid-job. Its lease (default 60 s, `QUANTLAB_JOB_LEASE_SECONDS`) expires in
+database time. The reaper then does one of four things:
+* marks the job `cancelled` if a cancel was requested;
+* marks it `timed_out` once it has run past `timeout_seconds`;
+* fails it once `max_attempts` is reached;
+* otherwise requeues it to run at once, with no backoff.
+
 A late heartbeat or commit from the dead worker is fenced out by the attempt counter, so
 no duplicate result can be written.
 
 ### A job keeps failing
 `GET /api/v1/jobs/{id}` → `error.type`, `error.message`, `error.trace` and `retryable`.
-Permanent errors (invalid input, missing dataset) are not retried. Fix the input and
-submit a new experiment; results of failed jobs are never stored.
+Retryable errors are retried with the backoff above until `max_attempts`. Permanent
+errors (invalid input, missing dataset) are not retried. Fix the input and submit a new
+experiment; results of failed jobs are never stored.
 
 ### 429 `too_many_jobs` on submissions
 Queued plus running jobs are capped per workspace (`QUANTLAB_MAX_ACTIVE_JOBS_PER_WORKSPACE`,
@@ -145,8 +171,13 @@ Deleting a workspace removes its files after the database commit (#21,
   secret, or delete the file after a restore to rotate the key (signs everyone out). Dataset
   versions are content-addressed; after a restore, `DatasetStore.verify()` recomputes each
   hash to detect corruption.
-* Redis holds only queue messages and caches. After loss, the reaper re-delivers queued jobs
-  from PostgreSQL; caches refill on demand.
+* Redis holds no durable state: only queue messages (including retries scheduled for later
+  delivery), the login rate-limit counters, and caches. After a loss:
+  * the reaper re-delivers queued jobs from PostgreSQL, a retry once its backoff has passed;
+  * rate limits start again from zero;
+  * caches refill on demand.
+
+  A replacement Redis needs the same password (see "Jobs stuck in `queued`").
 
 ## Configuration checklist for production
 
@@ -154,10 +185,12 @@ Deleting a workspace removes its files after the database commit (#21,
 migrations) unless `QUANTLAB_COOKIE_SECURE=true` and the Redis URL carries a real password
 (16+ characters, from `QUANTLAB_REDIS_PASSWORD` in compose; #115). The **API** also
 refuses unless `QUANTLAB_JWT_SECRET` is a real secret (≥ 32 characters, no placeholder
-words) and `QUANTLAB_METRICS_TOKEN` is set. Workers and the reaper never sign tokens and
-do not need either (#117); without the key a process fails closed instead of using a
-development key. Terminate TLS at the trusted edge (below). Run migrations
+words) and `QUANTLAB_METRICS_TOKEN` has 16+ characters. Workers and the reaper never sign
+tokens and do not need either (#117); without the key a process fails closed instead of
+using a development key. Terminate TLS at the trusted edge (below). Run migrations
 (`alembic -c services/api/alembic.ini upgrade head`) before starting new API versions.
+Keep every clock synchronised (NTP), the database server's above all: every job deadline
+follows it (#130). Hosts' clocks still date tokens and the storage sweep's file times.
 
 In production, login and registration accept only requests that arrive through the web
 tier (a trusted proxy); a direct call to the API, such as
