@@ -194,6 +194,8 @@ class JobOut(ORM):
     error: dict[str, Any] | None
     created_at: datetime
     started_at: datetime | None
+    # The current (or last) attempt's claim; timeout_seconds applies per attempt (#167).
+    attempt_started_at: datetime | None = None
     finished_at: datetime | None
     payload: dict[str, Any]
 

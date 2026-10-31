@@ -324,7 +324,12 @@ class Job(Base):
     # its own reading of that clock, so an API host running fast must not push a job whose
     # first delivery failed past the redelivery cutoff.
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=func.now())
+    # When the job was first claimed, kept across retries.
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # When the current attempt was claimed: timeout_seconds applies to each attempt, so time
+    # spent waiting for a worker between attempts does not count (#167). NULL: not set
+    # (rows from before it existed).
+    attempt_started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 
