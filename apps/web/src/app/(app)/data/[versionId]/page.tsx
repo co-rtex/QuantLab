@@ -106,7 +106,7 @@ export default function VersionPage() {
               </thead>
               <tbody>
                 {inst.data?.items.map((i) => (
-                  <tr key={i.symbol} className={i.symbol === active ? "bg-cobalt-soft" : ""}>
+                  <tr key={`${i.symbol}-${i.instrument_id ?? ""}`} className={i.symbol === active ? "bg-cobalt-soft" : ""}>
                     <td>
                       <button className="text-cobalt hover:underline" onClick={() => setSymbol(i.symbol)}>
                         {i.symbol}

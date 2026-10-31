@@ -85,6 +85,8 @@ export interface Instrument {
   last_date: string;
   delisted: boolean;
   rows: number;
+  // One catalog row per (ticker, instrument): a reused ticker appears once per issuer.
+  instrument_id?: string | null;
 }
 export interface Job {
   id: string;

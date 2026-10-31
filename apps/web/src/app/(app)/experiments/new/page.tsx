@@ -75,7 +75,8 @@ function Builder() {
   const [err, setErr] = useState<ApiError>();
   const [busy, setBusy] = useState(false);
   const entry = catalog.data?.find((c) => c.key === key);
-  const indexSymbols = useMemo(() => inst.data?.items.filter((i) => i.asset_class === "index_fund").map((i) => i.symbol) ?? [], [inst.data]);
+  const indexSymbols = useMemo(() => tickers(inst.data?.items, true), [inst.data]);
+  const tradable = useMemo(() => tickers(inst.data?.items, false), [inst.data]);
   const version = versions.data?.find((v) => v.id === dvId);
 
   async function submit(e: FormEvent<HTMLFormElement>) {
@@ -85,7 +86,7 @@ function Builder() {
     const universeText = String(f.get("universe") ?? "").trim();
     const universe = universeText
       ? universeText.split(/[\s,]+/).filter(Boolean).map((s) => s.toUpperCase())
-      : inst.data?.items.filter((i) => i.asset_class !== "index_fund").map((i) => i.symbol);
+      : tradable;
     const benchmark = String(f.get("benchmark") ?? "");
     const config = {
       start: f.get("start") || null,
@@ -232,7 +233,7 @@ function Builder() {
             </label>
             <label className="block">
               <span className="mb-1 block">Universe</span>
-              <textarea name="universe" rows={2} className="field" placeholder={`All ${inst.data ? inst.data.total - indexSymbols.length : ""} tradable symbols`} />
+              <textarea name="universe" rows={2} className="field" placeholder={`All ${inst.data ? tradable.length : ""} tradable symbols`} />
               <span className="mt-0.5 block text-xs text-ink-3">Leave empty for every non-index symbol, including those delisted during the sample.</span>
             </label>
             <label className="block">
@@ -275,6 +276,12 @@ function Builder() {
       </div>
     </form>
   );
+}
+
+// Tickers, once each: the catalog has a row per (ticker, instrument), so a reused ticker would
+// otherwise be sent twice and count twice against the symbol limit.
+function tickers(items: Instrument[] | undefined, index: boolean): string[] {
+  return [...new Set((items ?? []).filter((i) => (i.asset_class === "index_fund") === index).map((i) => i.symbol))];
 }
 
 export default function NewExperimentPage() {

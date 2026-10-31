@@ -106,6 +106,25 @@ test("a polling panel announces an outage once, not on every failed poll", async
   await audit(page, "experiments, polling failed");
 });
 
+test("a retry that fails does not pull focus when the panel later recovers on its own", async ({ page }) => {
+  await register(page, "refocus");
+  const list = "**/api/v1/workspaces/*/experiments?*";
+  await page.route(list, fail());
+  await page.goto("/experiments");
+  const note = errorNote(page, "Could not load experiments.");
+  await expect(note).toBeVisible();
+  const retry = note.getByRole("button", { name: "Retry" });
+  await retry.click();
+  // The retry fails too: the note stays and so does focus, on its button.
+  await expect(retry).toHaveText("Retry");
+  await expect(retry).toBeFocused();
+  // The user moves on; then the API comes back and the list's own poll recovers.
+  await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
+  await page.unroute(list);
+  await expect(note).toHaveCount(0, { timeout: 30_000 });
+  expect(await page.evaluate(() => document.activeElement === document.body)).toBe(true);
+});
+
 test("a failed analysis on a finished experiment is shown, not left as a skeleton", async ({ page }) => {
   await register(page, "exp");
   const ws = (await (await page.request.get("/api/v1/workspaces")).json())[0].id;
@@ -123,6 +142,17 @@ test("a failed analysis on a finished experiment is shown, not left as a skeleto
   ).json();
   const id = sub.experiment.id;
   await expect.poll(async () => (await (await page.request.get(`/api/v1/experiments/${id}`)).json()).status, { timeout: 60_000 }).toBe("completed");
+
+  // A failed first load renders only the note: no page heading exists until Retry works,
+  // and focus must then go to the heading the page renders, not to the document body.
+  const own = `**/api/v1/experiments/${id}`;
+  await page.route(own, fail());
+  await page.goto(`/experiments/${id}`);
+  const first = errorNote(page, "Could not load this experiment.");
+  await expect(first).toBeVisible();
+  await page.unroute(own);
+  await first.getByRole("button", { name: "Retry" }).click();
+  await expect(page.getByRole("heading", { level: 1, name: "Errors run" })).toBeFocused();
 
   // The analysis carries performance, factor exposures, tail risk and contributions.
   await page.route("**/api/v1/experiments/*/analysis", fail());

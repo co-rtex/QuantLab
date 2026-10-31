@@ -94,16 +94,19 @@ export interface Query {
  */
 export function QueryError({ q, what = "this data" }: { q: Query; what?: string }) {
   const box = useRef<HTMLDivElement>(null);
-  // Where focus goes when a retry succeeds and this note (and its button) disappears:
-  // the panel's heading, else the page's (WCAG 2.4.3). Chosen at click time, because a
-  // Pending placeholder is unmounted outright once its data arrives.
-  const recover = useRef<HTMLElement | null>(null);
+  // Where focus goes when a retry succeeds and this note (and its button) disappears: the
+  // panel's heading, else the page's (WCAG 2.4.3). The panel and <main> are noted at click
+  // time, because a Pending placeholder is unmounted outright once its data arrives; the
+  // heading is looked up on recovery, because a page that failed its first load renders
+  // its heading only then.
+  const recover = useRef<Anchors | null>(null);
   // The failure a retry was started for: a new failure, or none, means it has finished.
   const [retriedAfter, setRetriedAfter] = useState<ApiError>();
   const error = q.error;
   const retrying = error !== undefined && retriedAfter === error;
   useEffect(() => {
-    if (!error) restoreFocus(recover);
+    if (error) recover.current = null; // the retry failed: a later recovery must not move focus
+    else restoreFocus(recover);
   }, [error]);
   useEffect(() => () => restoreFocus(recover), []);
 
@@ -125,7 +128,7 @@ export function QueryError({ q, what = "this data" }: { q: Query; what?: string 
             aria-disabled={retrying}
             onClick={() => {
               if (retrying) return;
-              recover.current = focusTarget(box.current);
+              recover.current = { section: box.current?.closest("section") ?? null, main: box.current?.closest("main") ?? null };
               setRetriedAfter(error);
               q.reload();
             }}
@@ -138,18 +141,22 @@ export function QueryError({ q, what = "this data" }: { q: Query; what?: string 
   );
 }
 
-function focusTarget(from: HTMLElement | null): HTMLElement | null {
-  const section = from?.closest("section");
-  const target = section?.querySelector<HTMLElement>("h2") ?? section ?? from?.closest("main")?.querySelector<HTMLElement>("h1") ?? null;
-  if (target && !target.hasAttribute("tabindex")) target.setAttribute("tabindex", "-1");
-  return target;
+interface Anchors {
+  section: HTMLElement | null;
+  main: HTMLElement | null;
 }
 
-function restoreFocus(recover: { current: HTMLElement | null }) {
-  const target = recover.current;
+function restoreFocus(recover: { current: Anchors | null }) {
+  const anchors = recover.current;
   recover.current = null;
   // Only if focus was lost with the note; a user who has moved on keeps their place.
-  if (target?.isConnected && (document.activeElement === document.body || document.activeElement === null)) target.focus();
+  if (!anchors || (document.activeElement !== document.body && document.activeElement !== null)) return;
+  const section = anchors.section?.isConnected ? anchors.section : null;
+  const main = anchors.main?.isConnected ? anchors.main : null;
+  const target = section?.querySelector<HTMLElement>("h2") ?? section ?? main?.querySelector<HTMLElement>("h1") ?? main;
+  if (!target) return;
+  if (!target.hasAttribute("tabindex")) target.setAttribute("tabindex", "-1");
+  target.focus();
 }
 
 /** The placeholder for data that has not arrived: a skeleton while loading, an error with Retry once it failed. */
