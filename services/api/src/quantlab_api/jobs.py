@@ -33,7 +33,7 @@ from typing import Any
 
 from redis import Redis
 from rq import Queue
-from sqlalchemy import func, or_, select, update
+from sqlalchemy import func, or_, select, text, update
 from sqlalchemy.orm import Session
 
 from quantlab_api.config import get_settings
@@ -137,6 +137,23 @@ def payload_hash(kind: str, payload: dict[str, Any]) -> str:
     ).hexdigest()
 
 
+def lock_idempotency_key(db: Session, workspace_id: uuid.UUID, key: str | None) -> None:
+    """Serialize the requests that share an Idempotency-Key, until this transaction ends.
+
+    Routes that create a run row before ``submit_job`` (experiments, ML runs, validation)
+    call this before they look the key up. Otherwise two concurrent retries both found no
+    job for the key, both inserted a run, and the second hashed a payload naming its own
+    run: 409 ``idempotency_conflict`` for a genuine retry, plus a phantom row. Taken
+    before ``submit_job``'s workspace and user locks, always in that order. Requests
+    without a key are not serialized.
+    """
+    if key and db.get_bind().dialect.name == "postgresql":
+        db.execute(
+            text("SELECT pg_advisory_xact_lock(hashtextextended(:k, 0))"),
+            {"k": f"idempotency:{workspace_id}:{key}"},
+        )
+
+
 def submit_job(
     db: Session,
     *,
@@ -148,8 +165,14 @@ def submit_job(
     request_id: str | None = None,
     timeout_seconds: int | None = None,
     dispatch: bool = True,
+    on_created: Callable[[Job], None] | None = None,
 ) -> tuple[Job, bool]:
-    """Create (or return the existing idempotent) job. Commits the session."""
+    """Create (or return the existing idempotent) job. Commits the session.
+
+    ``on_created`` runs after the new job has its id and before that commit, so a caller
+    can link its run row to the job atomically. A retry that finds the job by its
+    Idempotency-Key then always finds the linked run too.
+    """
     s = get_settings()
 
     def replay() -> Job | None:
@@ -238,6 +261,9 @@ def submit_job(
         trace_context=current_carrier() or None,
     )
     db.add(job)
+    if on_created is not None:
+        db.flush()
+        on_created(job)
     db.commit()
     if dispatch:
         enqueue(job)

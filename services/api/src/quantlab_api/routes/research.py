@@ -10,7 +10,7 @@ from sqlalchemy import func, select
 from quantlab.research.integrity import build_integrity_report
 from quantlab_api import artifacts
 from quantlab_api.errors import ApiError
-from quantlab_api.jobs import payload_hash, submit_job
+from quantlab_api.jobs import lock_idempotency_key, payload_hash, submit_job
 from quantlab_api.models import (
     Experiment,
     ExperimentResult,
@@ -56,6 +56,7 @@ def start_validation(
         raise ApiError(409, "not_ready", "Run validation after the backtest completes")
     params = {"suite_version": SUITE_VERSION, "seed": 0}
     phash = payload_hash(SUITE, params)
+    lock_idempotency_key(db, exp.workspace_id, idempotency_key)
     run = db.scalar(
         select(ResearchRun).where(
             ResearchRun.experiment_id == exp.id,
@@ -98,9 +99,8 @@ def start_validation(
         request_id=getattr(request.state, "request_id", None),
         timeout_seconds=1800,
         dispatch=False,
+        on_created=lambda j: setattr(run, "job_id", j.id),
     )
-    run.job_id = job.id
-    db.commit()
     from quantlab_api.jobs import enqueue
 
     enqueue(job)
