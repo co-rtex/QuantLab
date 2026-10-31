@@ -132,15 +132,20 @@ def test_production_settings_guard():
 
     from quantlab_api.config import Settings
 
+    # The API's secrets are checked when the API starts (#117), the rest for every process.
+    redis = "redis://:" + "r" * 20 + "@redis:6379/0"
     with pytest.raises(ValueError, match="JWT_SECRET"):
-        Settings(environment="production", cookie_secure=True)
+        Settings(
+            environment="production", cookie_secure=True, redis_url=redis
+        ).require_api_secrets()
     with pytest.raises(ValueError, match="placeholder"):
         Settings(
             environment="production",
             cookie_secure=True,
+            redis_url=redis,
             metrics_token="m" * 20,
             jwt_secret="dev-only-insecure-secret-change-me-0123456789",
-        )
+        ).require_api_secrets()
     with pytest.raises(ValueError, match="COOKIE_SECURE"):
         Settings(
             environment="production",
@@ -401,5 +406,9 @@ def test_blank_secrets_are_treated_as_unset():
     assert Settings(anthropic_api_key="").anthropic_api_key is None
     with pytest.raises(ValueError, match="METRICS_TOKEN"):
         Settings(
-            environment="production", cookie_secure=True, metrics_token="", jwt_secret="k" * 40
-        )
+            environment="production",
+            cookie_secure=True,
+            redis_url="redis://:" + "r" * 20 + "@redis:6379/0",
+            metrics_token="",
+            jwt_secret="k" * 40,
+        ).require_api_secrets()
