@@ -34,6 +34,36 @@ PERIODS_PER_YEAR = 252
 # at a constant rate yields returns that differ by ~1e-16, and dividing by that noise turns
 # an undefined ratio into an arbitrary number. Real daily return series sit far above it.
 ZERO_DISPERSION = 1e-12
+# Every metric compute_performance reports besides ``observations``; the benchmark ones
+# only when a benchmark is given.
+RETURN_METRICS = (
+    "total_return",
+    "cagr",
+    "annualized_mean_return",
+    "annualized_log_return",
+    "volatility",
+    "sharpe",
+    "sortino",
+    "max_drawdown",
+    "max_drawdown_sessions",
+    "max_drawdown_recovery_sessions",
+    "longest_drawdown_sessions",
+    "calmar",
+    "best_day",
+    "worst_day",
+    "hit_rate",
+    "skewness",
+    "excess_kurtosis",
+)
+BENCHMARK_METRICS = (
+    "benchmark_total_return",
+    "excess_total_return",
+    "beta",
+    "alpha",
+    "correlation",
+    "tracking_error",
+    "information_ratio",
+)
 
 
 @dataclass
@@ -133,20 +163,14 @@ def compute_performance(
     e = equity.dropna().astype(float)
     P = periods_per_year
     m.set("observations", len(e))
+    undefined = None
     if len(e) < 2:
-        for k in (
-            "total_return",
-            "cagr",
-            "volatility",
-            "sharpe",
-            "sortino",
-            "max_drawdown",
-            "calmar",
-        ):
-            m.set(k, None, "fewer than two observations")
-        return m
-    if e.iloc[0] <= 0:
-        m.set("total_return", None, "initial wealth is not positive")
+        undefined = "fewer than two observations"
+    elif e.iloc[0] <= 0:
+        undefined = "initial wealth is not positive"
+    if undefined is not None:
+        for k in (*RETURN_METRICS, *(BENCHMARK_METRICS if benchmark is not None else ())):
+            m.set(k, None, undefined)
         return m
     r = simple_returns(e)
     n = len(r)
@@ -230,15 +254,7 @@ def compute_performance(
     if benchmark is not None:
         b = benchmark.reindex(e.index).astype(float)
         if b.isna().any() or (b <= 0).any():
-            for k in (
-                "beta",
-                "alpha",
-                "tracking_error",
-                "information_ratio",
-                "correlation",
-                "benchmark_total_return",
-                "excess_total_return",
-            ):
+            for k in BENCHMARK_METRICS:
                 m.set(k, None, "benchmark missing or non-positive on some dates")
         else:
             rb = simple_returns(b)
@@ -260,11 +276,14 @@ def compute_performance(
                     float(np.corrcoef(r, rb)[0, 1]) if sd_r > ZERO_DISPERSION else None,
                     "portfolio has zero variance",
                 )
-            te = float(active.std(ddof=1)) * math.sqrt(P)
-            if te <= 1e-15:
+            # Same per-period cutoff as every other dispersion: an exact tracker leaves
+            # ~1e-16 of floating-point noise, which must not produce an IR.
+            sd_active = float(active.std(ddof=1))
+            if sd_active <= ZERO_DISPERSION:
                 m.set("tracking_error", 0.0)
                 m.set("information_ratio", None, "zero tracking error")
             else:
+                te = sd_active * math.sqrt(P)
                 m.set("tracking_error", te)
                 m.set("information_ratio", active.mean() * P / te)
     return m

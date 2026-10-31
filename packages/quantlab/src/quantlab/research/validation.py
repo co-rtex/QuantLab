@@ -221,6 +221,19 @@ def walk_forward(
         done += 1
         if on_progress:
             on_progress(done / total, f"fold {i + 1}/{len(folds)}: out-of-sample test")
+    if not oos_returns:
+        # Nothing was evaluated out of sample, so every OOS statistic is undefined.
+        return {
+            "error": "every out-of-sample fold failed",
+            "method": "anchored" if anchored else "rolling",
+            "train_sessions": train_sessions,
+            "test_sessions": test_sessions,
+            "embargo": embargo,
+            "grid_size": len(combos),
+            "folds": rows,
+            "mean_in_sample_sharpe": None,
+            "mean_oos_sharpe": None,
+        }
     stitched = pd.concat(oos_returns).sort_index()
     stitched = stitched[~stitched.index.duplicated()]
     oos_equity = config.initial_capital * (1 + stitched).cumprod()
