@@ -1,7 +1,8 @@
 # Research methodology
 
 This document states exactly how QuantLab turns data into numbers. Code references are
-the source of truth; tests in `tests/unit` pin each definition to a golden example.
+the source of truth. Tests in `tests/golden` (`pytest -m golden`) pin definitions to
+values computed by hand or published elsewhere; `tests/unit` covers the rest.
 
 ## Data
 
