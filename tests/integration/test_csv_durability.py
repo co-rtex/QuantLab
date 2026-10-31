@@ -89,29 +89,44 @@ def test_an_ambiguous_upload_commit_keeps_the_files_the_job_needs(client, monkey
     assert not staged.exists()
 
 
-def test_when_the_outcome_cannot_be_checked_the_files_stay(client, monkeypatch, staged_dirs):
-    """Commit outcome unknown and the database unreachable for the check: keep the files
-    (the reaper sweeps them after 24 h) rather than break a job that may exist."""
-    from quantlab_api import db as dbmod
+def test_a_commit_still_in_flight_keeps_the_files(client, monkeypatch, staged_dirs):
+    """#51: the connection fails while the server is still committing, so the job row is
+    not visible yet. A follow-up "is a job using these files?" query found nothing and
+    deleted them, and the job then failed once the commit landed. Whatever the outcome,
+    an error during submission now keeps the files (the reaper sweeps them after 24 h)."""
+    from sqlalchemy import func, select
+
+    from quantlab_api.db import SessionLocal
+    from quantlab_api.models import Job
     from quantlab_api.routes import datasets
 
-    real = datasets.submit_job
+    def commit_in_flight(*args: Any, **kwargs: Any) -> Any:
+        raise ConnectionError("server closed the connection during COMMIT")
 
-    def lost(*args: Any, **kwargs: Any) -> Any:
-        real(*args, **kwargs)
-        monkeypatch.setattr(dbmod, "SessionLocal", _unreachable)
-        raise ConnectionError("connection lost after COMMIT")
-
-    def _unreachable() -> Any:
-        raise ConnectionError("database unreachable")
-
-    monkeypatch.setattr(datasets, "submit_job", lost)
+    monkeypatch.setattr(datasets, "submit_job", commit_in_flight)
     client_500 = client.__class__(client.app, raise_server_exceptions=False)
     h = register(client_500)
     ws = workspace_id(client_500, h)
     assert _upload(client_500, h, ws).status_code == 500
+    with SessionLocal() as db:
+        assert db.scalar(select(func.count()).select_from(Job)) == 0  # not visible (yet)
     (staged,) = staged_dirs()
     assert staged.exists()
+
+
+def test_an_error_before_submission_still_releases_the_files(client, monkeypatch, staged_dirs):
+    """Nothing references the files before submit_job: they go at once, as before."""
+    from quantlab_api.routes import datasets
+
+    def boom(*args: Any, **kwargs: Any) -> Any:
+        raise RuntimeError("audit write failed")
+
+    monkeypatch.setattr(datasets, "audit", boom)
+    client_500 = client.__class__(client.app, raise_server_exceptions=False)
+    h = register(client_500)
+    ws = workspace_id(client_500, h)
+    assert _upload(client_500, h, ws).status_code == 500
+    assert staged_dirs() == set()
 
 
 def test_a_rejected_upload_still_releases_its_files(client, monkeypatch, staged_dirs):
