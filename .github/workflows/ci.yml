@@ -42,8 +42,13 @@ jobs:
         run: uv run mypy
       - name: Tests with coverage
         run: uv run pytest --cov --cov-report=term-missing:skip-covered --cov-report=xml -q
-      - name: Dependency audit
-        run: uvx pip-audit --strict --progress-spinner off -r <(uv export --frozen --no-dev --no-hashes --no-emit-workspace) || echo "::warning::pip-audit reported findings"
+      # Runtime dependencies block the build; dev tools only warn. Accepted findings are
+      # passed as --ignore-vuln <ID> and recorded in docs/SECURITY_DEPENDENCIES.md (#137).
+      - name: Dependency audit (runtime, blocking)
+        run: uvx pip-audit==2.10.1 --strict --progress-spinner off --no-deps --disable-pip -r <(uv export --frozen --all-packages --no-dev --no-hashes --no-emit-workspace)
+        shell: bash
+      - name: Dependency audit (dev tools, report only)
+        run: uvx pip-audit==2.10.1 --progress-spinner off --no-deps --disable-pip -r <(uv export --frozen --all-packages --all-groups --no-hashes --no-emit-workspace) || echo "::warning::pip-audit reported findings in dev tools"
         shell: bash
       - uses: actions/upload-artifact@v4
         with:
@@ -67,7 +72,10 @@ jobs:
       - run: npm run lint
       - run: npm run typecheck
       - run: npm run build
-      - run: npm audit --omit=dev --audit-level=high
+      - name: npm audit (runtime, blocking)
+        run: npm audit --omit=dev --audit-level=low
+      - name: npm audit (dev tools, report only)
+        run: npm audit || echo "::warning::npm audit reported findings in dev tools (see docs/SECURITY_DEPENDENCIES.md)"
 
   docker:
     runs-on: ubuntu-latest
