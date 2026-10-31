@@ -76,6 +76,10 @@ const EXCLUSION_LABEL: Record<string, [string, string]> = {
     "Dates skipped: too few names",
     "Fewer than 10 names on that date once zero-volume bars were dropped (a longer warm-up from dropped bars is not counted).",
   ],
+  dividends_after_last_trade: [
+    "Dividends after last trade",
+    "Ex-dates after the name's last bar with volume; not applied to ML labels (the backtest engine still pays them).",
+  ],
 };
 
 function exclusionItems(ex: unknown): [string, string, string | null][] {

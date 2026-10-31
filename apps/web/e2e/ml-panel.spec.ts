@@ -91,12 +91,13 @@ test("a v2 result shows its own exclusion keys, with a real 0 as 0", async ({ pa
 test("a v3 result shows its own exclusion keys, and an unknown key under its raw name", async ({ page }) => {
   await register(page);
   // Keys out of table order, plus one this page does not know.
-  const excluded_rows = { dates_below_10_with_zero_volume: 0, later_reason: 7, zero_volume_bars: 1234 };
+  const excluded_rows = { dividends_after_last_trade: 2, dates_below_10_with_zero_volume: 0, later_reason: 7, zero_volume_bars: 1234 };
   const inputs = await show(page, run("Pipeline v3", { pipeline_version: 3, panel: { volume_flat_rows: 0, excluded_rows } }));
   expect(await items(inputs)).toEqual([
     ["Pipeline version", "v3", expect.any(String)],
     ["Zero-volume bars", "1,234", "Dropped as no trade; features, labels and windows skip them."],
     ["Dates skipped: too few names", "0", "Fewer than 10 names on that date once zero-volume bars were dropped (a longer warm-up from dropped bars is not counted)."],
+    ["Dividends after last trade", "2", "Ex-dates after the name's last bar with volume; not applied to ML labels (the backtest engine still pays them)."],
     ["later_reason", "7", null],
     ["Rows with flat volume", "0", expect.any(String)],
   ]);
