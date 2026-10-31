@@ -225,8 +225,9 @@ def test_unset_dev_secret_is_shared_by_every_worker_process(tmp_path):
     assert len(set(keys)) == 1 and len(keys[0]) >= 32
     assert _dev_key(str(tmp_path)) == keys[0]
     assert (tmp_path / ".jwt-dev-secret").stat().st_mode & 0o077 == 0
-    # The key is written to a temporary file and linked into place; none are left over.
-    assert sorted(p.name for p in tmp_path.iterdir()) == [".jwt-dev-secret"]
+    # The key is written to a temporary file and renamed into place; none are left over.
+    names = sorted(p.name for p in tmp_path.iterdir())
+    assert names == [".jwt-dev-secret", ".jwt-dev-secret.lock"]
 
 
 def test_an_empty_dev_secret_file_from_a_crash_is_replaced(tmp_path):
@@ -236,6 +237,31 @@ def test_an_empty_dev_secret_file_from_a_crash_is_replaced(tmp_path):
     path.touch(mode=0o600)
     key = _dev_key(str(tmp_path))
     assert len(key) >= 32 and path.read_text().strip() == key
+
+
+def test_workers_repairing_an_empty_dev_secret_together_agree_on_one_key(tmp_path):
+    """#64 review: one process unlinked the empty file and created K1, then another's late
+    unlink deleted K1 and created K2, so workers signed with different keys. The repair
+    now happens under an exclusive lock."""
+    import multiprocessing as mp
+
+    (tmp_path / ".jwt-dev-secret").touch(mode=0o600)
+    with mp.get_context("spawn").Pool(8) as pool:
+        keys = pool.map(_dev_key, [str(tmp_path)] * 16)
+    assert len(set(keys)) == 1 and len(keys[0]) >= 32
+
+
+def test_the_dev_secret_does_not_need_hard_links(tmp_path, monkeypatch):
+    """#64 review: os.link fails with EPERM or ENOTSUP on some filesystems."""
+    import errno
+    import os
+
+    def no_links(*args: object, **kwargs: object) -> None:
+        raise OSError(errno.EPERM, "hard links not supported")
+
+    monkeypatch.setattr(os, "link", no_links)
+    key = _dev_key(str(tmp_path))
+    assert len(key) >= 32 and _dev_key(str(tmp_path)) == key
 
 
 def test_a_dev_secret_readable_by_others_is_refused(tmp_path):
