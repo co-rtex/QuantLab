@@ -13,12 +13,19 @@ from sqlalchemy import func, select
 from quantlab.data.synthetic import SyntheticSpec
 from quantlab_api.config import get_settings
 from quantlab_api.errors import ApiError
-from quantlab_api.jobs import redis_conn, submit_job
+from quantlab_api.jobs import (
+    lock_idempotency_key,
+    redis_conn,
+    replayed_job,
+    request_fingerprint,
+    submit_job,
+)
 from quantlab_api.marketdata import bars_payload
 from quantlab_api.models import (
     Dataset,
     DatasetVersion,
     Instrument,
+    Job,
     Role,
     User,
     WorkspaceMember,
@@ -88,9 +95,31 @@ def create_synthetic(
             f"about {est_rows:,} rows requested; the limit is "
             f"{get_settings().max_synthetic_rows:,}",
         )
+    spec = SyntheticSpec(
+        n_assets=body.n_assets, start=str(body.start), end=str(body.end), seed=body.seed
+    )
+    spec_doc = {k: (list(v) if isinstance(v, tuple) else v) for k, v in asdict(spec).items()}
+    # The key is looked up, under its lock, before the Dataset row is inserted (#52): a
+    # concurrent retry for a new slug used to race on the slug index instead.
+    fingerprint = request_fingerprint(
+        f"datasets.synthetic:{workspace_id}", user.id, body.model_dump(mode="json")
+    )
+    lock_idempotency_key(db, workspace_id, idempotency_key)
     ds = db.scalar(
         select(Dataset).where(Dataset.workspace_id == workspace_id, Dataset.slug == body.slug)
     )
+
+    def legacy_match(job: Job) -> bool:  # jobs from before request fingerprints
+        return (
+            ds is not None
+            and job.kind == "dataset.synthetic"
+            and job.created_by == user.id
+            and job.payload == {"dataset_id": str(ds.id), "spec": spec_doc}
+        )
+
+    prior = replayed_job(db, workspace_id, idempotency_key, fingerprint, legacy_match)
+    if prior is not None:
+        return JobOut.model_validate(prior)
     if ds is None:
         ds = Dataset(
             workspace_id=workspace_id,
@@ -105,13 +134,7 @@ def create_synthetic(
         db.flush()
     elif ds.provider != "synthetic":
         raise ApiError(409, "slug_taken", "A non-synthetic dataset already uses this slug")
-    spec = SyntheticSpec(
-        n_assets=body.n_assets, start=str(body.start), end=str(body.end), seed=body.seed
-    )
-    payload = {
-        "dataset_id": str(ds.id),
-        "spec": {k: (list(v) if isinstance(v, tuple) else v) for k, v in asdict(spec).items()},
-    }
+    payload = {"dataset_id": str(ds.id), "spec": spec_doc, "request_fingerprint": fingerprint}
     audit(
         db,
         request,
