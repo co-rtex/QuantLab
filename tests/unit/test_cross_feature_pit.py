@@ -146,17 +146,6 @@ def m():
     return _market()
 
 
-# A halt inside a rolling window makes that feature NaN for the window's length, which
-# drops the security from the ML panel (#120). The label tests therefore use a
-# variant whose halt falls before the windows of the rows they check.
-EARLY_HALT = (40, 41, 42)  # outside the 252-session windows of rows from session 294 on
-
-
-@pytest.fixture(scope="module")
-def m_ml():
-    return _market(halt=EARLY_HALT)
-
-
 def _close(m: dict, iid: str) -> pd.Series:
     b = m["kb"][m["kb"]["symbol"] == iid]
     return b.set_index("date")["close"]
@@ -302,8 +291,7 @@ def _hand_tr(m: dict) -> pd.Series:
     return tr
 
 
-def test_labels_that_span_the_delisting_include_its_return_and_no_others_do(m_ml):
-    m = m_ml
+def test_labels_that_span_the_delisting_include_its_return_and_no_others_do(m):
     panel = _panel(m)
     i1 = panel[panel["symbol"] == "I1"].set_index("date")
     assert len(i1) and i1.index.max() <= SESSIONS[LAST_BAR]  # never sampled after it
@@ -325,8 +313,7 @@ def test_labels_that_span_the_delisting_include_its_return_and_no_others_do(m_ml
     assert checked["spans"] > 0 and checked["within"] > 0
 
 
-def test_the_reused_ticker_leaves_the_old_instruments_rows_untouched(m_ml):
-    m = m_ml
+def test_the_reused_ticker_leaves_the_old_instruments_rows_untouched(m):
     with_i2 = _panel(m)
     kb = m["kb"][m["kb"]["symbol"] != "I2"]
     without = _panel(m, kb=kb)
@@ -336,8 +323,7 @@ def test_the_reused_ticker_leaves_the_old_instruments_rows_untouched(m_ml):
     pd.testing.assert_frame_equal(a, b)
 
 
-def test_ml_features_and_known_labels_do_not_look_ahead(m_ml):
-    m = m_ml
+def test_ml_features_and_known_labels_do_not_look_ahead(m):
     cut = SESSIONS[HALT[1]]
     kb = m["kb"].copy()
     after = kb["date"] > cut
@@ -383,12 +369,11 @@ def test_ml_features_and_known_labels_do_not_look_ahead(m_ml):
     )
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="#120: a short halt drops a security from the ML panel for up to 252 sessions",
-)
 def test_a_short_halt_does_not_remove_a_security_from_the_ml_panel_for_a_year(m):
     panel = _panel(m)
     i1 = panel[panel["symbol"] == "I1"]
-    after_halt = i1[i1["date"] > SESSIONS[HALT[-1]]]
-    assert len(after_halt) > 0  # today: none until the 252-session window clears the halt
+    dates = set(i1["date"])
+    # Fixed by #120: absent only on the halt's sessions, back on its first bar after.
+    assert SESSIONS[HALT[0] - 1] in dates
+    assert not {SESSIONS[i] for i in HALT} & dates
+    assert SESSIONS[HALT[-1] + 1] in dates
