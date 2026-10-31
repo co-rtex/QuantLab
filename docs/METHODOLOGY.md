@@ -109,9 +109,23 @@ the source of truth; tests in `tests/unit` pin each definition to a golden examp
     responsibility (#11).
   * The instrument master (including delisting returns) is not yet part of the content
     hash. It will be once delisting returns affect backtests (#9 part B).
-  *Not yet wired:* API dataset and backtest jobs still key by ticker until the catalog
-  migration (#9, slot M2) lands. Universes must then be resolved as of the backtest start,
-  not as of today, or the universe becomes survivor-only.
+  *In the API jobs* (engine 1.3.0):
+  * Dataset versions store their symbol history and instrument master. Synthetic versions
+    always do; CSV uploads have none and use the legacy map.
+  * Backtest, research and ML jobs key data by instrument and pass the master to the
+    engine and to ML.
+  * **Universe rule:** the tickers in an experiment's `universe` and `benchmark` are
+    resolved to instruments **as of the backtest start** (the first date of the data when
+    no start is set), never as of today. A security renamed later stays in under its later
+    ticker; a ticker reused later by another issuer does not pull that issuer in; and a
+    ticker that names nothing at the start fails the job instead of being guessed. All
+    tickers each resolved instrument ever had are loaded, so its history is complete.
+  * Results stay keyed by instrument for simulation, fingerprints and stored metrics.
+    The trades, positions, target-weight, rejection and ML-prediction frames written for
+    the API show the ticker valid on each row's date in `symbol`, with the permanent id
+    in an added `instrument_id` column. Rows after a delisting show the last ticker.
+  * The catalog records each ticker's instrument and delisting facts, and
+    `InstrumentOut` exposes them as optional fields.
 * **Reconciliation** (`quantlab.data.reconcile`) compares a dataset with an independent
   second source, after keying both by instrument. A secondary with its own symbol history
   is keyed by it (`id_map` translates its id space, one-to-one only) and the two

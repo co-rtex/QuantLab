@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import uuid
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from typing import Any
 
@@ -13,6 +14,15 @@ from sqlalchemy.orm import Session
 
 from quantlab.analytics.summary import analyze_backtest
 from quantlab.backtest.engine import BacktestConfig, BacktestResult, run_backtest
+from quantlab.data.identity import (
+    display_frame,
+    is_legacy,
+    key_by_instrument,
+    normalize_master,
+    resolve_ids,
+    resolve_universe,
+    tickers_of,
+)
 from quantlab.data.quality import (
     QualityGateError,
     QualityReport,
@@ -62,13 +72,24 @@ def register_version(
     instruments: pd.DataFrame | None,
     *,
     quality: QualityReport,
+    symbol_history: pd.DataFrame | None = None,
+    master: pd.DataFrame | None = None,
 ) -> DatasetVersion:
     """Write an immutable dataset version and its catalog rows (idempotent by content).
 
-    ``quality`` is the report from :func:`gate_quality`, which has already passed.
+    ``quality`` is the report from :func:`gate_quality`, which has already passed. A
+    symbol history and instrument master, when given, are stored and hashed with the
+    version (#9), and each catalog row records its instrument and delisting facts.
     """
     dv = dataset_store().write(
-        dataset.slug, bars, actions, provenance, quality.to_dict(), instruments
+        dataset.slug,
+        bars,
+        actions,
+        provenance,
+        quality.to_dict(),
+        instruments,
+        symbol_history=symbol_history,
+        master=master,
     )
     existing = db.scalar(
         select(DatasetVersion).where(
@@ -96,8 +117,18 @@ def register_version(
     stats = bars.groupby("symbol")["date"].agg(["min", "max", "count"])
     meta = instruments.set_index("symbol") if instruments is not None else None
     last_session = bars["date"].max()
+    # The instrument each ticker belonged to on its last bar, and its delisting facts.
+    owner: dict[str, str] = {}
+    if symbol_history is not None:
+        ids = resolve_ids(
+            symbol_history, pd.Series(stats.index), pd.Series(stats["max"].to_numpy())
+        )
+        owner = {str(s): str(i) for s, i in zip(stats.index, ids, strict=True) if i is not None}
+    facts = normalize_master(master).set_index("instrument_id") if master is not None else None
     for sym, st in stats.iterrows():
         info = meta.loc[sym] if meta is not None and sym in meta.index else None
+        iid = owner.get(str(sym))
+        fact = facts.loc[iid] if facts is not None and iid in facts.index else None
         db.add(
             Instrument(
                 dataset_version_id=row.id,
@@ -109,6 +140,22 @@ def register_version(
                 last_date=st["max"].date(),
                 delisted=bool(st["max"] < last_session),
                 rows=int(st["count"]),
+                instrument_id=None if iid is None else str(iid),
+                delisting_date=(
+                    fact["delisting_date"].date()
+                    if fact is not None and pd.notna(fact["delisting_date"])
+                    else None
+                ),
+                delisting_reason=(
+                    str(fact["delisting_reason"])
+                    if fact is not None and fact["delisting_reason"] is not None
+                    else None
+                ),
+                delisting_return=(
+                    float(fact["delisting_return"])
+                    if fact is not None and pd.notna(fact["delisting_return"])
+                    else None
+                ),
             )
         )
     # Aggregate gauges: tenant-controlled names never become metric labels.
@@ -150,6 +197,8 @@ def synthetic_dataset_task(ctx: JobContext) -> Finalizer:
             market.provenance,
             market.instruments,
             quality=quality,
+            symbol_history=market.symbol_history,
+            master=market.master,
         )
         return {
             "message": f"dataset version {dv.version_hash[:12]} ready",
@@ -159,9 +208,28 @@ def synthetic_dataset_task(ctx: JobContext) -> Finalizer:
     return finalize
 
 
-def load_experiment_inputs(
-    db: Session, exp: Experiment
-) -> tuple[pd.DataFrame, pd.DataFrame, BacktestConfig]:
+@dataclass(frozen=True)
+class ExperimentInputs:
+    """What a job simulates: bars and actions keyed by instrument, and the config with
+    its universe and benchmark resolved to instrument ids. ``history`` turns results back
+    into tickers (``display``); ``master`` carries delisting dates and returns."""
+
+    bars: pd.DataFrame
+    actions: pd.DataFrame
+    cfg: BacktestConfig
+    history: pd.DataFrame
+    master: pd.DataFrame | None
+
+    @property
+    def keyed(self) -> bool:
+        return not is_legacy(self.history)
+
+    def display(self, frame: pd.DataFrame, date_col: str = "date") -> pd.DataFrame:
+        """``symbol`` as the ticker valid on each row's date, plus ``instrument_id``."""
+        return display_frame(frame, self.history, date_col)
+
+
+def load_experiment_inputs(db: Session, exp: Experiment) -> ExperimentInputs:
     dv_row = db.get(DatasetVersion, exp.dataset_version_id)
     if dv_row is None:
         raise PermanentJobError("dataset version not found")
@@ -170,20 +238,41 @@ def load_experiment_inputs(
     store = dataset_store()
     dv = store.open(ds.slug, dv_row.version_hash)
     cfg = BacktestConfig(**exp.config)
-    syms = None
+    history = store.load_symbol_history(dv)
+    master = store.load_master(dv)
+    end = str(cfg.end) if cfg.end else None
+    if is_legacy(history):  # ticker == instrument: nothing to resolve
+        syms = (
+            [*cfg.universe, *([cfg.benchmark] if cfg.benchmark else [])] if cfg.universe else None
+        )
+        bars = store.load_bars(dv, symbols=syms, end=end)
+        return ExperimentInputs(bars, store.load_actions(dv, symbols=syms), cfg, history, master)
+    # Tickers in the config name instruments as of the backtest start (point in time): a
+    # security renamed later stays in, and a later reuse of the ticker is not picked up.
+    as_of = pd.Timestamp(cfg.start or dv.manifest["start"])
+    ids: list[str] | None = None
     if cfg.universe:
-        syms = [*cfg.universe, *([cfg.benchmark] if cfg.benchmark else [])]
-    bars = store.load_bars(dv, symbols=syms, end=str(cfg.end) if cfg.end else None)
-    actions = store.load_actions(dv, symbols=syms)
-    return bars, actions, cfg
+        ids, unresolved = resolve_universe(history, cfg.universe, as_of)
+        if unresolved:
+            raise PermanentJobError(
+                f"tickers not listed on {as_of.date()} in this dataset: {unresolved[:10]}"
+            )
+    bench = None
+    if cfg.benchmark:
+        found, unresolved = resolve_universe(history, [cfg.benchmark], as_of)
+        if unresolved:
+            raise PermanentJobError(f"benchmark {cfg.benchmark} not listed on {as_of.date()}")
+        bench = found[0]
+    syms = tickers_of(history, [*ids, *([bench] if bench else [])]) if ids else None
+    bars, actions = key_by_instrument(
+        store.load_bars(dv, symbols=syms, end=end), store.load_actions(dv, symbols=syms), history
+    )
+    cfg = cfg.model_copy(update={"universe": ids, "benchmark": bench})
+    return ExperimentInputs(bars, actions, cfg, history, master)
 
 
 def run_experiment_backtest(
-    exp: Experiment,
-    bars: pd.DataFrame,
-    actions: pd.DataFrame,
-    cfg: BacktestConfig,
-    ctx: JobContext | None = None,
+    exp: Experiment, inputs: ExperimentInputs, ctx: JobContext | None = None
 ) -> BacktestResult:
     strategy = create_strategy(exp.strategy_key, exp.strategy_params)
 
@@ -191,31 +280,74 @@ def run_experiment_backtest(
         if ctx is not None:
             ctx.heartbeat(0.1 + 0.75 * f, f"simulating ({f:.0%})")
 
-    return run_backtest(bars, actions, strategy, cfg, on_progress=progress)
+    return run_backtest(
+        inputs.bars,
+        inputs.actions,
+        strategy,
+        inputs.cfg,
+        on_progress=progress,
+        instruments=inputs.master,
+    )
 
 
-def _factors(
-    exp: Experiment, bars: pd.DataFrame, actions: pd.DataFrame, cfg: BacktestConfig
-) -> pd.DataFrame | None:
+def _factors(exp: Experiment, inputs: ExperimentInputs) -> pd.DataFrame | None:
     """Market and sector factors when the dataset carries sector metadata."""
     from quantlab.analytics.factors import sector_factors
 
-    if not cfg.benchmark:
+    if not inputs.cfg.benchmark:
         return None
     with SessionLocal() as db:
         rows = db.execute(
-            select(Instrument.symbol, Instrument.sector).where(
+            select(Instrument.symbol, Instrument.instrument_id, Instrument.sector).where(
                 Instrument.dataset_version_id == exp.dataset_version_id,
                 Instrument.sector.is_not(None),
             )
         ).all()
     if not rows:
         return None
-    sectors = pd.Series({s: sec for s, sec in rows})
+    # Series are keyed by instrument when the dataset has identity data.
+    sectors = pd.Series({(iid if inputs.keyed and iid else s): sec for s, iid, sec in rows})
     try:
-        return sector_factors(bars, actions, sectors, cfg.benchmark.upper())
+        return sector_factors(inputs.bars, inputs.actions, sectors, inputs.cfg.benchmark.upper())
     except ValueError:
         return None
+
+
+def _for_display(
+    res: BacktestResult, analysis: dict[str, Any], inputs: ExperimentInputs
+) -> tuple[BacktestResult, dict[str, Any]]:
+    """Results as users see them: tickers in ``symbol``, the permanent id beside it.
+
+    Simulation, fingerprints and stored metrics stay keyed by instrument; only the frames
+    and symbol-keyed analysis entries written for the API are relabelled.
+    """
+    shown = replace(
+        res,
+        trades=inputs.display(res.trades),
+        positions=inputs.display(res.positions),
+        weights_target=inputs.display(res.weights_target),
+        rejections=inputs.display(res.rejections),
+    )
+    if not inputs.keyed:
+        return shown, analysis
+    h = inputs.history.sort_values("valid_from")
+    latest = h.groupby("instrument_id")["symbol"].last().to_dict()
+    out = dict(analysis)
+    out["final_holdings"] = {
+        latest.get(k, k): v for k, v in analysis.get("final_holdings", {}).items()
+    }
+    contrib = dict(analysis.get("contributions") or {})
+    for side in ("top", "bottom"):
+        contrib[side] = [
+            {
+                **row,
+                "symbol": latest.get(row["symbol"], row["symbol"]),
+                "instrument_id": row["symbol"],
+            }
+            for row in contrib.get(side, [])
+        ]
+    out["contributions"] = contrib
+    return shown, out
 
 
 @handler("backtest")
@@ -226,13 +358,14 @@ def backtest_task(ctx: JobContext) -> Finalizer:
         if exp is None:
             raise PermanentJobError("experiment not found")
         ctx.heartbeat(0.02, "loading dataset", force=True)
-        bars, actions, cfg = load_experiment_inputs(db, exp)
+        inputs = load_experiment_inputs(db, exp)
         db.expunge(exp)
-    res = run_experiment_backtest(exp, bars, actions, cfg, ctx)
+    res = run_experiment_backtest(exp, inputs, ctx)
     ctx.heartbeat(0.88, "computing analytics", force=True)
-    analysis = analyze_backtest(res, _factors(exp, bars, actions, cfg))
+    analysis = analyze_backtest(res, _factors(exp, inputs))
     staging = artifacts.stage_dir(exp_id, ctx.attempt)
-    artifacts.write_backtest(staging, res, analysis)
+    shown, analysis = _for_display(res, analysis, inputs)
+    artifacts.write_backtest(staging, shown, analysis)
     fingerprint = res.fingerprint()
     perf = analysis["performance"]["values"]
 
@@ -306,14 +439,21 @@ def validation_task(ctx: JobContext) -> Finalizer:
         if exp is None:
             raise PermanentJobError("experiment not found")
         ctx.heartbeat(0.01, "loading dataset", force=True)
-        bars, actions, cfg = load_experiment_inputs(db, exp)
+        inputs = load_experiment_inputs(db, exp)
         key, params = exp.strategy_key, dict(exp.strategy_params)
 
     def progress(f: float, msg: str) -> None:
         ctx.heartbeat(0.02 + 0.95 * f, msg)
 
     result = run_validation_suite(
-        bars, actions, key, params, cfg, on_progress=progress, seed=int(ctx.payload.get("seed", 0))
+        inputs.bars,
+        inputs.actions,
+        key,
+        params,
+        inputs.cfg,
+        on_progress=progress,
+        seed=int(ctx.payload.get("seed", 0)),
+        instruments=inputs.master,
     )
 
     def finalize(db: Session) -> dict[str, Any]:
@@ -351,13 +491,18 @@ def ml_task(ctx: JobContext) -> Finalizer:
     ctx.heartbeat(0.02, "building features", force=True)
     store = dataset_store()
     dv = store.open(ds.slug, dv_row.version_hash)
+    history = store.load_symbol_history(dv)
+    bars, actions = store.load_bars(dv), store.load_actions(dv)
+    if not is_legacy(history):  # learn per instrument, so a rename is one series
+        bars, actions = key_by_instrument(bars, actions, history)
     result = run_ml_experiment(
-        store.load_bars(dv),
-        store.load_actions(dv),
+        bars,
+        actions,
         cfg,
         on_progress=lambda f, m: ctx.heartbeat(0.05 + 0.9 * f, m),
+        instruments=store.load_master(dv),
     )
-    preds = result.pop("predictions")
+    preds = display_frame(result.pop("predictions"), history)
     staging = artifacts.stage_dir(run_id, ctx.attempt)
     preds.to_parquet(staging / "predictions.parquet", index=False)
     doc = jsonable(result)

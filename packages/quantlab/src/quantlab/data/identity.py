@@ -221,9 +221,19 @@ def is_legacy(history: pd.DataFrame) -> bool:
 
 
 def _resolve(
-    history: pd.DataFrame, by: str, target: str, keys: pd.Series, dates: pd.Series
+    history: pd.DataFrame,
+    by: str,
+    target: str,
+    keys: pd.Series,
+    dates: pd.Series,
+    *,
+    open_only: bool = True,
 ) -> pd.Series:
-    """For each (key, date), the ``target`` of the interval of ``by`` = key covering date."""
+    """For each (key, date), the ``target`` of the interval of ``by`` = key covering date.
+
+    With ``open_only=False`` the latest interval that *started* on or before the date is
+    used even if it has ended (the last ticker a delisted security had), for display only.
+    """
     # merge_asof needs identical key dtypes on both sides.
     left = (
         pd.DataFrame(
@@ -243,7 +253,9 @@ def _resolve(
     # Latest interval of this key starting on or before the date; intervals of one key
     # never overlap, so it is the only candidate, and it must still be open on the date.
     m = pd.merge_asof(left, right, left_on="_d", right_on="valid_from", by=by, direction="backward")
-    live = m["valid_from"].notna() & (m["valid_to"].isna() | (m["_d"] < m["valid_to"]))
+    live = m["valid_from"].notna()
+    if open_only:
+        live &= m["valid_to"].isna() | (m["_d"] < m["valid_to"])
     out = pd.Series(np.where(live, m[target], None), index=m["_pos"].to_numpy(), dtype=object)
     return out.sort_index().set_axis(keys.index)
 
@@ -310,3 +322,52 @@ def key_by_instrument(
         normalize_bars(keyed),
         normalize_actions(actions.assign(symbol=act_ids.astype(str))),
     )
+
+
+def resolve_universe(
+    history: pd.DataFrame, tickers: list[str], as_of: pd.Timestamp | str
+) -> tuple[list[str], list[str]]:
+    """Instrument ids of ``tickers`` as of ``as_of`` (the backtest start), and the tickers
+    that name no instrument then.
+
+    Resolving at the start, never "today", keeps the universe point in time: a security
+    renamed later is still in it under its later ticker, and a ticker reused later by
+    another issuer does not pull that issuer in.
+    """
+    when = pd.Timestamp(as_of)
+    syms = pd.Series([str(t).upper().strip() for t in tickers])
+    ids = resolve_ids(history, syms, pd.Series([when] * len(syms)))
+    resolved = sorted({str(i) for i in ids.dropna()})
+    unresolved = sorted(syms[ids.isna().to_numpy()].tolist())
+    return resolved, unresolved
+
+
+def tickers_of(history: pd.DataFrame, ids: list[str]) -> list[str]:
+    """Every ticker the instruments ever traded under (to load their full history)."""
+    wanted = {str(i).upper() for i in ids}
+    return sorted(set(history.loc[history["instrument_id"].isin(wanted), "symbol"]))
+
+
+def display_frame(
+    frame: pd.DataFrame, history: pd.DataFrame, date_col: str = "date"
+) -> pd.DataFrame:
+    """Turn an id-keyed result frame back into tickers for display.
+
+    ``symbol`` becomes the ticker valid on each row's date and the permanent id moves to
+    an ``instrument_id`` column. Under the legacy map both are the same value. A row dated
+    after the instrument's last ticker ended (a delisting fill, say) shows that last ticker;
+    one with no ticker at all keeps the id.
+    """
+    if "symbol" not in frame.columns:
+        return frame
+    out = frame.copy()
+    ids = out["symbol"].astype(str)
+    if len(out) and date_col in out.columns:
+        when = pd.to_datetime(out[date_col])
+        shown = symbols_as_of(history, ids, when)
+        # After a delisting no ticker is valid any more: show the last one it had.
+        last = _resolve(history, "instrument_id", "symbol", ids, when, open_only=False)
+        shown = shown.where(shown.notna(), last)
+        out["symbol"] = shown.where(shown.notna(), ids).astype(str).to_numpy()
+    out.insert(out.columns.get_loc("symbol") + 1, "instrument_id", ids.to_numpy())
+    return out

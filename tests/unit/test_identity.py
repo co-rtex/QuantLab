@@ -350,3 +350,56 @@ def test_verify_returns_false_for_a_tampered_invalid_history(tmp_path):
     bad = pd.concat([h, h.iloc[[0]].assign(instrument_id="Q9")])  # OLD -> two instruments
     bad.to_parquet(dv.path / "symbol_history.parquet", index=False)
     assert store.verify(dv) is False
+
+
+# ---------------------------------------------------------- job helpers (#9 part C)
+def _rename_and_reuse_history() -> pd.DataFrame:
+    return _hist(
+        [
+            ("I1", "OLD", "2020-01-02", "2021-07-01"),
+            ("I1", "NEW", "2021-07-01", None),  # renamed
+            ("I2", "XYZ", "2020-01-02", "2021-03-01"),
+            ("I3", "XYZ", "2021-07-01", None),  # ticker reused by another issuer
+        ]
+    )
+
+
+def test_universe_resolves_as_of_the_backtest_start():
+    from quantlab.data.identity import resolve_universe
+
+    h = _rename_and_reuse_history()
+    # Before the rename and the reuse: OLD names I1, XYZ names I2 (not the later I3).
+    assert resolve_universe(h, ["old", "XYZ"], "2020-06-01") == (["I1", "I2"], [])
+    # After both: the same tickers mean something else, or nothing.
+    assert resolve_universe(h, ["OLD", "XYZ", "NEW"], "2022-01-03") == (["I1", "I3"], ["OLD"])
+    # In the gap XYZ names nobody.
+    assert resolve_universe(h, ["XYZ"], "2021-05-03") == ([], ["XYZ"])
+
+
+def test_tickers_of_covers_every_ticker_an_instrument_had():
+    from quantlab.data.identity import tickers_of
+
+    h = _rename_and_reuse_history()
+    assert tickers_of(h, ["I1"]) == ["NEW", "OLD"]
+    assert tickers_of(h, ["I2"]) == ["XYZ"]  # loading XYZ also loads I3; keying separates them
+
+
+def test_display_frame_shows_the_ticker_valid_on_each_date():
+    from quantlab.data.identity import display_frame
+
+    h = _rename_and_reuse_history()
+    frame = pd.DataFrame(
+        {
+            "date": pd.to_datetime(["2021-01-04", "2021-08-02", "2021-04-01", "2021-08-02"]),
+            "symbol": ["I1", "I1", "I2", "I3"],
+            "quantity": [1.0, 2.0, 3.0, 4.0],
+        }
+    )
+    out = display_frame(frame, h)
+    assert out["symbol"].tolist() == ["OLD", "NEW", "XYZ", "XYZ"]
+    assert out["instrument_id"].tolist() == ["I1", "I1", "I2", "I3"]
+    assert list(out.columns) == ["date", "symbol", "instrument_id", "quantity"]
+    # I2 traded as XYZ until 2021-03-01; a fill after that (its delisting) shows XYZ too.
+    assert out["symbol"].iloc[2] == "XYZ"
+    legacy = display_frame(frame.assign(symbol=["AAA"] * 4), legacy_history(["AAA"]))
+    assert (legacy["symbol"] == legacy["instrument_id"]).all()
