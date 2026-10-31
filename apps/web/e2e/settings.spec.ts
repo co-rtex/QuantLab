@@ -18,30 +18,49 @@ async function registerAs(page: Page, name: string, email: string) {
   await expect(page.getByText("This workspace has no market data yet")).toBeVisible();
 }
 
-test("an owner renames and deletes a workspace", async ({ page }) => {
+const switcher = (page: Page) => page.getByLabel("Workspace", { exact: true });
+
+test("an owner renames and deletes a workspace, once however often they click", async ({ page }) => {
   await registerAs(page, "Owner", `settings-owner-${Date.now()}@example.com`);
-  await page.request.post("/api/v1/workspaces", { data: { name: "Scratch" } });
+  const scratch = (await (await page.request.post("/api/v1/workspaces", { data: { name: "Scratch" } })).json()).id as string;
   await page.goto("/settings");
-  await page.getByLabel("Workspace", { exact: true }).selectOption({ label: "Scratch" });
+  await switcher(page).selectOption({ label: "Scratch" });
 
   const panel = page.locator("section").filter({ hasText: "This workspace" });
   await panel.getByLabel("Name").fill("Scratch renamed");
   await panel.getByRole("button", { name: "Rename" }).click();
   await expect(page.getByRole("status")).toContainText("Workspace renamed to Scratch renamed.");
-  await expect(page.getByLabel("Workspace", { exact: true }).locator("option", { hasText: "Scratch renamed" })).toHaveCount(1);
+  await expect(switcher(page).locator("option", { hasText: "Scratch renamed" })).toHaveCount(1);
 
+  const deletes: string[] = [];
+  page.on("request", (r) => {
+    if (r.method() === "DELETE" && r.url().endsWith(`/api/v1/workspaces/${scratch}`)) deletes.push(r.url());
+  });
   const remove = panel.getByRole("button", { name: "Delete workspace" });
   await expect(remove).toBeDisabled();
   await panel.getByLabel("Type Scratch renamed to confirm").fill("Scratch renamed");
   await audit(page, "settings, delete confirmation");
-  await remove.click();
+  await remove.dblclick();
   await expect(page.getByRole("status")).toContainText("Workspace Scratch renamed was deleted");
-  await expect(page.getByLabel("Workspace", { exact: true }).locator("option", { hasText: "Scratch renamed" })).toHaveCount(0);
-  const names = (await (await page.request.get("/api/v1/workspaces")).json()).map((w: { name: string }) => w.name);
-  expect(names).not.toContain("Scratch renamed");
+  expect(deletes).toHaveLength(1);
+  await expect(page.getByRole("alert").filter({ hasText: /not found/i })).toHaveCount(0);
+  await expect(switcher(page).locator("option", { hasText: "Scratch renamed" })).toHaveCount(0);
 });
 
-test("an owner removes a member, who then loses access", async ({ browser }: { browser: Browser }) => {
+test("deleting the last workspace leaves nothing selected and says so", async ({ page }) => {
+  await registerAs(page, "Alone", `settings-alone-${Date.now()}@example.com`);
+  await page.goto("/settings");
+  const name = await switcher(page).locator("option:checked").innerText();
+  const panel = page.locator("section").filter({ hasText: "This workspace" });
+  await panel.getByLabel(`Type ${name} to confirm`).fill(name);
+  await panel.getByRole("button", { name: "Delete workspace" }).click();
+  await expect(page.getByRole("status").filter({ hasText: "You have no workspaces." })).toBeVisible();
+  expect(await page.evaluate(() => localStorage.getItem("quantlab.workspace"))).toBeNull();
+  await page.reload();
+  await expect(page.getByRole("status").filter({ hasText: "You have no workspaces." })).toBeVisible();
+});
+
+test("an owner removes a member through a separate confirmation, who then loses access", async ({ browser }: { browser: Browser }) => {
   const stamp = Date.now();
   const owner = await (await browser.newContext()).newPage();
   await registerAs(owner, "Owner", `settings-o-${stamp}@example.com`);
@@ -55,10 +74,28 @@ test("an owner removes a member, who then loses access", async ({ browser }: { b
   expect((await member.request.get(`/api/v1/workspaces/${ws}`)).status()).toBe(200);
 
   await owner.goto("/settings");
-  const row = owner.getByRole("row").filter({ hasText: email });
-  await row.getByRole("button", { name: "Remove Member" }).click();
-  await row.getByRole("button", { name: "Remove Member" }).click(); // the confirmation
+  const open = owner.getByRole("button", { name: "Remove Member" });
+  const step = owner.getByRole("group", { name: /Remove Member from/ });
+
+  // Opening moves focus into the step; Escape closes it and returns focus to the row.
+  await open.click();
+  await expect(step).toBeFocused();
+  await expect(step.getByRole("button", { name: "Confirm removing Member" })).toBeVisible();
+  await audit(owner, "settings, member removal confirmation");
+  await owner.keyboard.press("Escape");
+  await expect(step).toHaveCount(0);
+  await expect(open).toBeFocused();
+
+  // "Keep" closes it too; a double click on Remove only opens it.
+  await open.dblclick();
+  await step.getByRole("button", { name: "Keep Member" }).click();
+  await expect(open).toBeFocused();
+  expect((await member.request.get(`/api/v1/workspaces/${ws}`)).status()).toBe(200);
+
+  await open.click();
+  await step.getByRole("button", { name: "Confirm removing Member" }).click();
   await expect(owner.getByRole("status")).toContainText("Member was removed");
   await expect(owner.getByRole("row").filter({ hasText: email })).toHaveCount(0);
+  await expect(owner.locator("h2 span", { hasText: "Members" })).toBeFocused();
   expect((await member.request.get(`/api/v1/workspaces/${ws}`)).status()).toBe(404);
 });

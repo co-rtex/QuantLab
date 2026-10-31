@@ -7,7 +7,7 @@ interface Ctx {
   user: User | undefined;
   workspaces: Workspace[];
   workspace: Workspace | undefined;
-  setWorkspaceId: (id: string) => void;
+  setWorkspaceId: (id: string | null) => void;
   refresh: () => Promise<void>;
   /** Why the account or its workspaces could not be loaded, if they could not (#18). */
   error: ApiError | undefined;
@@ -32,7 +32,9 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
     try {
       stored = localStorage.getItem(KEY);
     } catch {}
-    setSelected((cur) => cur ?? ws.find((w) => w.id === stored)?.id ?? ws[0]?.id ?? null);
+    // A deleted or left workspace must not stay selected (#105).
+    const known = (id: string | null) => (id && ws.some((w) => w.id === id) ? id : null);
+    setSelected((cur) => known(cur) ?? known(stored) ?? ws[0]?.id ?? null);
   };
   const refresh = async () => apply(await load());
 
@@ -54,10 +56,11 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
   }, [attempt]);
   const retry = () => setAttempt((n) => n + 1);
 
-  const setWorkspaceId = (id: string) => {
+  const setWorkspaceId = (id: string | null) => {
     setSelected(id);
     try {
-      localStorage.setItem(KEY, id);
+      if (id) localStorage.setItem(KEY, id);
+      else localStorage.removeItem(KEY);
     } catch {}
   };
 

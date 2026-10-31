@@ -102,6 +102,15 @@ export function Shell({ children }: { children: ReactNode }) {
             <QueryError q={{ data: workspaces.length ? workspaces : undefined, error, reload: retry }} what="your account and workspaces" />
           </div>
         )}
+        {user && !error && workspaces.length === 0 && (
+          <p role="status" className="mb-6 rounded border border-rule bg-surface px-3 py-2 text-sm">
+            You have no workspaces.{" "}
+            <Link href="/settings" className="text-cobalt underline underline-offset-2">
+              Create one
+            </Link>{" "}
+            to add data and run experiments.
+          </p>
+        )}
         {children}
       </main>
     </div>
