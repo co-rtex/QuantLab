@@ -148,7 +148,7 @@ def test_results_record_the_pipeline_version():
         NONE,
         MLConfig(horizon=5, sample_every=1, folds=2, min_train_dates=6, models=("majority",)),
     )
-    assert out["pipeline_version"] == ML_PIPELINE_VERSION == 2
+    assert out["pipeline_version"] == ML_PIPELINE_VERSION == 3
     assert out["panel"]["volume_flat_rows"] == 0
 
 
@@ -222,3 +222,54 @@ def test_results_report_the_excluded_rows():
     ex = out["panel"]["excluded_rows"]
     assert set(ex) == {"untraded_21", "dates_below_10_after_untraded"}
     assert ex["untraded_21"] > 0
+
+
+# ------------------------------------------- #142: zero-volume bars are missing trades
+def _zero_volume_halt(bars: pd.DataFrame, halt: tuple[int, ...]) -> pd.DataFrame:
+    """The same halt printed as zero-volume bars repeating the last close (a stale quote)."""
+    out = bars.copy()
+    sym = out["symbol"] == "S00"
+    last = out[sym & (out["date"] < SESSIONS[halt[0]])].iloc[-1]
+    rows = pd.DataFrame(
+        [
+            {
+                "symbol": "S00",
+                "date": SESSIONS[i],
+                "open": last["close"],
+                "high": last["close"],
+                "low": last["close"],
+                "close": last["close"],
+                "volume": 0.0,
+            }
+            for i in halt
+        ]
+    )
+    return normalize_bars(pd.concat([out, rows], ignore_index=True))
+
+
+def test_a_halt_printed_as_zero_volume_bars_reads_like_a_halt_without_bars():
+    halt = _halt(40, at=260)
+    no_bars = _bars(halt=halt)  # S00 has no bars during the halt
+    stale = _zero_volume_halt(no_bars, halt)  # S00 prints its last close, volume 0
+    f_none, _ = compute_features(no_bars, NONE)
+    f_stale, _ = compute_features(stale, NONE)
+    after = [SESSIONS[i] for i in range(halt[-1] + 1, len(SESSIONS))]
+    for name in ("bars_span_21", "max_gap_252", "log1p_max_gap_252"):
+        pd.testing.assert_series_equal(
+            f_none[name].loc[after, "S00"], f_stale[name].loc[after, "S00"], check_names=False
+        )
+    assert f_stale["max_gap_252"].loc[after[0], "S00"] == 40
+    # Before #142 a zero-volume bar was a fresh observation: no gap at all.
+    assert f_stale["bars_span_21"].loc[after[0], "S00"] == pytest.approx((21 + 40) / 21)
+
+
+def test_the_gap_grows_through_a_zero_volume_halt_and_dense_names_are_unchanged():
+    halt = _halt(40, at=260)
+    stale = _zero_volume_halt(_bars(halt=halt), halt)
+    feats, _ = compute_features(stale, NONE)
+    # On the k-th zero-volume bar, k - 1 sessions have passed without a trade before it.
+    for k in (1, 10, 25):
+        assert feats["max_gap_252"].loc[SESSIONS[halt[0] + k - 1], "S00"] == k - 1
+    dense = [c for c in feats["max_gap_252"].columns if c != "S00"]
+    assert (feats["max_gap_252"][dense].dropna() == 0).all().all()
+    assert (feats["bars_span_21"][dense].dropna() == 1).all().all()

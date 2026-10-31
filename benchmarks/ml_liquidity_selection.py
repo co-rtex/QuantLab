@@ -10,8 +10,10 @@ its own-bar features are complete apart from staleness, and its label is defined
 * **2·L cap (retracted in #125).** A row is excluded when any feature's oldest bar lies
   more than twice its lookback in sessions back. It is recomputed here from bar session
   positions.
-* **Covariates (pipeline 2).** Nothing is excluded for staleness; ``bars_span_21`` and
-  ``log1p_max_gap_252`` (model inputs) describe it. This is what ``build_panel`` does.
+* **Covariates (pipeline 3).** Nothing is excluded for staleness; ``bars_span_21`` and
+  ``log1p_max_gap_252`` (model inputs) describe it, counting time since *trades* so a
+  halt printed as zero-volume bars reads like one without bars (#142). This is what
+  ``build_panel`` does.
 
 Usage::
 
@@ -67,6 +69,7 @@ def selection_table(
         syms[4]: 0.80,
         syms[5]: "every other session",
         syms[6]: "40-session halt",
+        syms[7]: "40-session halt, zero-volume bars",
         syms[10]: "dense, never halted",
     }
     keep = pd.Series(True, index=bars.index)
@@ -78,7 +81,13 @@ def selection_table(
             keep[idx] = ~bars.loc[idx, "date"].isin(d[halt_at : halt_at + 40])
         elif isinstance(p, float):
             keep[idx] = rng.random(len(idx)) < p
-    sb = bars[keep]
+    sb = bars[keep].copy()
+    # The same halt printed as zero-volume bars repeating the last close (#142).
+    zs = next(s for s, p in names.items() if p == "40-session halt, zero-volume bars")
+    zero = (sb["symbol"] == zs) & sb["date"].isin(d[halt_at : halt_at + 40])
+    last_close = sb.loc[(sb["symbol"] == zs) & (sb["date"] < d[halt_at]), "close"].iloc[-1]
+    sb.loc[zero, ["open", "high", "low", "close"]] = last_close
+    sb.loc[zero, "volume"] = 0.0
     cfg = MLConfig(sample_every=1)
     panel = build_panel(sb, acts, cfg)
     feats, _ = compute_features(sb, acts)
@@ -100,7 +109,8 @@ def selection_table(
         out.append(
             {
                 "name": p if isinstance(p, str) else f"random {p:.0%}",
-                "traded": len(own) / len(d),
+                # Sessions with an actual trade (a zero-volume bar is not one).
+                "traded": int(((sb["symbol"] == s) & (sb["volume"] > 0)).sum()) / len(d),
                 "candidates": len(cand),
                 "kept_cap": sum(not stale[t] for t in cand),
                 "kept_covariates": len(set(rows["date"]) & set(cand)),
@@ -119,7 +129,7 @@ def markdown(rows: list[dict]) -> str:
         "SYNTHETIC market (quantlab.data.synthetic); not real data.",
         "",
         "| name | sessions traded | candidate rows | kept, 2·L cap (retracted) "
-        "| kept, covariates (pipeline 2) | median bars_span_21 | max max_gap_252 |",
+        "| kept, covariates (pipeline 3) | median bars_span_21 | max max_gap_252 |",
         "|---|---|---|---|---|---|---|",
     ]
     for r in rows:

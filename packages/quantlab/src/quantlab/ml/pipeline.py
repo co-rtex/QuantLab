@@ -77,7 +77,8 @@ PANEL_COLUMNS = [
 #   2: windows over each instrument's own bars (#120); flat non-zero volume gives
 #      volume_z_21 = 0 with the volume_flat_21 input; staleness inputs bars_span_21 and
 #      log1p_max_gap_252; rows with no volume in 21 bars are excluded (untraded_21)
-ML_PIPELINE_VERSION = 2
+#   3: the staleness inputs count time since trades, so zero-volume bars are gaps (#142)
+ML_PIPELINE_VERSION = 3
 # Below this, a rolling dispersion counts as zero (as in quantlab.analytics).
 _ZERO_DISPERSION = 1e-12
 ModelName = Literal["majority", "momentum_rule", "logistic", "random_forest", "gradient_boosting"]
@@ -147,14 +148,46 @@ def _own_bar_features(
         "volume_z_21": z,
     }
     # Staleness is described, not punished: a halt is one long gap (large max_gap_252),
-    # thin trading many short ones (large bars_span_21, small max_gap_252).
-    feats["bars_span_21"] = (session - session.shift(21)) / 21
-    gap = session - session.shift(1) - 1  # sessions without a bar just before this bar
+    # thin trading many short ones (large bars_span_21, small max_gap_252). Both count time
+    # since *trades*: a zero-volume bar (a stale close a vendor keeps printing) is a missing
+    # trade, so a halt printed as zero-volume bars reads the same as one with no bars (#142).
+    trade_21, trade_1 = _previous_trade_sessions(session, vol > 0)
+    feats["bars_span_21"] = (session - trade_21) / 21
+    gap = session - trade_1 - 1  # sessions without a trade just before this bar
     feats["max_gap_252"] = gap.rolling(252).max()
     feats["log1p_max_gap_252"] = np.log1p(feats["max_gap_252"])
     feats["volume_flat_21"] = flat.astype(float).where(v_std.notna() & ~untraded)
     masks = {"untraded": untraded.astype(float).where(vol.rolling(21).count() == 21)}
     return feats, masks
+
+
+def _previous_trade_sessions(
+    session: pd.DataFrame, traded: pd.DataFrame
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """Sessions of the 21st and the 1st most recent trade strictly before each bar.
+
+    Rows are an instrument's consecutive bars (compressed). A trade is a bar with volume.
+    For a bar with a trade, the n-th previous trade is n trades back in its trade series.
+    For a bar without one, the most recent trade is the last trade before it, so the n-th
+    is n - 1 trades before that. Only bars at or before each row are used.
+    """
+    t = traded.to_numpy(dtype=bool) & session.notna().to_numpy()
+    rows = np.cumsum(t, axis=0) - 1  # each trade's index among the instrument's trades
+    r_i, c_i = rows[t], np.nonzero(t)[1]
+    trades = np.full(session.shape, np.nan)
+    trades[r_i, c_i] = session.to_numpy(dtype=float)[t]
+    tr = pd.DataFrame(trades)
+    out = []
+    for n in (21, 1):
+        on_trade = np.full(session.shape, np.nan)
+        on_trade[t] = tr.shift(n).to_numpy()[r_i, c_i]
+        after_trade = np.full(session.shape, np.nan)  # carried to later bars without a trade
+        after_trade[t] = tr.shift(n - 1).to_numpy()[r_i, c_i]
+        carried = pd.DataFrame(after_trade).ffill().shift(1).to_numpy()
+        value = np.where(t, on_trade, carried)
+        value[session.isna().to_numpy()] = np.nan
+        out.append(pd.DataFrame(value, index=session.index, columns=session.columns))
+    return out[0], out[1]
 
 
 def compute_features(

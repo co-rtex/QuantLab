@@ -440,15 +440,19 @@ solving.
   was NaN for the window's length, which dropped a recently halted security, a selection
   correlated with distress, for up to 252 sessions.
 * **Staleness is described, not excluded.** Trade-time windows can reach far back in
-  calendar time, after a halt or for a thinly traded name. Two model inputs say how far
-  (s is a bar's position on the session calendar):
-  * `bars_span_21 = (s[t] − s[t−21]) / 21`: the calendar span of `mom_21`'s 21 returns,
-    per return. It is 1 for a bar every session and 2 for every other session.
-  * `log1p_max_gap_252 = log(1 + max_gap_252)`. `max_gap_252` is the largest number of
-    sessions without a bar between consecutive bars over the last 252 returns (bars
-    t−252 … t, so including the gap between t−252 and t−251). The raw count is unbounded,
-    so the model sees its log; the panel keeps the raw value as `max_gap_252`, which is
-    not a model input.
+  calendar time, after a halt or for a thinly traded name. Two model inputs say how far.
+  Both count time since **trades**: a bar with zero volume (a stale close a vendor keeps
+  printing) is a missing trade, so a halt printed as zero-volume bars reads like one with
+  no bars (#142, pipeline version 3). Here s is a bar's position on the session calendar,
+  and trade_n(t) is the session of the n-th most recent trade strictly before bar t:
+  * `bars_span_21 = (s[t] − trade_21(t)) / 21`. When every bar trades, this is the
+    calendar span of `mom_21`'s 21 returns per return: 1 for a bar every session, 2 for
+    every other session.
+  * `log1p_max_gap_252 = log(1 + max_gap_252)`. `max_gap_252` is the largest
+    `s[t] − trade_1(t) − 1` (sessions without a trade before a bar) over the last 252
+    bars, including the gap before bar t−251. The raw count is unbounded, so the model
+    sees its log; the panel keeps the raw value as `max_gap_252`, which is not a model
+    input. Within a zero-volume halt the gap grows bar by bar.
 
   A halt shows as one long gap (a 40-session halt gives `max_gap_252 = 40`). Thin trading
   shows many short ones: every other session gives `bars_span_21 = 2` with
@@ -456,7 +460,8 @@ solving.
   An earlier rule excluded a feature whose oldest bar lay more than 2·L sessions back. It
   was retracted because it selects against illiquid names: a sparsely traded name is not
   halted, but its gaps add up over a window. Measured by
-  `benchmarks/ml_liquidity_selection.py`, the share of each name's candidate rows kept:
+  `benchmarks/ml_liquidity_selection.py`, the share of each name's candidate rows kept
+  (a condensed table that matches the script's output):
   * Market: synthetic, `generate_market` with 30 assets over 2018-01-02 to 2022-12-30,
     seed 11, `split_probability` 0.002.
   * Thinning: random keep with `numpy.random.default_rng(1)`; the halt covers sessions
@@ -466,7 +471,7 @@ solving.
     name has a bar, complete features apart from staleness, and a defined label.
 
 
-  | name | sessions traded | 2·L cap (retracted) | covariates (pipeline 2) |
+  | name | sessions traded | 2·L cap (retracted) | covariates (pipeline 3) |
   |---|---|---|---|
   | random 80% | 81% | 100% | 100% |
   | random 60% | 59% | 67% | 100% |
@@ -474,6 +479,7 @@ solving.
   | random 45% | 46% | 0% (drops out) | 100% |
   | every other session | 50% | 100% (exactly at the bound) | 100% |
   | 40-session halt | 97% | 98% | 100% |
+  | 40-session halt, zero-volume bars | 80% | 100% (blind to it) | 100% (`max_gap_252` = 40) |
   | dense, never halted | 100% | 100% | 100% |
 
   The residual liquidity effect is the warm-up. A name enters once it has 252 bars of its
