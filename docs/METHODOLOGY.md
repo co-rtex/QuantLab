@@ -450,8 +450,10 @@ solving.
   `max_gap_252 = 1`, and random 50% trading gives about 2.05 with a maximum gap near 9.
   An earlier rule excluded a feature whose oldest bar lay more than 2·L sessions back. It
   was retracted because it selects against illiquid names: a sparsely traded name is not
-  halted, but its gaps add up over a window. Measured on the reviewer's probe (synthetic,
-  30 assets, 2018–2022, every session sampled), the share of each name's candidate rows
+  halted, but its gaps add up over a window. Measured by
+  `benchmarks/ml_liquidity_selection.py` (a synthetic market of 30 assets, 2018–2022,
+  every session sampled; a candidate row is a sampled date with a bar, complete features
+  apart from staleness and a defined label), the share of each name's candidate rows
   kept:
 
   | name | sessions traded | 2·L cap (retracted) | covariates (pipeline 2) |
