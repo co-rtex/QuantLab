@@ -1,6 +1,6 @@
 # Status (authoritative handoff)
 
-_Last updated: 2026-10-31 (lead integration cycle 2: 38 PRs merged before this update, per `gh pr list --state merged`; main `0a1c5f2`)_
+_Last updated: 2026-10-31 (lead integration cycle 2: 45 PRs merged before this update, per `gh pr list --state merged`; main `52508ed`)_
 
 ## Where things stand
 All roadmap phases 0–10 are implemented. An independent audit on 2026-10-30
@@ -99,10 +99,19 @@ leases and migration slots: [docs/COORDINATION.md](docs/COORDINATION.md).
   * #77 statistics follow-ups (#41).
   * #78 (lead) ADR-0011: jobs are deleted only through their workspace, with a guard test
     (#25).
+  * #81 (lead) stack-env URLs follow overridden ports and work outside git. **#22
+    complete.**
+  * #74 the assistant verifier binds each number to what the sentence says it is (#15,
+    verifier part). Three review rounds. False rejects in #79; the hosted eval is blocked
+    on a key.
+  * #76 reconciliation follow-ups (#54).
+  * #84 the invitation timing test uses paired samples (#80).
+  * #83 API errors surfaced with Retry, accessible (#18).
+  * #87 catalog row per (ticker, instrument), migration M3 (#66).
 * Every merge had an independent read-only lead review: no blockers. Should-fix items are
   tracked in #8, #51, #52 and #55 (Agent 2), #39 (gate), and #41, #50 and #54 (Agent 3).
 
-## Last verified (2026-10-31, main `0a1c5f2`)
+## Last verified (2026-10-31, main `52508ed`)
 Each merge was verified on a trial merge with current main, with pytest output written to a
 file rather than piped:
 * #28, #32, #36, #29, #30, #31: tree identical to main afterwards; 314 passed;
@@ -135,6 +144,11 @@ file rather than piped:
 * main + #77 + #78 (byte-identical to main `0a1c5f2`): 591 passed, plus 1 failed
   (`test_invite_timing_does_not_depend_on_registration`, a 5.54 vs 5.0 wall-clock margin in
   an untouched file; it passed 5/5 rerun alone). Tracked as a flake (#80). E2E 13/13.
+* main + #74: 697 passed, E2E 13/13. main + #76: 737 passed. #84: the timing test passed 3/3
+  and `test_invitations` 39/39.
+* main + #83: web clean, E2E 17/17 (4 new error specs).
+* main + #87 (byte-identical to main `52508ed`): **743 passed**. Fresh-DB migration round
+  trip with `NULLS NOT DISTINCT` verified in `pg_constraint`; no drift; **E2E 17/17**.
 
 CI is green on every merged head. CI doesn't run Playwright (#17).
 
@@ -147,21 +161,21 @@ Full-stack runs are now serialized machine-wide (`make e2e-serial`).
 
 ## Next steps (issues carry owners and acceptance criteria)
 1. **Agent 2:**
-   * #74 (#15 verifier): three narrow misattributions left;
-   * #18 frontend error surfacing (web files leased);
-   * then #79 (verifier false rejects) and #80 (timing flake).
+   * the #18 follow-up: catalog row key, deduplicated default-universe tickers, focus
+     targets, `input_differences`;
+   * #85 (`/invite` auth failure);
+   * #79 (verifier false rejects; the "label (value)" regression first).
 2. **Agent 3:**
-   * #76 (#54): the false `version_matches_data` alarm;
-   * #66 (M3 catalog key, leased `models.py`/`tasks.py`);
-   * #63 (`routes/experiments.py` leased);
-   * then #24 (market-data benchmarks, quiet window only).
+   * #88 (#63; merge main + wording fix);
+   * #90 (#86; merge main);
+   * the #66 comment follow-up;
+   * #11 vendor-neutral plumbing, disabled by default (`config.py`/`tasks.py` leased).
 3. **Lead:**
-   * #81 (#22 stack-env overrides);
+   * integrate the above;
    * #16 and #17 need the user's OK on Actions minutes;
-   * #21 storage lifecycle spans three owners' files and is unscheduled;
-   * #19 Terraform waits on #39.
-4. **Unassigned:** #20 (needs a load host), #23 frontend completeness, the benchmark half of
-   #24.
+   * #21 (storage lifecycle) is unscheduled;
+   * #19 waits on #39.
+4. **Unassigned:** #20 (needs a load host), #23, the benchmark half of #24.
 
 ## Blockers
 No LLM API key, market-data API key or cloud credentials (docs/BLOCKERS.md).

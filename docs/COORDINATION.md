@@ -45,11 +45,11 @@ follow-up docs commit. A lease ends when the PR that used it merges or closes.
 
 | Shared file | Current holder | For |
 |---|---|---|
-| `services/api/src/quantlab_api/models.py` | Agent 3 | #66 catalog key per (ticker, instrument), migration M3 |
+| `services/api/src/quantlab_api/models.py` | — | (#87 merged) |
 | `services/api/src/quantlab_api/schemas.py` | — | (#62 merged) |
-| `services/api/src/quantlab_api/config.py` | — | (#70 merged) |
+| `services/api/src/quantlab_api/config.py` | Agent 3 | #11 provider and key settings (`SecretStr`) |
 | `services/api/src/quantlab_api/jobs.py` | — | (#40, #47 merged) |
-| `services/api/src/quantlab_api/tasks.py` | Agent 3 | #66 catalog owner on reuse, `meta.universe` labels |
+| `services/api/src/quantlab_api/tasks.py` | Agent 3 | #11 vendor-neutral provider plumbing (disabled by default) |
 | `services/api/alembic/env.py` | — | (#37 merged) |
 | `scripts/case_study.py` | — | (Agent 2's invitation fix merged in #37) |
 | `services/api/src/quantlab_api/main.py` | — | (#75 merged) |
@@ -70,7 +70,7 @@ Alembic revisions form one linear chain, so only one migration may be in flight 
 |---|---|---|---|
 | M1 | Agent 2 | #5 invitations, revision `7c3e5a1d9b20` → `4f1c2a9e7b10` | **merged** (#37, `9e76ff3`) |
 | M2 | Agent 3 | #9 part C, revision `9a4c6e2f1b37` → `7c3e5a1d9b20` | **merged** (#62, `925cc1c`) |
-| M3 | Agent 3 | #66 instruments unique key `(dataset_version_id, symbol, instrument_id)` with `NULLS NOT DISTINCT`; `down_revision 9a4c6e2f1b37` | in progress |
+| M3 | Agent 3 | #66 revision `b5e1d7c3a924` → `9a4c6e2f1b37`: instruments key `(dataset_version_id, symbol, instrument_id)` `NULLS NOT DISTINCT` | **merged** (#87, `52508ed`) |
 
 Rules: request the slot on the issue before running `alembic revision`; set `down_revision`
 to the current head on `main` at the time; include a working `downgrade`; the migration
