@@ -15,7 +15,15 @@ from quantlab_api.config import get_settings
 from quantlab_api.errors import ApiError
 from quantlab_api.jobs import redis_conn, submit_job
 from quantlab_api.marketdata import bars_payload
-from quantlab_api.models import Dataset, DatasetVersion, Instrument, Role, User, WorkspaceMember
+from quantlab_api.models import (
+    Dataset,
+    DatasetVersion,
+    Instrument,
+    Job,
+    Role,
+    User,
+    WorkspaceMember,
+)
 from quantlab_api.schemas import (
     MAX_OFFSET,
     BarsOut,
@@ -273,6 +281,7 @@ async def upload_csv(
     # Every rejection after staging (job cap 429, slug 409, errors) must delete the files;
     # only an accepted job owns them. Otherwise each rejected retry left up to 100 MB on
     # disk until the reaper's 24-hour sweep.
+    commit_attempted = False
     try:
         upload = await read_multipart(
             request,
@@ -322,6 +331,7 @@ async def upload_csv(
             provider="csv",
             bytes=sum(files.values()),
         )
+        commit_attempted = True
         job, _ = submit_job(
             db,
             workspace_id=workspace_id,
@@ -337,6 +347,28 @@ async def upload_csv(
             request_id=getattr(request.state, "request_id", None),
         )
     except BaseException:
-        shutil.rmtree(staged, ignore_errors=True)
+        # A commit can fail on the client after the server applied it (the connection
+        # dropped while it answered). Then a committed job still needs these files, so
+        # they are kept unless it is certain that none does (#7).
+        if not commit_attempted or _staging_unclaimed(staged):
+            shutil.rmtree(staged, ignore_errors=True)
         raise
     return JobOut.model_validate(job)
+
+
+def _staging_unclaimed(staged: Path) -> bool:
+    """True only if a fresh look at the database shows no job using ``staged``. On any
+    doubt (the database is unreachable) the files stay, for the reaper's sweep."""
+    from quantlab_api.db import SessionLocal
+
+    try:
+        with SessionLocal() as fresh:
+            claimed = fresh.scalar(
+                select(Job.id).where(
+                    Job.kind == "dataset.csv",
+                    Job.payload["staged_dir"].as_string() == str(staged),
+                )
+            )
+    except Exception:
+        return False
+    return claimed is None

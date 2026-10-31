@@ -7,7 +7,7 @@ from datetime import UTC, datetime
 from typing import Any
 
 import pandas as pd
-from sqlalchemy import select
+from sqlalchemy import event, select
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session
 
@@ -434,7 +434,12 @@ def _csv_finalizer(ctx: JobContext, staged: Any) -> Finalizer:
         if ds is None:
             raise PermanentJobError("dataset was deleted")
         dv = register_version(db, ds, bars, actions, provenance, None, quality=quality)
-        shutil.rmtree(staged, ignore_errors=True)
+        # Release the upload only once this transaction has committed: deleting it here
+        # turned a failed commit, which the job retries, into "files no longer available"
+        # (#7). If the commit raises, the files stay for the retry (or the reaper's sweep).
+        event.listen(
+            db, "after_commit", lambda _s: shutil.rmtree(staged, ignore_errors=True), once=True
+        )
         return {
             "message": f"dataset version {dv.version_hash[:12]} ready ({dv.quality_status})",
             "dataset_version_id": str(dv.id),
