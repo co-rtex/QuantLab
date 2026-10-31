@@ -551,3 +551,42 @@ def test_review_94_misattributions_rejected(text, facts):
 )
 def test_review_94_legitimate_phrasings(text, facts):
     assert verify_answer(text, facts)["grounded"], text
+
+
+@pytest.mark.parametrize(
+    ("text", "facts"),
+    [
+        # An opening clause without a subject of its own is about the main clause (#94).
+        ("Although it fell, total return was 15.2% [F3].", FACTS_79),
+        ("While negative, the return was 15.2% [F3].", FACTS_79),
+        ("Though down, total return was 15.2% [F3].", FACTS_79),
+        ("While a loss, the return was 15.2% [F3].", FACTS_79),
+        ("Although it gained, the maximum drawdown was 28.3% [F2].", FACTS_79),
+        ("Despite falling, total return was 15.2% [F3].", FACTS_79),
+        ("After falling, total return was 15.2% [F3].", FACTS_79),
+        ("Although the return fell, total return was 15.2% [F3].", FACTS_79),
+        ("It fell, but total return was 15.2% [F3].", FACTS_79),
+        # A subject of its own does not hide a contradiction in the main clause.
+        ("Although the benchmark rose, total return fell 15.2% [F3].", FACTS_79),
+    ],
+)
+def test_review_94_opening_clause_misattributions_rejected(text, facts):
+    assert not verify_answer(text, facts)["grounded"], text
+
+
+@pytest.mark.parametrize(
+    ("text", "facts"),
+    [
+        ("Although it fell, total return was 15.2% [F3].", SIGNED_FACTS),
+        ("While negative, the return was 15.2% [F3].", SIGNED_FACTS),
+        ("Though down, total return was 15.2% [F3].", SIGNED_FACTS),
+        ("Despite falling, total return was 15.2% [F3].", SIGNED_FACTS),
+        # An opening clause with a subject of its own describes that subject.
+        ("Although the benchmark fell, total return was 15.2% [F3].", FACTS_79),
+        ("Although SYNIDX fell, total return was 15.2% [F3].", FACTS_79),
+        ("While the benchmark was negative, total return was 15.2% [F3].", FACTS_79),
+        ("The benchmark fell, but total return was 15.2% [F3].", FACTS_79),
+    ],
+)
+def test_review_94_opening_clause_legitimate(text, facts):
+    assert verify_answer(text, facts)["grounded"], text

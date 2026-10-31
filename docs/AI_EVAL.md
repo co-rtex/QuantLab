@@ -127,9 +127,15 @@ misattribution rejected (`test_issue_79_*`):
   a clause that carries a figure starts a scope. A clause with no figure of its own joins
   the scope beside it, so "Total return was 15.2%, a loss", "Total return, which fell,
   was 15.2%" and "Alpha was negative, at 2.1%" are read as one. (An earlier draft of #94
-  cut these off and accepted the misattributions; review caught it.) Only a figure-less
-  subordinate clause that opens the sentence ("Although the benchmark fell,", "After the
-  drawdown,") is a scope of its own, so its words describe something else. A figure is
+  cut these off and accepted the misattributions; review caught it.) A figure-less clause
+  that opens the sentence is a scope of its own only when it is subordinate ("Although",
+  "After", "While" ...) or followed by "but", and has a subject of its own: "Although
+  the benchmark fell,", "After the drawdown,", "Despite losses elsewhere,", "The
+  benchmark fell, but". Its words then describe that subject. A pronoun, a participle,
+  an article or a bare adjective ("Although it fell", "Despite falling", "While a loss",
+  "While negative"), or a named quantity with a direction ("Although the return fell"),
+  is about the main clause, so its words apply there. (The second draft of #94 kept every
+  opening subordinate clause apart; review caught that too.) A figure is
   read with the names of its scope when there are any, and with the direction words of
   its scope up to the next figure, so "15.2%, a decline" and "15.2%, but negative" state
   a loss. In "Volatility was 18.3% and costs were $12,345" each figure has its own kind.

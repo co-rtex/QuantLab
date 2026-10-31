@@ -659,7 +659,8 @@ _KIND_WORDS: list[tuple[frozenset[str], re.Pattern[str], str | None]] = [
 ]
 # Words that state a fall without naming a quantity ("Equity fell 4%").
 _FALL = re.compile(
-    r"\b(?:fell|fall(?:s|en)?|declin(?:e|es|ed|ing)|drop(?:s|ped)?|down|shed|sheds|slid|"
+    r"\b(?:fell|fall(?:s|en|ing)?|declin(?:e|es|ed|ing)|drop(?:s|ped|ping)?|down|shed|sheds|"
+    r"slid|sliding|sinking|"
     r"sank|tumbled|negative|below zero)\b",
     re.I,
 )
@@ -667,8 +668,8 @@ _FALL = re.compile(
 # rose 28.3%") or right after it ("28.3% higher"), unless their subject is a loss: in "the
 # drawdown grew to 28.3%" the loss deepened (#74).
 _RISE = re.compile(
-    r"\b(?:rose|rise[sn]?|grew|grow(?:s|n)?|increas(?:e|es|ed)|up(?! to\b)|higher|"
-    r"climb(?:s|ed)?|advanc(?:e|es|ed))\b",
+    r"\b(?:rose|rise[sn]?|rising|grew|grow(?:s|n|ing)?|increas(?:e|es|ed|ing)|up(?! to\b)|"
+    r"higher|climb(?:s|ed|ing)?|advanc(?:e|es|ed|ing))\b",
     re.I,
 )
 # Words that may stand between a loss and the rise it is the subject of.
@@ -752,10 +753,53 @@ def _nearest(start: int, end: int, mentions: list[Mention]) -> Mention | None:
     return min(mentions, key=distance)
 
 
-def _scopes(masked: str, figures: list[int]) -> list[tuple[int, int, bool]]:
+# Words that cannot be a subject of their own: a clause that starts with one ("Although it
+# fell", "While negative", "While a loss", "Despite falling") is about the main clause's
+# subject, so its words apply there (#94).
+_NO_SUBJECT = frozenset(
+    re.findall(
+        r"\w+",
+        "it its they their them this that these those there he she we a an negative "
+        "positive down up lower higher flat weak weaker strong stronger small modest sharp "
+        "sharply slightly briefly still so very much more less mostly largely deeply also "
+        "then again initially once recently",
+    )
+)
+
+
+def _own_subject(
+    masked: str, s: int, e: int, mentions: list[Mention], directions: list[int]
+) -> bool:
+    """Whether the figure-less clause masked[s:e] is about something other than the main
+    clause: "Although the benchmark fell", "Despite losses elsewhere", "After the
+    drawdown", but not "Although it fell" or "Although the return fell"."""
+    text = masked[s:e]
+    if re.search(r"\b(?:elsewhere|others?)\b", text, re.I):
+        return True
+    # A quantity named with a direction ("the return fell") is the main clause's quantity.
+    if any(s <= w[0] < e for w in mentions) and any(s <= d < e for d in directions):
+        return False
+    lead = _SUBORDINATE.match(text)
+    word = re.search(r"[A-Za-z][\w'&-]*", text[lead.end() :] if lead else text)
+    if word is None:
+        return False
+    w = word.group(0)
+    return not (
+        w.lower() in _NO_SUBJECT
+        or w.lower().endswith("ing")
+        or _FALL.fullmatch(w) is not None
+        or _RISE.fullmatch(w) is not None
+    )
+
+
+def _scopes(
+    masked: str, figures: list[int], mentions: list[Mention], directions: list[int]
+) -> list[tuple[int, int, bool]]:
     """(start, end, carries a figure) for each scope of a sentence: a clause that carries
-    a figure, with the figure-less clauses that trail or lead it. A figure-less leading
-    subordinate clause ("Although the benchmark fell,") is a scope of its own."""
+    a figure, with the figure-less clauses that trail or lead it. A figure-less clause
+    that opens the sentence and has a subject of its own is a scope of its own when it is
+    subordinate ("Although the benchmark fell,") or followed by "but" ("The benchmark
+    fell, but ...")."""
     cuts = list(_CLAUSE.finditer(masked))
     edges = [0, *(c.end() for c in cuts), len(masked)]
     out: list[list[Any]] = []  # [start, end, has figure, closed]
@@ -763,11 +807,17 @@ def _scopes(masked: str, figures: list[int]) -> list[tuple[int, int, bool]]:
         s, e = edges[i], edges[i + 1]
         fig = any(s <= p < e for p in figures)
         sep = cuts[i - 1].group(0).strip().lower() if i else ""
+        nxt = masked[e : edges[i + 2]] if i + 2 < len(edges) else ""
         sub = sep in ("while", "whereas") or _SUBORDINATE.match(masked[s:e]) is not None
-        leading = (
-            not out or out[-1][3]
-        )  # opens the sentence: "Total return, although it fell," does not
-        if sub and not fig and leading:
+        contrast = re.match(r"\s*but\b", nxt, re.I) is not None
+        # Opens the sentence: "Total return, although it fell," does not.
+        leading = not out or out[-1][3]
+        if (
+            (sub or contrast)
+            and not fig
+            and leading
+            and _own_subject(masked, s, e, mentions, directions)
+        ):
             out.append([s, e, False, True])
         elif out and not out[-1][3] and (not fig or not out[-1][2]):
             out[-1][1], out[-1][2] = e, out[-1][2] or fig
@@ -831,7 +881,12 @@ def verify_answer(text: str, facts: list[Fact]) -> dict[str, Any]:
         for w in mentions:  # "profit and loss" is one name, not two clauses
             masked = masked[: w[0]] + " " * (w[1] - w[0]) + masked[w[1] :]
         numbers = list(_NUM.finditer(body))
-        scopes = _scopes(masked, [n.start() for n in numbers])
+        directions = [
+            *(d.start() for d in _FALL.finditer(body)),
+            *(d.start() for d in _RISE.finditer(body)),
+            *(w[0] for w in mentions if w[4]),
+        ]
+        scopes = _scopes(masked, [n.start() for n in numbers], mentions, directions)
         firsts = [s[0] for s in scopes]
 
         def clause(pos: int, firsts: list[int] = firsts) -> int:
