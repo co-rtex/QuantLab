@@ -226,6 +226,28 @@ function Holdings({ id, dates }: { id: string; dates: string[] }) {
   );
 }
 
+interface Comparison {
+  experiment_id: string;
+  name: string;
+  fingerprint_match: boolean;
+  same_inputs: boolean;
+  status: string;
+  // Which hashed inputs differ, e.g. a re-run on a newer engine (#88). Older APIs omit it.
+  input_differences?: { input: string; original: unknown; reproduction: unknown }[];
+}
+
+// Inputs can be parameter objects or universe lists (#88): show them as JSON, cut short.
+function inputValue(v: unknown, max = 60): string {
+  const s = typeof v === "string" || typeof v === "number" ? String(v) : (JSON.stringify(v) ?? String(v));
+  return s.length > max ? `${s.slice(0, max - 1)}…` : s;
+}
+
+function differences(c: Comparison): string {
+  const d = c.input_differences ?? [];
+  if (!d.length) return "different inputs";
+  return "different inputs: " + d.map((x) => `${x.input.replaceAll("_", " ")} ${inputValue(x.original)} → ${inputValue(x.reproduction)}`).join(", ");
+}
+
 export default function ExperimentPage() {
   const { id } = useParams<{ id: string }>();
   const router = useRouter();
@@ -235,7 +257,7 @@ export default function ExperimentPage() {
   const analysis = useApi<Analysis>(done ? `/experiments/${id}/analysis` : null);
   const equity = useApi<Series>(done ? `/experiments/${id}/equity` : null);
   const version = useApi<DatasetVersion>(exp.data ? `/dataset-versions/${exp.data.dataset_version_id}` : null);
-  const repro = useApi<{ comparisons: { experiment_id: string; name: string; fingerprint_match: boolean; same_inputs: boolean; status: string }[] }>(done ? `/experiments/${id}/reproducibility` : null);
+  const repro = useApi<{ comparisons: Comparison[] }>(done ? `/experiments/${id}/reproducibility` : null);
   const [actionErr, setActionErr] = useState<ApiError>();
   const [validationRun, setValidationRun] = useState("");
 
@@ -549,7 +571,7 @@ export default function ExperimentPage() {
                     : c.fingerprint_match
                       ? "outputs match this run exactly"
                       : "outputs differ from this run"}
-                  {!c.same_inputs && " (different inputs)"}
+                  {!c.same_inputs && ` (${differences(c)})`}
                 </p>
               ))}
             </Panel>
