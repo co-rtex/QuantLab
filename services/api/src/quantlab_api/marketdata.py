@@ -18,6 +18,10 @@ import pandas as pd
 
 from quantlab.data.adjust import PointInTimeAdjuster
 from quantlab.data.schema import normalize_actions
+from quantlab.data.vendors.http import Transport, urllib_transport
+from quantlab.data.vendors.massive import MassiveProvider
+from quantlab.data.vendors.registry import get_vendor
+from quantlab_api.config import Settings
 from quantlab_api.observability import CACHE_EVENTS, log
 
 _local = threading.local()
@@ -120,3 +124,50 @@ def bars_payload(
             log.warning("cache_error", error=str(exc))
     payload["cache"] = "miss" if redis is not None else "bypass"
     return payload
+
+
+# ------------------------------------------------------------ licensed vendors (#11)
+class MarketDataNotConfiguredError(Exception):
+    """No licensed market-data provider is configured; the vendor path stays inert."""
+
+
+def vendor_status(settings: Settings) -> dict[str, Any]:
+    """Whether the vendor path is enabled, and if not, which settings are unset.
+
+    Never includes the key itself, only whether it is set.
+    """
+    missing = [
+        env
+        for env, value in (
+            ("QUANTLAB_MARKET_DATA_PROVIDER", settings.market_data_provider),
+            ("QUANTLAB_MARKET_DATA_API_KEY", settings.market_data_api_key),
+            ("QUANTLAB_MARKET_DATA_LICENSE", settings.market_data_license),
+            ("QUANTLAB_MARKET_DATA_PLAN", settings.market_data_plan),
+        )
+        if value is None
+    ]
+    return {"enabled": not missing, "provider": settings.market_data_provider, "missing": missing}
+
+
+def configured_vendor(settings: Settings, transport: Transport | None = None) -> MassiveProvider:
+    """The configured vendor's provider; MarketDataNotConfiguredError names what is unset.
+
+    The vendor and its licence are the user's choice: until all four settings are present
+    this refuses, so nothing fetches from a vendor by default.
+    """
+    status = vendor_status(settings)
+    if not status["enabled"]:
+        raise MarketDataNotConfiguredError(
+            "licensed market data is not configured (unset: " + ", ".join(status["missing"]) + ")"
+        )
+    assert settings.market_data_provider
+    assert settings.market_data_api_key
+    assert settings.market_data_license
+    assert settings.market_data_plan
+    return get_vendor(settings.market_data_provider).build(
+        settings.market_data_api_key.get_secret_value(),
+        license=settings.market_data_license,
+        plan=settings.market_data_plan,
+        requests_per_minute=settings.market_data_requests_per_minute,
+        transport=transport or urllib_transport,
+    )

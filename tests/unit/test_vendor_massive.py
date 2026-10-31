@@ -74,6 +74,7 @@ class FakeMassive:
 
     def __init__(self) -> None:
         self.requests: list[str] = []
+        self.headers: list[dict[str, str]] = []
         self.faults: dict[str, list[tuple[int, dict[str, str]]]] = {}
         self.overrides: dict[str, Callable[[dict], dict]] = {}
         self.extra_inactive: list[dict] = []  # more rows for active=false reference pages
@@ -81,11 +82,18 @@ class FakeMassive:
     def fail(self, path_fragment: str, *statuses: tuple[int, dict[str, str]]) -> None:
         self.faults[path_fragment] = list(statuses)
 
-    def __call__(self, url: str, timeout: float) -> HttpResponse:
+    def __call__(
+        self, url: str, timeout: float, headers: dict[str, str] | None = None
+    ) -> HttpResponse:
         self.requests.append(url)
+        self.headers.append(dict(headers or {}))
         parts = urllib.parse.urlsplit(url)
         q = dict(urllib.parse.parse_qsl(parts.query))
-        assert q.get("apiKey") == KEY, "every request carries the key"
+        if (headers or {}).get("Authorization"):  # bearer: the key never in the URL
+            assert headers["Authorization"] == f"Bearer {KEY}" and "apiKey" not in q
+            assert KEY not in url
+        else:
+            assert q.get("apiKey") == KEY, "every request carries the key"
         for frag, queue in self.faults.items():
             if frag in parts.path and queue:
                 status, headers = queue.pop(0)
@@ -301,11 +309,11 @@ def test_a_failure_mid_pagination_is_retried_without_losing_pages(fake):
     fake.page_size = 2
     failed: list[str] = []
 
-    def transport(url: str, timeout: float) -> HttpResponse:
+    def transport(url: str, timeout: float, headers=None) -> HttpResponse:
         if "cursor=2" in url and not failed:  # the second page fails once
             failed.append(url)
             return HttpResponse(502, {}, b"")
-        return fake(url, timeout)
+        return fake(url, timeout, headers)
 
     p, _ = _provider(fake)
     p.api.transport = transport
@@ -632,7 +640,7 @@ def test_oversized_responses_are_refused(monkeypatch):
 def test_url_encoded_keys_are_redacted(fake):
     key = "ab+c/d="
 
-    def transport(url, timeout):
+    def transport(url, timeout, headers=None):
         fake.requests.append(url)
         return HttpResponse(500, {}, b"")
 

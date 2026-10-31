@@ -30,7 +30,7 @@ import urllib.parse
 import urllib.request
 from collections.abc import Callable, Iterator, Mapping
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Literal
 
 from quantlab.data.providers import (
     PermanentProviderError,
@@ -56,13 +56,14 @@ class HttpResponse:
     body: bytes
 
 
-Transport = Callable[[str, float], HttpResponse]
+# (url, timeout, request headers) -> response
+Transport = Callable[[str, float, Mapping[str, str]], HttpResponse]
 # Larger than any documented page (aggregates: 50,000 bars), small enough to be safe.
 MAX_RESPONSE_BYTES = 64 * 2**20
 
 
 class _RefuseRedirects(urllib.request.HTTPRedirectHandler):
-    """Never follow a redirect: the API key is in the URL and would go to the new host.
+    """Never follow a redirect: the API key (in the URL or a header) would go along.
 
     Returning None makes urllib surface the 3xx as an ``HTTPError``, which becomes a
     permanent error below.
@@ -75,7 +76,9 @@ class _RefuseRedirects(urllib.request.HTTPRedirectHandler):
 _OPENER = urllib.request.build_opener(_RefuseRedirects)
 
 
-def urllib_transport(url: str, timeout: float) -> HttpResponse:
+def urllib_transport(
+    url: str, timeout: float, headers: Mapping[str, str] | None = None
+) -> HttpResponse:
     """Plain HTTPS GET with the standard library, never following redirects.
 
     Network errors become transient errors, except those no retry can fix (an invalid
@@ -85,7 +88,9 @@ def urllib_transport(url: str, timeout: float) -> HttpResponse:
     """
     if not url.startswith("https://"):
         raise PermanentProviderError("vendor URLs must use https")
-    req = urllib.request.Request(url, headers={"Accept": "application/json"})  # noqa: S310
+    req = urllib.request.Request(  # noqa: S310 - https only, checked above
+        url, headers={"Accept": "application/json", **(headers or {})}
+    )
     failure: tuple[type[ProviderError], str] | None = None
     try:
         with _OPENER.open(req, timeout=timeout) as resp:  # https only, no redirects
@@ -124,11 +129,17 @@ def _read(resp: Any) -> bytes:
 
 @dataclass
 class JsonApi:
-    """A vendor's JSON REST API: one base URL, one query-parameter API key."""
+    """A vendor's JSON REST API: one base URL and one API key.
+
+    ``auth="bearer"`` sends the key as ``Authorization: Bearer <key>``, so it never
+    appears in a URL (logs, proxies, error text); ``"query"`` adds it as ``key_param``.
+    Use the header whenever the vendor documents it.
+    """
 
     base_url: str
     api_key: str = field(repr=False)
     key_param: str = "apiKey"
+    auth: Literal["query", "bearer"] = "query"
     transport: Transport = urllib_transport
     limiter: TokenBucket | None = None
     retry: RetryPolicy = field(default_factory=RetryPolicy)
@@ -162,11 +173,15 @@ class JsonApi:
             raise VendorSchemaError(f"unexpected host in {parts.scheme}://{parts.netloc}")
         query = dict(urllib.parse.parse_qsl(parts.query, keep_blank_values=True))
         query.update({k: str(v) for k, v in (params or {}).items() if v is not None})
-        query[self.key_param] = self.api_key
+        if self.auth == "query":
+            query[self.key_param] = self.api_key
+        elif self.key_param in query:  # a next_url must not carry a key either
+            raise VendorSchemaError(f"unexpected {self.key_param!r} in a request URL")
         return urllib.parse.urlunsplit(parts._replace(query=urllib.parse.urlencode(query)))
 
     def get(self, path_or_url: str, params: Mapping[str, Any] | None = None) -> dict[str, Any]:
         url = self._url(path_or_url, params)
+        headers = {"Authorization": f"Bearer {self.api_key}"} if self.auth == "bearer" else {}
         attempt = 0
         while True:
             attempt += 1
@@ -175,7 +190,7 @@ class JsonApi:
             self.stats["requests"] += 1
             delay_floor = 0.0
             try:
-                resp = self.transport(url, self.timeout)
+                resp = self.transport(url, self.timeout, headers)
                 if resp.status == 429 or resp.status >= 500:
                     delay_floor = _retry_after(resp.headers)
                     raise TransientProviderError(f"HTTP {resp.status}")

@@ -115,6 +115,24 @@ tier (a trusted proxy); a direct call to the API, such as
 `scripts/case_study.py --api http://localhost:8000` on the host, gets 503 `edge_required`
 (ADR-0008, #39). Run such tools against the edge, or against a development stack.
 
+### Licensed market data (inert by default)
+
+The vendor and licence are chosen by the user; until then this path is inert. The
+`dataset.vendor` job refuses with "licensed market data is not configured (unset: ...)"
+unless all four are set:
+
+| Variable | Meaning |
+|---|---|
+| `QUANTLAB_MARKET_DATA_PROVIDER` | A registered vendor (today only `massive`). An unknown name fails at startup |
+| `QUANTLAB_MARKET_DATA_API_KEY` | The key, from a secret store or environment only. Blank counts as unset; production refuses a provider without one |
+| `QUANTLAB_MARKET_DATA_LICENSE` | The licence the user holds, recorded in every version's provenance |
+| `QUANTLAB_MARKET_DATA_PLAN` | The purchased plan, recorded with it |
+| `QUANTLAB_MARKET_DATA_REQUESTS_PER_MINUTE` | Optional: the plan's documented rate limit (not verified here) |
+
+The key is sent only as `Authorization: Bearer`. It is never in a URL, job payload,
+heartbeat, log line, provenance or error. There is no API route or UI entry yet; live
+behaviour is unverified (no test makes a network call).
+
 ## Exposing a deployment
 
 **Precondition: the edge is verified.** Never publish the web tier, the API, Postgres or
