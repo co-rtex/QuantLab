@@ -245,7 +245,13 @@ class DatasetStore:
         try:
             with os.fdopen(fd, "w") as fh:
                 json.dump(payload, fh, indent=2, allow_nan=False)
-            os.replace(tmp, path)  # atomic
+            if replace:
+                os.replace(tmp, path)  # atomic
+            else:
+                # link() fails if the name exists, so two concurrent writers cannot both
+                # pass the existence check above and overwrite each other.
+                os.link(tmp, path)
+                Path(tmp).unlink()
         except BaseException:
             Path(tmp).unlink(missing_ok=True)
             raise

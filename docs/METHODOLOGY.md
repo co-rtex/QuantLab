@@ -156,13 +156,20 @@ the source of truth; tests in `tests/unit` pin each definition to a golden examp
   * `invalid_value`: a non-finite close or volume
   * `price_mismatch`: closes differ by more than `max(5 bp, half a tick)` ($0.005 at or
     above $1, $0.00005 below)
-  * `adjusted_series`: the close ratio is constant between the primary's ex-dates and
-    steps only at them, the signature of an adjusted series compared with raw prices.
+  * `adjusted_series`: the close ratio sits on two or more levels that step at the
+    primary's ex-dates, the signature of an adjusted series compared with raw prices.
     Reported once per instrument; reconcile raw data.
+  * `scale_mismatch`: one constant close ratio other than 1 (pence vs pounds, a
+    currency, a fixed offset), which is not an adjustment.
+
+    For both ratio classes only bars on the ratio level are explained: a bar off it by
+    more than the close tolerance (a bad print inside an adjusted series) is still a
+    `price_mismatch`.
   * `volume_mismatch`: more than 5%
   * `action_missing`, `action_mismatch`: dividends within $0.0001; split ratios within
     1e-6 relative; ex-dates up to 3 sessions apart are one mismatch, not two missing
-    actions. Same-day actions of one kind are combined first, so regular plus special
+    actions. Pairing prefers an agreeing amount over a nearer date, so two dividends
+    recorded a session late pair with their own amounts. Same-day actions of one kind are combined first, so regular plus special
     equals their total.
   * `listing_mismatch`: first or last bar dates differ (a stale secondary shows here)
   * `identity_mismatch`: an instrument in one source only, the two histories naming
@@ -172,7 +179,13 @@ the source of truth; tests in `tests/unit` pin each definition to a golden examp
   Tolerances and each class's severity are configurable. By default volume and listing
   differences warn and the rest fail, because vendors legitimately differ on
   consolidated vs primary-exchange volume. A report records its inputs (names, content
-  hashes, provider descriptions, synthetic flags, coverage) and a UTC timestamp. It is
+  hashes, whether a supplied version hash matches the data compared, provider
+  descriptions, synthetic flags, coverage) and a UTC timestamp. Duplicate bars in either
+  source are rejected rather than compared. Two known limits of a history-less secondary:
+  * A vendor that maps a reused ticker to the *old* security shows up as price and volume
+    mismatches, not as an `identity_mismatch`, because there is no history to compare.
+  * A vendor that files a security's whole history under its current ticker needs a
+    symbol history of its own to be compared before a rename. It is
   stored beside the immutable version (`<slug>/_reports/<version>/<name>.json`) and is
   never overwritten unless `replace=True`. Real cross-vendor reconciliation is unverified
   until a licensed second source exists (#11).

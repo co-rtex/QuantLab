@@ -23,10 +23,14 @@ genuine -50% day produce the same prices (see the ``split_like_returns`` warning
 * ``price_mismatch``: closes differing by more than the larger of ``close_rel`` and a
   floor that scales with price (half a tick by default: $0.005 at or above $1, $0.00005
   below), so a $0.02 vs $0.024 penny-stock difference is caught.
-* ``adjusted_series``: an instrument whose closes differ by a ratio that is constant
-  between the primary's ex-dates and changes only at them, which is the signature of a
-  split- or dividend-adjusted series compared with raw prices. It is reported once here
-  instead of as many price mismatches. Reconcile raw (unadjusted) data.
+* ``adjusted_series``: an instrument whose close ratio sits on two or more distinct
+  levels that step at the primary's ex-dates, which is the signature of a split- or
+  dividend-adjusted series compared with raw prices. It is reported once here instead of
+  as many price mismatches. Reconcile raw (unadjusted) data.
+* ``scale_mismatch``: an instrument whose close ratio is one constant other than 1 (pence
+  vs pounds, another currency, a fixed offset). This is not an adjustment.
+  For both classes only bars on the ratio level are explained. A bar off it (a bad
+  print inside an adjusted series) is still a ``price_mismatch``.
 * ``volume_mismatch``: volume differing by more than ``volume_rel``. Vendors legitimately
   differ (consolidated vs primary-exchange volume), so this is a warning by default.
 * ``action_missing``: a split or dividend in one source only.
@@ -58,6 +62,7 @@ import pandas as pd
 
 from quantlab.data.calendar import trading_days
 from quantlab.data.identity import (
+    IdentityError,
     is_legacy,
     key_by_instrument,
     legacy_history,
@@ -73,6 +78,7 @@ CLASSES = (
     "invalid_value",
     "price_mismatch",
     "adjusted_series",
+    "scale_mismatch",
     "volume_mismatch",
     "action_missing",
     "action_mismatch",
@@ -92,9 +98,10 @@ class Tolerances:
     * ``dividend_abs``: per-share cash tolerance; ``split_rel``: relative ratio tolerance.
     * ``ex_date_sessions``: sessions by which the same action's ex-dates may differ.
     * ``listing_days``: tolerated difference in first/last bar dates.
-    * ``adjusted_min_bars``/``adjusted_ratio_rel``: an instrument with at least this many
-      price mismatches whose close ratio is constant to this relative spread between the
-      primary's ex-dates is classified ``adjusted_series``.
+    * ``adjusted_min_bars``/``adjusted_share``: an instrument with at least this many price
+      mismatches, at least this share of whose bars sit on a constant close ratio per
+      segment between the primary's ex-dates, is explained as ``adjusted_series`` (two or
+      more levels stepping at ex-dates) or ``scale_mismatch`` (one level other than 1).
     """
 
     close_rel: float = 0.0005
@@ -105,13 +112,14 @@ class Tolerances:
     ex_date_sessions: int = 3
     listing_days: int = 0
     adjusted_min_bars: int = 5
-    adjusted_ratio_rel: float = 1e-3
+    adjusted_share: float = 0.9
     severity: Mapping[str, Severity] = field(
         default_factory=lambda: {
             "missing_bar": "fail",
             "invalid_value": "fail",
             "price_mismatch": "fail",
             "adjusted_series": "fail",
+            "scale_mismatch": "fail",
             "volume_mismatch": "warn",
             "action_missing": "fail",
             "action_mismatch": "fail",
@@ -161,7 +169,8 @@ def _plain(v: Any) -> Any:
     if isinstance(v, np.generic):
         v = v.item()
     if isinstance(v, float) and not np.isfinite(v):
-        return None
+        # JSON has no infinity; say so instead of showing an infinite close as missing.
+        return None if np.isnan(v) else ("inf" if v > 0 else "-inf")
     return v
 
 
@@ -180,10 +189,13 @@ def _half_tick(price: pd.Series) -> np.ndarray:
 
 
 def _describe(src: Source, bars: pd.DataFrame, actions: pd.DataFrame) -> dict[str, Any]:
+    computed = content_hash(bars, actions, src.history)
     return {
         "name": src.name,
-        "version": src.version or content_hash(bars, actions, src.history),
+        "version": src.version or computed,
         "version_is_computed": src.version is None,
+        # A supplied version is checked against the data actually compared.
+        "version_matches_data": src.version is None or src.version == computed,
         "is_synthetic": src.is_synthetic,
         "provider": dict(src.provider) if src.provider else None,
         "has_symbol_history": src.history is not None,
@@ -197,7 +209,13 @@ def _describe(src: Source, bars: pd.DataFrame, actions: pd.DataFrame) -> dict[st
 def _key_through(
     history: pd.DataFrame, bars: pd.DataFrame, actions: pd.DataFrame
 ) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
-    """Key ticker-keyed data through ``history``; unmapped rows are returned separately."""
+    """Key ticker-keyed data through ``history``; unmapped rows are returned separately.
+
+    Duplicates are rejected as in ``key_by_instrument``: two bars for one ticker and
+    session, or for one instrument and session after keying, cannot be compared.
+    """
+    if bars.duplicated(["symbol", "date"]).any():
+        raise IdentityError("duplicate bars for one ticker and session in the secondary")
     bar_ids = resolve_ids(history, bars["symbol"], bars["date"])
     act_ids = resolve_ids(history, actions["symbol"], actions["ex_date"])
     unmapped = pd.concat(
@@ -221,6 +239,8 @@ def _key_through(
     )
     ok_b, ok_a = bar_ids.notna(), act_ids.notna()
     keyed_bars = normalize_bars(bars[ok_b].assign(symbol=bar_ids[ok_b].astype(str)))
+    if keyed_bars.duplicated(["symbol", "date"]).any():
+        raise IdentityError("one instrument has secondary bars under two tickers on a session")
     keyed_acts = normalize_actions(
         actions[ok_a].assign(symbol=act_ids[ok_a].astype(str)) if ok_a.any() else None
     )
@@ -267,6 +287,12 @@ def reconcile(
             mapping = {str(k).upper(): str(v).upper() for k, v in id_map.items()}
             if len(set(mapping.values())) != len(mapping):
                 raise ValueError("id_map must be one-to-one (several ids map to one)")
+            native = set(sb["symbol"]) - set(mapping)
+            taken = native & set(mapping.values())
+            if taken:
+                raise ValueError(
+                    f"id_map targets already used by unmapped ids: {sorted(taken)[:5]}"
+                )
             sb = sb.assign(symbol=sb["symbol"].replace(mapping))
             sa = sa.assign(symbol=sa["symbol"].replace(mapping))
             sh = sh.assign(instrument_id=sh["instrument_id"].replace(mapping))
@@ -329,11 +355,11 @@ def reconcile(
     )
     allowed = np.maximum(floor, tol.close_rel * valid["close_p"].abs())
     off = valid[(valid["close_p"] - valid["close_s"]).abs() > allowed]
-    adjusted = _adjusted_series(valid, off, pa, tol)
+    adjusted, scale, explained = _ratio_classes(valid, off, pa, tol)
     found["adjusted_series"] = adjusted
+    found["scale_mismatch"] = scale
     found["price_mismatch"] = off.loc[
-        ~off["instrument_id"].isin(adjusted["instrument_id"]),
-        ["instrument_id", "date", "close_p", "close_s"],
+        ~off.index.isin(explained), ["instrument_id", "date", "close_p", "close_s"]
     ]
     vol_base = valid[["volume_p", "volume_s"]].max(axis=1)
     vdiff = (valid["volume_p"] - valid["volume_s"]).abs()
@@ -388,7 +414,11 @@ def reconcile(
                 .assign(issue="tickers differ", sessions=g.size().to_numpy())
                 .rename(columns={"min": "from", "max": "to"})
             )
-    found["identity_mismatch"] = pd.concat(identity, ignore_index=True)
+    ident = pd.concat(identity, ignore_index=True)
+    for col in ("rows", "sessions"):  # counts stay integers despite NaN-padding in concat
+        if col in ident.columns:
+            ident[col] = ident[col].astype("Int64")
+    found["identity_mismatch"] = ident
 
     counts = {c: len(found[c]) for c in CLASSES}
     severities = {tol.severity[c] for c in CLASSES if counts[c]}
@@ -416,33 +446,63 @@ def reconcile(
     )
 
 
-def _adjusted_series(
+def _ratio_classes(
     valid: pd.DataFrame, off: pd.DataFrame, primary_actions: pd.DataFrame, tol: Tolerances
-) -> pd.DataFrame:
-    """Instruments whose close ratio is piecewise constant between the primary's ex-dates."""
-    rows = []
+) -> tuple[pd.DataFrame, pd.DataFrame, pd.Index]:
+    """Explain systematic close-ratio differences per instrument.
+
+    For an instrument with at least ``adjusted_min_bars`` price mismatches, the close
+    ratio (secondary / primary) is taken per segment between the primary's ex-dates. A bar
+    is *on level* when its ratio is within the ordinary close tolerance of its segment's
+    median. If at least ``adjusted_share`` of the bars are on level:
+
+    * two or more distinct levels that change at the ex-dates are an **adjusted series**
+      (one source split/dividend-adjusted, the other raw);
+    * a single level other than 1 is a **scale mismatch** (units, currency, or a constant
+      offset), not an adjustment.
+
+    On-level bars of an explained instrument are no longer reported one by one; off-level
+    bars stay price mismatches, so a bad print inside an adjusted series is never absorbed.
+    Returns (adjusted rows, scale rows, index of the explained ``off`` rows).
+    """
+    adjusted, scale, explained = [], [], []
     counts = off["instrument_id"].value_counts()
     for iid in counts[counts >= tol.adjusted_min_bars].index:
         v = valid[valid["instrument_id"] == iid].sort_values("date")
         ratio = (v["close_s"] / v["close_p"]).to_numpy()
+        price = v["close_p"].abs()
+        floor = _half_tick(price) if tol.close_abs is None else np.full(len(v), tol.close_abs)
+        band = np.maximum(tol.close_rel, floor / price.to_numpy())
         ex = np.sort(primary_actions.loc[primary_actions["symbol"] == iid, "ex_date"].unique())
         segment = np.searchsorted(ex, v["date"].to_numpy(), side="right")
-        levels = []
-        for k in np.unique(segment):
-            r = ratio[segment == k]
-            if r.max() / r.min() - 1 > tol.adjusted_ratio_rel:
-                break
-            levels.append(float(np.median(r)))
+        levels = pd.Series(ratio).groupby(segment).median()
+        level_of = levels.reindex(segment).to_numpy()
+        on_level = np.abs(ratio / level_of - 1) <= band
+        if on_level.mean() < tol.adjusted_share:
+            continue
+        distinct = [float(levels.iloc[0])]
+        for x in levels.iloc[1:]:
+            if abs(x / distinct[-1] - 1) > tol.close_rel:
+                distinct.append(float(x))
+        row = {
+            "instrument_id": iid,
+            "price_mismatches": int(counts[iid]),
+            "ratios": [round(x, 8) for x in distinct],
+        }
+        if len(distinct) >= 2:
+            adjusted.append({**row, "segments": int(levels.size)})
+        elif abs(distinct[0] - 1) > tol.close_rel:
+            scale.append(row)
         else:
-            rows.append(
-                {
-                    "instrument_id": iid,
-                    "price_mismatches": int(counts[iid]),
-                    "segments": len(levels),
-                    "ratios": [round(x, 8) for x in levels],
-                }
-            )
-    return pd.DataFrame(rows, columns=["instrument_id", "price_mismatches", "segments", "ratios"])
+            continue
+        on = v.index[on_level]
+        explained.extend(off.index[off.index.isin(on)])
+    cols = ["instrument_id", "price_mismatches", "ratios"]
+    return (
+        pd.DataFrame(adjusted, columns=[*cols, "segments"]),
+        pd.DataFrame(scale, columns=cols),
+        pd.Index(explained),
+    )
 
 
 def _compose(actions: pd.DataFrame) -> pd.DataFrame:
@@ -458,92 +518,89 @@ def _compose(actions: pd.DataFrame) -> pd.DataFrame:
 def _compare_actions(
     pa: pd.DataFrame, sa: pd.DataFrame, tol: Tolerances, p_name: str, s_name: str
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
-    """Match actions exactly, then pair leftovers whose ex-dates are a few sessions apart."""
+    """Pair each source's actions per (instrument, kind) and classify every pair.
+
+    All candidate pairs within ``ex_date_sessions`` are ranked by (value disagrees,
+    session distance) and taken greedily, so an action pairs with an agreeing amount
+    before a merely nearer date: two dividends recorded a session late pair with their own
+    amounts, not crosswise. A pair on one date with agreeing values is a match; otherwise
+    it is an ``action_mismatch``. Unpaired actions are ``action_missing``.
+    """
 
     def value_differs(kind: str, a: float, b: float) -> bool:
         if kind == "split":
             return bool(abs(a / b - 1) > tol.split_rel)
         return bool(abs(a - b) > tol.dividend_abs)
 
-    key = ["symbol", "ex_date", "kind"]
-    am = pa.merge(sa, on=key, how="outer", suffixes=("_p", "_s"), indicator=True)
-    mismatch: list[dict[str, Any]] = []
-    for r in am[am["_merge"] == "both"].itertuples(index=False):
-        if value_differs(r.kind, r.value_p, r.value_s):
-            mismatch.append(
-                {
-                    "instrument_id": r.symbol,
-                    "kind": r.kind,
-                    "ex_date_p": r.ex_date,
-                    "ex_date_s": r.ex_date,
-                    "value_p": r.value_p,
-                    "value_s": r.value_s,
-                    "issue": "value differs",
-                }
-            )
-    left = am[am["_merge"] == "left_only"].sort_values("ex_date")
-    right = am[am["_merge"] == "right_only"]
-    dates = pd.concat([left["ex_date"], right["ex_date"]])
+    dates = pd.concat([pa["ex_date"], sa["ex_date"]])
     sessions = (
         trading_days(dates.min() - pd.Timedelta(days=10), dates.max() + pd.Timedelta(days=10))
         if len(dates)
         else pd.DatetimeIndex([])
     )
-    unpaired_right = set(right.index)
+    mismatch: list[dict[str, Any]] = []
     missing: list[dict[str, Any]] = []
-    for r in left.itertuples():
-        candidates = [
-            j
-            for j in unpaired_right
-            if right.at[j, "symbol"] == r.symbol and right.at[j, "kind"] == r.kind
-        ]
-        best, best_dist = None, None
-        for j in candidates:
-            dist = abs(
-                int(sessions.searchsorted(right.at[j, "ex_date"]))
-                - int(sessions.searchsorted(r.ex_date))
+    keys = sorted(
+        set(map(tuple, pa[["symbol", "kind"]].to_numpy()))
+        | set(map(tuple, sa[["symbol", "kind"]].to_numpy()))
+    )
+    for iid, kind in keys:
+        lp = pa[(pa["symbol"] == iid) & (pa["kind"] == kind)].reset_index(drop=True)
+        rs = sa[(sa["symbol"] == iid) & (sa["kind"] == kind)].reset_index(drop=True)
+        pos_p = sessions.searchsorted(lp["ex_date"].to_numpy())
+        pos_s = sessions.searchsorted(rs["ex_date"].to_numpy())
+        candidates = []
+        for i in range(len(lp)):
+            for j in range(len(rs)):
+                dist = abs(int(pos_p[i]) - int(pos_s[j]))
+                if dist <= tol.ex_date_sessions:
+                    bad = value_differs(kind, lp.at[i, "value"], rs.at[j, "value"])
+                    candidates.append((bad, dist, i, j))
+        used_p: set[int] = set()
+        used_s: set[int] = set()
+        for bad, dist, i, j in sorted(candidates):
+            if i in used_p or j in used_s:
+                continue
+            used_p.add(i)
+            used_s.add(j)
+            if dist == 0 and not bad:
+                continue  # a match
+            issue = "value differs" if dist == 0 else "ex_date differs"
+            if dist and bad:
+                issue += " and value differs"
+            mismatch.append(
+                {
+                    "instrument_id": iid,
+                    "kind": kind,
+                    "ex_date_p": lp.at[i, "ex_date"],
+                    "ex_date_s": rs.at[j, "ex_date"],
+                    "value_p": lp.at[i, "value"],
+                    "value_s": rs.at[j, "value"],
+                    "issue": issue,
+                }
             )
-            if dist <= tol.ex_date_sessions and (best_dist is None or dist < best_dist):
-                best, best_dist = j, dist
-        if best is None:
+        for i in sorted(set(range(len(lp))) - used_p):
             missing.append(
                 {
-                    "instrument_id": r.symbol,
-                    "ex_date": r.ex_date,
-                    "kind": r.kind,
-                    "value_p": r.value_p,
+                    "instrument_id": iid,
+                    "ex_date": lp.at[i, "ex_date"],
+                    "kind": kind,
+                    "value_p": lp.at[i, "value"],
                     "value_s": None,
                     "missing_in": s_name,
                 }
             )
-            continue
-        unpaired_right.discard(best)
-        value_s = right.at[best, "value_s"]
-        issue = "ex_date differs"
-        if value_differs(r.kind, r.value_p, value_s):
-            issue += " and value differs"
-        mismatch.append(
-            {
-                "instrument_id": r.symbol,
-                "kind": r.kind,
-                "ex_date_p": r.ex_date,
-                "ex_date_s": right.at[best, "ex_date"],
-                "value_p": r.value_p,
-                "value_s": value_s,
-                "issue": issue,
-            }
-        )
-    for j in sorted(unpaired_right):
-        missing.append(
-            {
-                "instrument_id": right.at[j, "symbol"],
-                "ex_date": right.at[j, "ex_date"],
-                "kind": right.at[j, "kind"],
-                "value_p": None,
-                "value_s": right.at[j, "value_s"],
-                "missing_in": p_name,
-            }
-        )
+        for j in sorted(set(range(len(rs))) - used_s):
+            missing.append(
+                {
+                    "instrument_id": iid,
+                    "ex_date": rs.at[j, "ex_date"],
+                    "kind": kind,
+                    "value_p": None,
+                    "value_s": rs.at[j, "value"],
+                    "missing_in": p_name,
+                }
+            )
     cols_x = ["instrument_id", "ex_date", "kind", "value_p", "value_s", "missing_in"]
     cols_m = ["instrument_id", "kind", "ex_date_p", "ex_date_s", "value_p", "value_s", "issue"]
     return pd.DataFrame(missing, columns=cols_x), pd.DataFrame(mismatch, columns=cols_m)

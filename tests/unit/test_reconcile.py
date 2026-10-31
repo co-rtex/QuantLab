@@ -379,3 +379,110 @@ def test_many_to_one_id_map_is_rejected(mkt):
     bad = {ids[0]: h["instrument_id"].iloc[0], ids[1]: h["instrument_id"].iloc[0]}
     with pytest.raises(ValueError, match="one-to-one"):
         reconcile(_primary(mkt), _secondary(mkt, history=vendor), id_map=bad)
+
+
+# ---------------------------------------------------------------- #54 follow-ups
+def _scaled(mkt, sym: str, factor: float) -> pd.DataFrame:
+    b = mkt.bars.copy()
+    rows = b["symbol"] == sym
+    b.loc[rows, "close"] *= factor
+    return b
+
+
+def test_a_constant_ratio_is_a_scale_mismatch_not_an_adjusted_series(mkt):
+    sym = _pick(mkt, 1)
+    for factor in (100.0, 1.0008):  # pence vs pounds; a steady 8 bp offset
+        r = reconcile(_primary(mkt), _secondary(mkt, bars=_scaled(mkt, sym, factor)))
+        assert r.counts["scale_mismatch"] == 1, (factor, r.counts)
+        assert r.counts["adjusted_series"] == 0 and r.counts["price_mismatch"] == 0
+        assert r.samples["scale_mismatch"][0]["ratios"] == [pytest.approx(factor, rel=1e-6)]
+
+
+def test_a_bad_print_inside_an_adjusted_series_is_still_reported(mkt):
+    from quantlab.data.adjust import adjusted_close
+
+    adj = adjusted_close(mkt.bars, mkt.actions).stack().rename("close").reset_index()
+    b = mkt.bars.drop(columns="close").merge(adj, on=["date", "symbol"])
+    flagged = reconcile(_primary(mkt), _secondary(mkt, bars=b))
+    iid = flagged.samples["adjusted_series"][0]["instrument_id"]
+    sym = mkt.symbol_history.set_index("instrument_id").loc[iid, "symbol"]
+    i = b.index[b["symbol"] == sym][40]
+    b.loc[i, "close"] *= 1.003  # 30 bp: above the 5 bp tolerance, inside the old 1e-3 band
+    r = reconcile(_primary(mkt), _secondary(mkt, bars=b))
+    assert iid in {x["instrument_id"] for x in r.samples["adjusted_series"]}
+    bad = [x for x in r.samples.get("price_mismatch", []) if x["instrument_id"] == iid]
+    assert len(bad) == 1
+
+
+def test_duplicate_rows_in_a_history_less_secondary_are_rejected(mkt):
+    from quantlab.data.identity import IdentityError
+
+    b = pd.concat([mkt.bars, mkt.bars.iloc[[10]]], ignore_index=True)
+    with pytest.raises(IdentityError, match="duplicate bars"):
+        reconcile(_primary(mkt), Source("csv", b, mkt.actions, None, is_synthetic=True))
+
+
+def test_crossed_dividends_pair_by_value():
+    from tests.conftest import make_bars
+
+    bars = make_bars({"A": [100.0] * 10})
+    d = pd.DatetimeIndex(sorted(bars["date"].unique()))
+    rows = lambda pairs: normalize_actions(  # noqa: E731
+        pd.DataFrame(
+            [{"symbol": "A", "ex_date": d[k], "kind": "dividend", "value": v} for k, v in pairs]
+        )
+    )
+    p = Source("p", bars, rows([(3, 0.50), (4, 2.00)]))
+    s = Source("s", bars, rows([(4, 0.50), (5, 2.00)]))  # both one session late
+    r = reconcile(p, s)
+    pairs = {(x["value_p"], x["value_s"]) for x in r.samples["action_mismatch"]}
+    assert pairs == {(0.5, 0.5), (2.0, 2.0)}  # not (0.5, 2.0) and (2.0, 0.5)
+    assert all(x["issue"] == "ex_date differs" for x in r.samples["action_mismatch"])
+
+
+def test_infinite_values_are_shown_as_such(mkt):
+    b = mkt.bars.copy()
+    b.loc[b.index[5], "volume"] = np.inf
+    r = reconcile(_primary(mkt), _secondary(mkt, bars=b))
+    assert r.samples["invalid_value"][0]["volume_s"] == "inf"
+
+
+def test_a_supplied_version_is_checked_against_the_data(mkt):
+    p = Source("p", mkt.bars, mkt.actions, mkt.symbol_history, True, version="0" * 64)
+    r = reconcile(p, _secondary(mkt))
+    assert r.inputs["primary"]["version_matches_data"] is False
+    assert r.inputs["secondary"]["version_matches_data"] is True
+
+
+def test_id_map_targets_already_used_natively_are_rejected(mkt):
+    h = mkt.symbol_history
+    ids = list(h["instrument_id"])
+    vendor = h.assign(instrument_id=["V" + ids[0], *ids[1:]])  # one vendor id, rest native
+    with pytest.raises(ValueError, match="already used"):
+        reconcile(_primary(mkt), _secondary(mkt, history=vendor), id_map={"V" + ids[0]: ids[1]})
+
+
+def test_identity_sample_counts_are_integers(mkt):
+    sym = _pick(mkt, 3)
+    b = mkt.bars.copy()
+    b.loc[b["symbol"] == sym, "symbol"] = "ZZZ"  # a ticker the primary does not know
+    a = mkt.actions[mkt.actions["symbol"] != sym]
+    r = reconcile(_primary(mkt), Source("csv", b, a, None, is_synthetic=True))
+    unknown = [x for x in r.samples["identity_mismatch"] if x.get("ticker") == "ZZZ"]
+    assert unknown and isinstance(unknown[0]["rows"], int)
+
+
+def test_report_writes_cannot_race_into_an_overwrite(mkt, tmp_path, monkeypatch):
+    from pathlib import Path
+
+    from quantlab.data.store import DatasetStore
+
+    store = DatasetStore(tmp_path)
+    dv = store.write("demo", mkt.bars, mkt.actions, mkt.provenance)
+    store.write_report(dv, "reconciliation-a", {"status": "pass"})
+    # A second writer that passed the existence check just before the first one wrote.
+    monkeypatch.setattr(Path, "exists", lambda self: False)
+    with pytest.raises(FileExistsError):
+        store.write_report(dv, "reconciliation-a", {"status": "fail"})
+    monkeypatch.undo()
+    assert store.load_reports(dv)["reconciliation-a"]["status"] == "pass"
