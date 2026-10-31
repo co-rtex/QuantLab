@@ -44,14 +44,14 @@ Owners, file ownership and migration slots: [docs/COORDINATION.md](docs/COORDINA
 | P0 | **#39 Security gate**: fail closed on an untrusted peer, exact-match remote probe, verified from a second machine on an address-preserving host (**no public exposure until closed**) | Agent 2 + user host | #3 → #19 |
 | P0 | ✅ #4 Authenticate before parsing multipart uploads (#28) | Agent 2 | — |
 | P0 | ✅ #5 Invitations instead of add-member (#37, migration M1) | Agent 2 | — |
-| P0 | #9 Permanent instrument identity: ✅ part A (#31); part B delisting returns; part C catalog (M2 open) | Agent 3 | C: tasks.py after #7 → #11 |
+| P0 | #9 Permanent instrument identity: ✅ part A (#31); ✅ part B delisting returns (#49; follow-ups #59); part C catalog (M2 open) | Agent 3 | → #11 |
 | P0 | ✅ #10 Corporate-action validation gates (#27) | Agent 3 | — |
 | P0 | #12 Reconciliation report: ✅ library (#34); API exposure pending (with #9 C); follow-ups #54 | Agent 3 | — |
 | P0 | #11 Vendor adapter: ✅ fixture-only contract (#33); **#50 before live wiring**; live part blocked on credentials | Agent 3 | — |
 | P0 | #50 Massive adapter correctness before live wiring | Agent 3 | — |
 | P1 | ✅ #6 Idempotent retries (#40) | Agent 2 | — |
 | P1 | ✅ #43 Idempotency fingerprint (#47) | Agent 2 | — |
-| P1 | #51 CSV ambiguous-commit race · #52 synthetic-route idempotency · #55 lockout/enumeration | Agent 2 | — |
+| P1 | ✅ #51 CSV ambiguous-commit race (#57) · #52 synthetic-route idempotency · #55 lockout/enumeration | Agent 2 | — |
 | P1 | ✅ #7 CSV retry and ambiguous-commit cleanup (#48) | Agent 2 | — |
 | P1 | ✅ #13 Undefined-aware statistics (#29) | Agent 3 | — |
 | P1 | ✅ #14 Deflated Sharpe input consistency (#30) | Agent 3 | — |
