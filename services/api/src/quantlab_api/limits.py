@@ -35,20 +35,39 @@ class BodySizeLimitMiddleware:
             await _reject(send, limit)
             return
         received = 0
+        exceeded = False
+        started = False
 
         async def limited_receive() -> Message:
-            nonlocal received
+            nonlocal received, exceeded
             message = await receive()
             if message["type"] == "http.request":
                 received += len(message.get("body", b""))
                 if received > limit:
+                    exceeded = True
                     raise BodyTooLarge
             return message
 
+        # Once the limit is passed the answer is 413, whatever the app made of the
+        # interrupted read: FastAPI's JSON parsing catches the exception and would answer
+        # 400 "error parsing the body" to a chunked client (#8).
+        async def guarded_send(message: Message) -> None:
+            nonlocal started
+            if exceeded:
+                if not started:
+                    started = True
+                    await _reject(send, limit)
+                return
+            if message["type"] == "http.response.start":
+                started = True
+            await send(message)
+
         try:
-            await self.app(scope, limited_receive, send)
+            await self.app(scope, limited_receive, guarded_send)
         except BodyTooLarge:
-            await _reject(send, limit)
+            if not started:
+                started = True
+                await _reject(send, limit)
 
 
 async def _reject(send: Send, limit: int) -> None:

@@ -71,7 +71,9 @@ def test_report_export_html_and_markdown(client, seeded):
     r = client.get(f"/api/v1/experiments/{exp_id}/report?format=html", headers=h)
     assert r.status_code == 200
     assert r.headers["content-type"].startswith("text/html")
-    assert "default-src 'none'" in r.headers["content-security-policy"]
+    csp = r.headers["content-security-policy"]
+    for directive in ("default-src 'none'", "sandbox", "form-action 'none'", "base-uri 'none'"):
+        assert directive in csp, directive
     body = r.text
     assert "Synthetic data." in body
     assert "<svg" in body
