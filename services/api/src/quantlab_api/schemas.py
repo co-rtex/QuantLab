@@ -76,11 +76,6 @@ class WorkspaceOut(ORM):
     role: str | None = None
 
 
-class MemberIn(BaseModel):
-    email: EmailStr
-    role: Literal["viewer", "editor", "owner"] = "viewer"
-
-
 class MemberOut(BaseModel):
     user_id: uuid.UUID
     email: str
@@ -136,6 +131,11 @@ class InstrumentOut(ORM):
     last_date: date | None
     delisted: bool
     rows: int
+    # Additive (#9): permanent identity and delisting facts; null without identity data.
+    instrument_id: str | None = None
+    delisting_date: date | None = None
+    delisting_reason: str | None = None
+    delisting_return: float | None = None
 
 
 class BarsOut(BaseModel):
@@ -259,3 +259,22 @@ class AuditOut(ORM):
     details: dict[str, Any]
     request_id: str | None
     created_at: datetime
+
+
+class ReconciliationSummaryOut(BaseModel):
+    """A stored reconciliation report, without its samples (#12)."""
+
+    name: str
+    status: Literal["pass", "warn", "fail"]
+    created_at: str
+    primary: str
+    secondary: str
+    synthetic_inputs: bool
+    counts: dict[str, int]
+
+
+class ReconciliationOut(ReconciliationSummaryOut):
+    inputs: dict[str, Any]
+    tolerances: dict[str, Any]
+    samples: dict[str, list[dict[str, Any]]]
+    instruments: dict[str, int]
