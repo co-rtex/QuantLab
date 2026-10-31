@@ -1,6 +1,6 @@
 # Status (authoritative handoff)
 
-_Last updated: 2026-10-31 (lead integration cycle 2: 31 PRs merged; main `77f8650`)_
+_Last updated: 2026-10-31 (lead integration cycle 2: 32 PRs merged before this update, per `gh pr list --state merged`; main `77f8650`)_
 
 ## Where things stand
 All roadmap phases 0–10 are implemented. An independent audit on 2026-10-30
