@@ -523,6 +523,11 @@ def ml_task(ctx: JobContext) -> Finalizer:
     bars, actions = store.load_bars(dv), store.load_actions(dv)
     if not is_legacy(history):  # learn per instrument, so a rename is one series
         bars, actions = key_by_instrument(bars, actions, history)
+        # ``exclude`` names tickers (the benchmark index by default); the series are now
+        # keyed by instrument, so exclude every instrument that ever held one of them.
+        named = {str(t).upper() for t in cfg.exclude}
+        held = history.loc[history["symbol"].isin(named), "instrument_id"]
+        cfg = cfg.model_copy(update={"exclude": tuple(sorted(set(held)))})
     result = run_ml_experiment(
         bars,
         actions,

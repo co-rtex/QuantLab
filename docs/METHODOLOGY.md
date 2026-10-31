@@ -121,8 +121,11 @@ the source of truth; tests in `tests/unit` pin each definition to a golden examp
     * A security renamed later stays in under its later ticker.
     * A ticker reused later by another issuer does not pull that issuer in.
     * A ticker that has never named anything by the start (a later listing) means the
-      first instrument to take it within the backtest window. It joins when it lists,
-      as in an unkeyed dataset.
+      first instrument to take it within the backtest window, but only if it is that
+      instrument's first-ever ticker. It joins when it lists, as in an unkeyed
+      dataset. A security *renamed into* the ticker later was trading under another
+      name at the start, so selecting it by its later name would be a today's-ticker
+      bias; that ticker fails the job.
     * A ticker that named another security before the start but names nothing on it
       (retired, or in a gap before a reuse) fails the job instead of being guessed.
 
@@ -136,6 +139,8 @@ the source of truth; tests in `tests/unit` pin each definition to a golden examp
     in an added `instrument_id` column. Rows after a delisting show the last ticker.
     Final holdings and P&L contributions are labelled as of the last session, never with
     a later ticker, and `[id]` disambiguates two instruments that show the same ticker.
+  * ML `exclude` names tickers (the benchmark index by default). On keyed data every
+    instrument that ever held an excluded ticker is excluded.
   * The catalog's `delisted` flag is per instrument: a renamed security's old ticker is
     not marked delisted.
   * The catalog records each ticker's instrument and delisting facts, and

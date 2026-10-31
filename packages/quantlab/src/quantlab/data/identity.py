@@ -337,9 +337,11 @@ def resolve_universe(
     security renamed later stays in under its later ticker, and an issuer that takes over
     the ticker later is not pulled in. A ticker that has never named anything by the
     start (a later listing) means the first instrument to take it within the window (up to
-    ``until``), which then simply joins when it lists, as in an unkeyed dataset. A ticker
-    that named another security before the start but nothing on it (retired, or in a gap
-    before a reuse) is unresolved: its later holder would be a reuse.
+    ``until``), which then simply joins when it lists, as in an unkeyed dataset, but only
+    if that is the instrument's first-ever ticker: a security renamed into the ticker later
+    was trading under another name at the start and is not selected by its later name. A
+    ticker that named another security before the start but nothing on it (retired, or in
+    a gap before a reuse) is unresolved: its later holder would be a reuse.
     """
     when = pd.Timestamp(as_of)
     syms = pd.Series([str(t).upper().strip() for t in tickers])
@@ -351,8 +353,15 @@ def resolve_universe(
         later = uses[uses["valid_from"] > when]
         if until is not None:
             later = later[later["valid_from"] <= pd.Timestamp(until)]
-        if len(later):
-            ids.iloc[k] = later.sort_values("valid_from")["instrument_id"].iloc[0]
+        if not len(later):
+            continue
+        first = later.sort_values("valid_from").iloc[0]
+        # Only a genuine new listing: the ticker must be the instrument's first-ever ticker.
+        # A security renamed *into* it was trading under another ticker at the start, and
+        # taking it from the start would select it by its later name (today's-ticker bias).
+        own = history[history["instrument_id"] == first["instrument_id"]]
+        if own["valid_from"].min() == first["valid_from"]:
+            ids.iloc[k] = first["instrument_id"]
     resolved = sorted({str(i) for i in ids.dropna()})
     unresolved = sorted(syms[ids.isna().to_numpy()].tolist())
     return resolved, unresolved

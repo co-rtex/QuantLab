@@ -319,3 +319,39 @@ def test_a_malformed_stored_report_does_not_hide_the_valid_ones(client, seeded):
     assert "reconciliation-good" in names and "reconciliation-bad" not in names
     bad = client.get(f"{base}/reconciliation-bad", headers=owner)
     assert bad.status_code == 422 and bad.json()["error"]["code"] == "invalid_report"
+
+
+def _ml_predictions(client, seeded, config: dict) -> pd.DataFrame:
+    from quantlab_api import artifacts
+
+    h, ws = seeded["headers"], seeded["ws"]
+    r = client.post(
+        f"/api/v1/workspaces/{ws}/ml-runs",
+        headers=h,
+        json={
+            "name": "exclude check",
+            "dataset_version_id": seeded["dv"],
+            "config": {
+                "folds": 2,
+                "min_train_dates": 6,
+                "sample_every": 10,
+                "models": ["majority"],
+                **config,
+            },
+        },
+    )
+    assert r.status_code == 202, r.text
+    assert run_pending_jobs() == ["completed"]
+    return pd.read_parquet(artifacts.ml_dir(r.json()["id"]) / "predictions.parquet")
+
+
+def test_ml_excludes_the_benchmark_and_user_tickers_on_a_keyed_dataset(client, seeded):
+    # The default exclude names the index ticker; the keyed series is QLSYNIDX.
+    default = _ml_predictions(client, seeded, {})
+    assert len(default) and "QLSYNIDX" not in set(default["instrument_id"])
+    assert "SYNIDX" not in set(default["symbol"])
+    assert set(default["instrument_id"]) >= {"QLSYN002"}  # ordinary assets are predicted
+    # A user exclude by ticker works too.
+    custom = _ml_predictions(client, seeded, {"exclude": ["SYNIDX", "syn001"]})
+    assert not {"QLSYN001", "QLSYNIDX"} & set(custom["instrument_id"])
+    assert "SYN001" not in set(custom["symbol"])

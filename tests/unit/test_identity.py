@@ -416,11 +416,22 @@ def test_label_ids_never_shows_a_later_ticker_when_avoidable():
     assert label_ids(h, ["UNKNOWN"], "2022-01-03") == {"UNKNOWN": "UNKNOWN"}
 
 
-def test_universe_takes_the_first_instrument_to_list_a_ticker_within_the_window():
+def test_universe_takes_a_later_listing_but_not_a_later_rename():
     from quantlab.data.identity import resolve_universe
 
-    h = _rename_and_reuse_history()
-    # NEW is not valid at a 2020 start; the first instrument to take it in the window is I1.
-    assert resolve_universe(h, ["NEW"], "2020-06-01", "2022-12-30") == (["I1"], [])
-    # ...but not if the window ends before anyone takes it.
-    assert resolve_universe(h, ["NEW"], "2020-06-01", "2021-01-04") == ([], ["NEW"])
+    h = normalize_history(
+        pd.concat(
+            [
+                _rename_and_reuse_history(),
+                _hist([("I4", "FRESH", "2021-09-01", None)]),  # a genuine new listing
+            ],
+            ignore_index=True,
+        )
+    )
+    # FRESH is I4's first ticker: it joins when it lists.
+    assert resolve_universe(h, ["FRESH"], "2020-06-01", "2022-12-30") == (["I4"], [])
+    # ...but not if the window ends before it lists.
+    assert resolve_universe(h, ["FRESH"], "2020-06-01", "2021-01-04") == ([], ["FRESH"])
+    # NEW is I1's *later* name: at a 2020 start I1 traded as OLD, so asking for NEW must
+    # not select it by the name it will have (today's-ticker bias). It is unresolved.
+    assert resolve_universe(h, ["NEW"], "2020-06-01", "2022-12-30") == ([], ["NEW"])
