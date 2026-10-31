@@ -48,6 +48,11 @@ FEATURES = [
     "vol_63",
     "dist_high_252",
     "volume_z_21",
+    # Staleness covariates (#120): trade-time windows can reach back further in calendar
+    # time, after a halt or for a thinly traded name. Instead of excluding such rows (a
+    # selection against illiquid names), the models see how stale the windows are.
+    "bars_span_21",  # sessions spanned by the last 21 bars / 21 (1 = a bar every session)
+    "max_gap_252",  # longest run of sessions without a bar within the last 252 bars
 ]
 PANEL_COLUMNS = [
     "date",
@@ -65,21 +70,6 @@ PANEL_COLUMNS = [
 ML_PIPELINE_VERSION = 2
 # Below this, a rolling dispersion counts as zero (as in quantlab.analytics).
 _ZERO_DISPERSION = 1e-12
-# How far back, in the instrument's bars, each feature reaches (its oldest bar is t - L).
-LOOKBACK = {
-    "mom_21": 21,
-    "mom_63": 63,
-    "mom_126": 126,
-    "mom_252_21": 252,
-    "rev_5": 5,
-    "vol_21": 21,  # 21 returns, the oldest of which starts at bar t - 21
-    "vol_63": 63,
-    "dist_high_252": 251,
-    "volume_z_21": 20,
-}
-# A window of L bars may span at most this many times L sessions; beyond that, after a
-# long halt, it rests on stale bars and the feature is undefined until fresh bars refill it.
-STALENESS_FACTOR = 2
 ModelName = Literal["majority", "momentum_rule", "logistic", "random_forest", "gradient_boosting"]
 MODELS: tuple[ModelName, ...] = (
     "majority",
@@ -114,15 +104,13 @@ def _own_bar_features(
     ret: pd.DataFrame,
     vol: pd.DataFrame,
     session: pd.DataFrame,
-) -> dict[str, pd.DataFrame]:
-    """Features over rows that are each instrument's consecutive *own* bars.
+) -> tuple[dict[str, pd.DataFrame], dict[str, pd.DataFrame]]:
+    """Features over rows that are each instrument's consecutive *own* bars, plus masks.
 
     Every window and lag is counted in bars (trade time), so a value uses its own bar and
     earlier ones, never a later one. ``session`` holds each bar's position on the session
-    calendar. A feature whose oldest bar lies more than ``STALENESS_FACTOR`` x its lookback
-    sessions back (a long halt in between) is NaN. Two masks are returned beside the
-    features: ``_untraded`` (no volume at all in the last 21 bars) and ``_stale`` (some
-    feature was stale).
+    calendar, which gives the staleness covariates. The masks (``untraded``: no volume at
+    all in the last 21 bars) decide which rows are excluded; they are not features.
     """
 
     def mom(n: int, skip: int = 0) -> pd.DataFrame:
@@ -148,21 +136,28 @@ def _own_bar_features(
         "dist_high_252": adj / adj.rolling(252).max() - 1,
         "volume_z_21": z,
     }
-    stale_any = pd.DataFrame(False, index=adj.index, columns=adj.columns)
-    for name, lookback in LOOKBACK.items():
-        stale = (session - session.shift(lookback)) > STALENESS_FACTOR * lookback
-        feats[name] = feats[name].mask(stale)
-        stale_any |= stale
+    # Staleness is described, not punished: a halt is one long gap (large max_gap_252),
+    # thin trading many short ones (large bars_span_21, small max_gap_252).
+    feats["bars_span_21"] = (session - session.shift(21)) / 21
+    gap = session - session.shift(1) - 1  # sessions without a bar just before this bar
+    feats["max_gap_252"] = gap.rolling(252).max()
     feats["volume_flat_21"] = flat.astype(float).where(v_std.notna() & ~untraded)
-    feats["_untraded"] = untraded.astype(float).where(vol.rolling(21).count() == 21)
-    feats["_stale"] = stale_any.astype(float)
-    return feats
+    masks = {"untraded": untraded.astype(float).where(vol.rolling(21).count() == 21)}
+    return feats, masks
 
 
 def compute_features(
     bars: pd.DataFrame, actions: pd.DataFrame, exclude: tuple[str, ...] = ("SYNIDX",)
 ) -> tuple[dict[str, pd.DataFrame], pd.DataFrame]:
-    """Date x symbol feature matrices plus fully adjusted closes.
+    """Date x symbol feature matrices plus fully adjusted closes (see ``_features``)."""
+    feats, _, adj = _features(bars, actions, exclude)
+    return feats, adj
+
+
+def _features(
+    bars: pd.DataFrame, actions: pd.DataFrame, exclude: tuple[str, ...]
+) -> tuple[dict[str, pd.DataFrame], dict[str, pd.DataFrame], pd.DataFrame]:
+    """Features, row-exclusion masks and fully adjusted closes, date x symbol.
 
     Fully adjusted levels are safe here because only *ratios* of prices dated on or before
     ``t`` are used: corporate actions after ``t`` scale both sides equally and cancel.
@@ -200,8 +195,12 @@ def compute_features(
         index=close.index,
         columns=close.columns,
     )
-    own = _own_bar_features(compress(adj), compress(rets), compress(vol), compress(session))
-    return {name: expand(f) for name, f in own.items()}, adj
+    own, masks = _own_bar_features(compress(adj), compress(rets), compress(vol), compress(session))
+    return (
+        {name: expand(f) for name, f in own.items()},
+        {name: expand(m) for name, m in masks.items()},
+        adj,
+    )
 
 
 def build_panel(
@@ -219,7 +218,7 @@ def build_panel(
     returns are applied to labels whose horizon reaches the first session after the
     security's delisting date.
     """
-    feats, adj = compute_features(bars, actions, cfg.exclude)
+    feats, masks, adj = _features(bars, actions, cfg.exclude)
     close = adj
     h = cfg.horizon
     # The label runs to the last close at or before t+h. For an asset that stops trading
@@ -257,17 +256,19 @@ def build_panel(
     dates = close.index[252 :: cfg.sample_every]
     dates = dates[dates <= close.index[-1 - h]] if len(close) > h else dates[:0]
     frames = []
-    excluded = {"untraded_21": 0, "stale_window": 0}
+    excluded = {"untraded_21": 0}
+    others = [c for c in FEATURES if c != "volume_z_21"]
     for d in dates:
         k = close.index.get_loc(d)
         row = pd.DataFrame({name: f.loc[d] for name, f in feats.items()})  # incl. the flag
         row["fwd_return"] = fwd.loc[d]
-        row["tradable"] = close.loc[d].notna()
-        row = row[row["tradable"]]
-        untraded = row["_untraded"] == 1
-        excluded["untraded_21"] += int(untraded.sum())
-        excluded["stale_window"] += int(((row["_stale"] == 1) & ~untraded).sum())
-        row = row.drop(columns=["tradable", "_untraded", "_stale"]).dropna()
+        row = row[close.loc[d].notna()]
+        # No trading in 21 bars: excluded. Counted only where the row would otherwise be
+        # kept (complete apart from the undefined volume z-score).
+        untraded = masks["untraded"].loc[d].reindex(row.index) == 1
+        complete = row[[*others, "fwd_return"]].notna().all(axis=1)
+        excluded["untraded_21"] += int((untraded & complete).sum())
+        row = row[~untraded].dropna()
         if len(row) < 10:
             continue
         row["label"] = (row["fwd_return"] > row["fwd_return"].median()).astype(int)
@@ -457,8 +458,9 @@ def run_ml_experiment(
         "panel": {
             "rows": len(panel),
             "volume_flat_rows": int(panel["volume_flat_21"].sum()),
-            # Excluded tradable rows: no volume in 21 bars; a window spanning more than
-            # STALENESS_FACTOR x its lookback in sessions (a long halt).
+            # Rows left out for a stated reason, among those otherwise kept: no volume at
+            # all in the last 21 bars. Stale windows are not excluded; see bars_span_21
+            # and max_gap_252.
             "excluded_rows": dict(panel.attrs.get("excluded", {})),
             "dates": int(panel["date"].nunique()),
             "symbols": int(panel["symbol"].nunique()),

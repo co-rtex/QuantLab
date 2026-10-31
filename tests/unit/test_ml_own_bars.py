@@ -82,7 +82,7 @@ def test_without_gaps_the_features_are_unchanged():
     bars = _bars(halted=None)
     feats, _ = compute_features(bars, NONE)
     ref = _session_reference(bars)
-    for name in FEATURES:
+    for name in ref:  # the pre-#120 features; the staleness covariates are new
         pd.testing.assert_frame_equal(feats[name], ref[name], check_names=False, rtol=1e-12)
 
 
@@ -157,30 +157,36 @@ def _halt(length: int, at: int = 280) -> tuple[int, ...]:
     return tuple(range(at, at + length))
 
 
-@pytest.mark.parametrize(("length", "defined"), [(5, True), (6, False)])
-def test_a_window_may_span_at_most_twice_its_length_in_sessions(length, defined):
-    # rev_5 reaches 5 bars back. Right after a halt of h sessions its oldest bar is 5 + h
-    # sessions back: allowed up to 2 x 5 = 10 sessions, so h = 5 is defined, h = 6 is not.
-    halt = _halt(length)
-    feats, _ = compute_features(_bars(halt=halt), NONE)
-    first_after = SESSIONS[halt[-1] + 1]
-    assert bool(np.isfinite(feats["rev_5"].loc[first_after, "S00"])) is defined
-    assert np.isfinite(feats["mom_21"].loc[first_after, "S00"])  # 21 + h <= 42: fresh enough
-
-
-def test_after_a_long_halt_the_row_returns_once_every_window_is_fresh():
-    # A 40-session halt. Each feature with lookback L is stale until its oldest bar (L bars
-    # back) is after the halt, i.e. on the (L + 1)-th bar after it, unless L + 40 <= 2L.
-    # vol_21 and mom_21 bind (L = 21): back in the panel on the 22nd bar after the halt.
-    halt = _halt(40, at=260)  # leaves 30 bars after it
+def test_a_long_halt_is_described_by_the_covariates_not_excluded():
+    # #125 review: excluding stale windows selects against thinly traded names, so a halted
+    # security is kept and its staleness is a model input instead.
+    halt = _halt(40, at=260)
     bars = _bars(halt=halt)
     panel = build_panel(bars, NONE, MLConfig(horizon=5, sample_every=1))
-    own = sorted(bars.loc[bars["symbol"] == "S00", "date"])
-    after = [d for d in own if d > SESSIONS[halt[-1]]]
-    s00 = set(panel.loc[panel["symbol"] == "S00", "date"])
-    assert not set(after[:21]) & s00  # windows still reaching across the halt
-    assert after[21] in s00  # its 22nd bar after the halt
-    assert panel.attrs["excluded"]["stale_window"] >= 21
+    first_after = SESSIONS[halt[-1] + 1]
+    row = panel[(panel["symbol"] == "S00") & (panel["date"] == first_after)]
+    assert len(row) == 1  # back on its first bar after the halt
+    assert row["max_gap_252"].iloc[0] == 40  # one 40-session gap
+    assert row["bars_span_21"].iloc[0] == pytest.approx((21 + 40) / 21)
+    dense = panel[panel["symbol"] != "S00"]
+    assert (dense["max_gap_252"] == 0).all() and (dense["bars_span_21"] == 1).all()
+    assert set(panel.attrs["excluded"]) == {"untraded_21"}  # nothing excluded for staleness
+
+
+def test_thin_trading_is_kept_and_told_apart_from_a_halt():
+    # A name that trades every other session from session 270 (its first 270 bars give the
+    # 252-bar features their history): windows then span up to twice the sessions, and
+    # every gap is one session, unlike a halt's single long gap.
+    bars = _bars(halted=None)
+    late = bars.index[(bars["symbol"] == "S01") & (bars["date"] >= SESSIONS[270])]
+    thin = bars.drop(index=late[1::2])
+    panel = build_panel(thin, NONE, MLConfig(horizon=5, sample_every=1))
+    rows = panel[(panel["symbol"] == "S01") & (panel["date"] >= SESSIONS[270])]
+    traded = thin[(thin["symbol"] == "S01") & (thin["date"] >= SESSIONS[270])]["date"]
+    in_window = traded[traded <= panel["date"].max()]
+    assert set(rows["date"]) == set(in_window)  # kept on every session it trades
+    assert (rows["max_gap_252"] <= 1).all()
+    assert rows["bars_span_21"].max() == pytest.approx(2.0)  # 21 steps of two sessions
 
 
 def test_no_trading_is_excluded_and_counted_not_treated_as_flat_volume():
@@ -202,4 +208,4 @@ def test_results_report_the_excluded_rows():
         MLConfig(horizon=5, sample_every=1, folds=2, min_train_dates=6, models=("majority",)),
     )
     ex = out["panel"]["excluded_rows"]
-    assert ex["untraded_21"] > 0 and ex["stale_window"] > 0
+    assert ex == {"untraded_21": ex["untraded_21"]} and ex["untraded_21"] > 0

@@ -439,14 +439,36 @@ solving.
   panel for the halt's sessions alone. Before version 2, any window containing a halt day
   was NaN for the window's length, which dropped a recently halted security, a selection
   correlated with distress, for up to 252 sessions.
-* **Staleness bound.** A feature reaching L bars back (`LOOKBACK`) is undefined when its
-  oldest bar lies more than 2·L sessions back (`STALENESS_FACTOR`). After a long halt
-  the row drops until fresh bars refill the window. After a 40-session halt, the 21-bar
-  features bind, and the security returns on its 22nd bar after the halt. A 5-session
-  halt leaves `rev_5` defined (10 sessions for 5 bars); a 6-session halt does not.
-  Results count these rows as `panel.excluded_rows.stale_window`.
+* **Staleness is described, not excluded.** Trade-time windows can reach far back in
+  calendar time, after a halt or for a thinly traded name. Two model inputs say how far:
+  * `bars_span_21`: sessions spanned by the last 21 bars ÷ 21, so 1 means a bar every
+    session;
+  * `max_gap_252`: the longest run of sessions without a bar within the last 252 bars.
+
+  A halt shows as one long gap (a 40-session halt gives `max_gap_252 = 40`). Thin trading
+  shows many short ones: every other session gives `bars_span_21 = 2` with
+  `max_gap_252 = 1`, and random 50% trading gives about 2.05 with a maximum gap near 9.
+  An earlier rule excluded a feature whose oldest bar lay more than 2·L sessions back. It
+  was retracted because it selects against illiquid names: a sparsely traded name is not
+  halted, but its gaps add up over a window. Measured on the reviewer's probe (synthetic,
+  30 assets, 2018–2022, every session sampled), the share of each name's candidate rows
+  kept:
+
+  | name | sessions traded | 2·L cap (retracted) | covariates (pipeline 2) |
+  |---|---|---|---|
+  | random 80% | 81% | 100% | 100% |
+  | random 60% | 59% | 67% | 100% |
+  | random 50% | 50% | 10% | 100% |
+  | random 45% | 46% | 0% (drops out) | 100% |
+  | every other session | 50% | 100% (exactly at the bound) | 100% |
+  | 40-session halt | 97% | 98% | 100% |
+  | dense, never halted | 100% | 100% | 100% |
+
+  The residual liquidity effect is the warm-up. A name enters once it has 252 bars of its
+  own, so at 50% trading it needs about two years of calendar history instead of one.
 * **No trading vs flat volume.** A row whose last 21 bars have zero total volume (a
-  quote that never trades) is excluded and counted as `panel.excluded_rows.untraded_21`.
+  quote that never trades) is excluded. `panel.excluded_rows.untraded_21` counts the rows
+  that would otherwise have been kept.
   Constant non-zero volume (21-bar log-volume standard deviation at or below 1e-12)
   deviates from its mean by exactly zero, so `volume_z_21` is 0, not 0/0, and
   `volume_flat_21 = 1` records it. The flag is a panel column, not a model input;
