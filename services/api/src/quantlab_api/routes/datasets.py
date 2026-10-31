@@ -66,7 +66,7 @@ def create_synthetic(
     user: CurrentUser,
     db: DB,
     request: Request,
-    idempotency_key: str | None = Header(None, max_length=128),
+    idempotency_key: str | None = Header(None, min_length=1, max_length=128),
 ) -> JobOut:
     require_workspace(db, user, workspace_id, Role.editor)
     if body.end <= body.start:

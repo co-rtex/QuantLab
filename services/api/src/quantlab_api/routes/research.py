@@ -10,7 +10,14 @@ from sqlalchemy import func, select
 from quantlab.research.integrity import build_integrity_report
 from quantlab_api import artifacts
 from quantlab_api.errors import ApiError
-from quantlab_api.jobs import advisory_lock, lock_idempotency_key, payload_hash, submit_job
+from quantlab_api.jobs import (
+    advisory_lock,
+    lock_idempotency_key,
+    payload_hash,
+    replayed_job,
+    request_fingerprint,
+    submit_job,
+)
 from quantlab_api.models import (
     Experiment,
     ExperimentResult,
@@ -49,7 +56,7 @@ def start_validation(
     user: CurrentUser,
     db: DB,
     request: Request,
-    idempotency_key: str | None = Header(None, max_length=128),
+    idempotency_key: str | None = Header(None, min_length=1, max_length=128),
 ) -> dict[str, Any]:
     exp = load_experiment(db, user, experiment_id, Role.editor)
     if exp.status != JobStatus.completed:
@@ -68,22 +75,25 @@ def start_validation(
             ResearchRun.params_hash == phash,
         )
     )
+    fingerprint = request_fingerprint(f"validation:{exp.id}", user.id, params)
+
+    def legacy_match(job: Job) -> bool:  # jobs from before request fingerprints
+        return run is not None and (job.payload or {}).get("research_run_id") == str(run.id)
+
+    # The key is checked before the per-experiment shortcut below, so a key that belongs to
+    # another request is a conflict even when this experiment already has a run (#43).
+    prior = replayed_job(db, exp.workspace_id, idempotency_key, fingerprint, legacy_match)
+    if prior is not None:  # the same request replayed: report it, rerun nothing
+        prior_run = db.get(ResearchRun, uuid.UUID(prior.payload["research_run_id"])) or run
+        if prior_run is None:
+            raise ApiError(
+                409,
+                "idempotency_conflict",
+                "Idempotency-Key was already used with a different request",
+            )
+        return _run_out(db, prior_run)
     if run is not None and run.status in (JobStatus.queued, JobStatus.running, JobStatus.completed):
         return _run_out(db, run)
-    if run is not None and idempotency_key:
-        prior = db.scalar(
-            select(Job).where(
-                Job.workspace_id == exp.workspace_id, Job.idempotency_key == idempotency_key
-            )
-        )
-        if prior is not None:
-            if prior.payload.get("research_run_id") != str(run.id):
-                raise ApiError(
-                    409,
-                    "idempotency_conflict",
-                    "Idempotency-Key was already used with a different request",
-                )
-            return _run_out(db, run)  # same request replayed: report it, rerun nothing
     if run is None:
         run = ResearchRun(experiment_id=exp.id, kind=SUITE, params=params, params_hash=phash)
         db.add(run)
@@ -104,7 +114,7 @@ def start_validation(
         workspace_id=exp.workspace_id,
         user_id=user.id,
         kind="research.validation",
-        payload={"research_run_id": str(run.id), "seed": 0},
+        payload={"research_run_id": str(run.id), "seed": 0, "request_fingerprint": fingerprint},
         idempotency_key=idempotency_key,
         request_id=getattr(request.state, "request_id", None),
         timeout_seconds=1800,
