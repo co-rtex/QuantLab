@@ -22,6 +22,7 @@ Synthetic data only.
 from __future__ import annotations
 
 import io
+import re
 import uuid
 from collections.abc import Callable, Iterator, Sequence
 from dataclasses import dataclass, field
@@ -29,11 +30,11 @@ from typing import Any
 
 import fakeredis
 import pytest
-from fastapi.routing import APIRoute, iter_route_contexts
+from fastapi.routing import APIRoute, APIWebSocketRoute, iter_route_contexts
 from fastapi.testclient import TestClient
 from httpx import Response
 from sqlalchemy import text
-from starlette.routing import BaseRoute
+from starlette.routing import BaseRoute, Mount, Route
 
 from quantlab_api.models import Role
 from tests.integration.conftest import (
@@ -69,6 +70,7 @@ class World:
     a: dict[str, str]  # A's value for each path parameter
     b: dict[str, str]  # B's
     spare: dict[str, str]  # resources of A's that the allowed deletes use up, and tokens
+    secrets: dict[str, set[str]]  # by side: what no response to the other side may contain
 
 
 Body = Callable[[World], dict[str, Any]]
@@ -297,12 +299,41 @@ ROUTES: dict[str, Spec] = {
 FINDINGS: dict[tuple[str, str], str] = {}
 
 
+DOCS = {"/api/v1/openapi.json", "/api/v1/docs", "/docs/oauth2-redirect"}  # FastAPI's own
+
+
 def routes_of(routes: Sequence[BaseRoute]) -> set[str]:
-    """``METHOD path`` for every route the app serves, through included routers."""
+    """``METHOD path`` for every HTTP route the app serves, through included routers.
+
+    Anything else (a mount, a websocket route, a plain Starlette route besides FastAPI's
+    docs) comes out as ``<Type> path``, which no ``ROUTES`` key matches: it fails the
+    classification, because these checks cannot reach it."""
     out = set()
     for ctx in iter_route_contexts(routes):
-        for method in (ctx.methods or set()) - {"HEAD"}:  # HEAD rides along with GET
-            out.add(f"{method} {ctx.path}")
+        route, path = ctx.original_route, getattr(ctx.original_route, "path", "?")
+        methods = (ctx.methods or set()) - {"HEAD"}  # HEAD rides along with GET
+        http = isinstance(route, APIRoute) or (type(route) is Route and ctx.path in DOCS)
+        if http and methods:
+            out.update(f"{method} {ctx.path}" for method in methods)
+        else:
+            out.add(f"{type(route).__name__} {ctx.path or path}")
+    return out
+
+
+def table_problems(table: dict[str, Spec]) -> list[str]:
+    """Classifications the checks would silently skip."""
+    out = []
+    for key, s in table.items():
+        params = set(re.findall(r"{(\w+)}", key))
+        if s.access in (PUBLIC, USER) and params:
+            out.append(f"{key}: a {s.access} route takes {sorted(params)}")
+        if s.access == WORKSPACE and (s.role is None or not params):
+            out.append(f"{key}: a workspace route needs a role and an id")
+        nested = "workspace_id" in params and params - {"workspace_id"}
+        if s.access == WORKSPACE and nested and not s.swap:
+            out.append(f"{key}: nested ids, but no swap= for the cross-workspace check")
+        if not set(s.swap) <= params:
+            out.append(f"{key}: swap= names {sorted(set(s.swap) - params)}, not in the path")
     return out
 
 
@@ -339,8 +370,11 @@ def _invite(c: TestClient, h: dict[str, str], ws: str, email: str) -> tuple[str,
     return r.json()["id"], accept_token(r)
 
 
-def _seed_workspace(c: TestClient, h: dict[str, str], ws: str, tag: str) -> dict[str, str]:
-    """One resource of every kind in ``ws``, named with ``tag`` (the leak marker)."""
+def _seed_workspace(
+    c: TestClient, h: dict[str, str], ws: str, tag: str, seed: int
+) -> dict[str, str]:
+    """One resource of every kind in ``ws``, named with ``tag`` (a leak marker). The seeds
+    differ, so the two versions' content hashes do too."""
     base = W.format(workspace_id=ws)
     assert c.patch(base, headers=h, json={"name": f"{tag}-workspace"}).status_code == 200
     r = c.post(
@@ -352,13 +386,14 @@ def _seed_workspace(c: TestClient, h: dict[str, str], ws: str, tag: str) -> dict
             "n_assets": 12,
             "start": "2020-01-02",
             "end": "2022-12-30",
-            "seed": 5,
+            "seed": seed,
         },
     )
     assert r.status_code == 202, r.text
     assert set(run_pending_jobs()) == {"completed"}  # and any runs still queued before it
     dataset = c.get(f"{base}/datasets", headers=h).json()[0]["id"]
-    version = c.get(f"{base}/dataset-versions", headers=h).json()[0]["id"]
+    (version_row,) = c.get(f"{base}/dataset-versions", headers=h).json()
+    version = version_row["id"]
     strategy = c.post(
         f"{base}/strategies",
         headers=h,
@@ -410,6 +445,7 @@ def _seed_workspace(c: TestClient, h: dict[str, str], ws: str, tag: str) -> dict
         "portfolio_id": r.json()["id"],
         "invitation_id": invitation,
         "name": REPORT,
+        "version_hash": version_row["version_hash"],  # not a path parameter: a secret
     }
 
 
@@ -438,10 +474,23 @@ def _user_id(c: TestClient, h: dict[str, str]) -> str:
 
 @pytest.fixture(scope="module")
 def world(database: None) -> Iterator[World]:
+    try:
+        with pytest.MonkeyPatch.context() as mp:
+            yield from _world(mp)
+    finally:
+        _truncate()
+
+
+def _world(mp: pytest.MonkeyPatch) -> Iterator[World]:
+    from quantlab.assistant.evals import FaithfulProvider
     from quantlab_api.jobs import set_redis
     from quantlab_api.main import app
+    from quantlab_api.routes import research
     from quantlab_api.security import login_limiter
 
+    # The assistant's allowed call answers from a fake model, whatever key the environment
+    # holds: this suite never reaches a real provider.
+    mp.setattr(research, "_provider", FaithfulProvider)
     _truncate()
     set_redis(fakeredis.FakeRedis())
     login_limiter.reset()
@@ -460,8 +509,8 @@ def world(database: None) -> Iterator[World]:
         join_workspace(c, h["owner"], ws_a, h["editor"], "editor-a@example.com", "editor")
         join_workspace(c, h["outsider"], ws_b, h["editor"], "editor-a@example.com", "viewer")
         join_workspace(c, h["owner"], ws_a, h["spare"], "spare-a@example.com", "viewer")
-        a = _seed_workspace(c, h["owner"], ws_a, "alpha")
-        b = _seed_workspace(c, h["outsider"], ws_b, "bravo")
+        a = _seed_workspace(c, h["owner"], ws_a, "alpha", seed=5)
+        b = _seed_workspace(c, h["outsider"], ws_b, "bravo", seed=7)
         assert set(run_pending_jobs()) == {"completed"}  # both workspaces' runs
         r = c.post(f"/api/v1/experiments/{a['experiment_id']}/validation", headers=h["owner"])
         assert r.status_code == 202, r.text
@@ -484,12 +533,38 @@ def world(database: None) -> Iterator[World]:
             "carol_token": carol,
             "dave_token": dave,
         }
+        people = {k: _user_id(c, v) for k, v in h.items()}
+        secrets = {
+            "a": {
+                "alpha-",
+                *a.values(),
+                *(v for k, v in spare.items() if not k.endswith("_token")),
+                *(people[k] for k in ("owner", "viewer", "editor", "spare", "carol", "dave")),
+                OWNER_EMAIL,
+                "viewer-a@example.com",
+                "editor-a@example.com",
+                "spare-a@example.com",
+                "carol@example.com",
+                "dave@example.com",
+                "pending-alpha@example.com",
+                "pending-alpha-2@example.com",
+            },
+            "b": {
+                "bravo-",
+                *b.values(),
+                people["outsider"],
+                OUTSIDER_EMAIL,
+                "pending-bravo@example.com",
+            },
+        }
+        for side in secrets.values():  # what both sides share, or names a route's literal
+            side -= {"SYN001", REPORT}
         c.cookies.clear()
-        yield World(client=c, headers={"anon": {}, **h}, a=a, b=b, spare=spare)
+        yield World(client=c, headers={"anon": {}, **h}, a=a, b=b, spare=spare, secrets=secrets)
         # Run what the allowed calls queued (an upload's staged files among them), so the
         # truncate leaves nothing on disk without a row; later modules check for that.
-        run_pending_jobs(max_jobs=50)
-    _truncate()
+        outcomes = run_pending_jobs(max_jobs=50)
+        assert "failed" not in outcomes, outcomes
 
 
 def call(
@@ -504,8 +579,11 @@ def call(
     return r
 
 
-def _leaks(r: Response, tag: str, email: str) -> bool:
-    return f"{tag}-" in r.text or email in r.text
+def _leaks(w: World, r: Response, side: str) -> list[str]:
+    """``side``'s names, emails, ids and hashes in the response, except those the request
+    itself carried (a 404 may echo the id it was asked for)."""
+    sent = str(r.request.url) + r.request.read().decode(errors="replace")
+    return sorted(s for s in w.secrets[side] if s in r.text and s not in sent)
 
 
 # --------------------------------------------------------------------------- the matrix
@@ -518,15 +596,59 @@ def test_every_route_is_classified() -> None:
 
 
 def test_an_unclassified_route_is_caught() -> None:
-    """The check above fails on a route nobody classified: here, a dummy one."""
+    """The check above fails on a route nobody classified (here, dummy ones), including
+    kinds these checks cannot exercise: a mount and a websocket route."""
     from quantlab_api.main import app
 
     def dummy() -> dict[str, str]:
         return {}
 
-    extra = APIRoute("/api/v1/workspaces/{workspace_id}/unclassified", dummy, methods=["GET"])
-    served = routes_of([*app.routes, extra])
-    assert served - set(ROUTES) == {"GET /api/v1/workspaces/{workspace_id}/unclassified"}
+    async def socket() -> None:
+        return None
+
+    extra = [
+        APIRoute("/api/v1/workspaces/{workspace_id}/unclassified", dummy, methods=["GET"]),
+        Mount("/x", routes=[]),
+        APIWebSocketRoute("/api/v1/ws/{workspace_id}", socket),
+        Route("/plain", dummy, methods=["GET"]),
+    ]
+    served = routes_of([*app.routes, *extra])
+    assert served - set(ROUTES) == {
+        "GET /api/v1/workspaces/{workspace_id}/unclassified",
+        "Mount /x",
+        "APIWebSocketRoute /api/v1/ws/{workspace_id}",
+        "Route /plain",
+    }
+
+
+def test_the_table_is_consistent() -> None:
+    """A classification the checks would skip fails here: ids on a public or user route, or
+    a nested workspace route without the cross-workspace swap."""
+    assert table_problems(ROUTES) == []
+    nested = f"GET {W}/things/{{thing_id}}"
+    assert table_problems(
+        {nested: Spec(WORKSPACE, V), "GET /api/v1/things/{thing_id}": Spec(USER)}
+    ) == [
+        f"{nested}: nested ids, but no swap= for the cross-workspace check",
+        "GET /api/v1/things/{thing_id}: a user route takes ['thing_id']",
+    ]
+
+
+def test_every_body_id_is_swapped() -> None:
+    """Each id a request body names is tried with B's value (``SWAPS``): a new one is not
+    covered until it is added there."""
+    from quantlab_api.main import app
+
+    schema, named = app.openapi(), set()
+    for path, ops in schema["paths"].items():
+        for method, op in ops.items():
+            for content in op.get("requestBody", {}).get("content", {}).values():
+                ref = content["schema"].get("$ref", "")
+                fields = schema["components"]["schemas"].get(ref.split("/")[-1], content["schema"])
+                for f in fields.get("properties", {}):
+                    if f.endswith(("_id", "_ids")):
+                        named.add((f"{method.upper()} {path}", f))
+    assert named == {(key, f) for key, f, _ in SWAPS.values()}
 
 
 @pytest.mark.parametrize("key", _params("anon", _keys(lambda s: s.access != PUBLIC)))
@@ -538,17 +660,32 @@ def test_unauthenticated_is_refused(world: World, key: str) -> None:
 def test_an_outsider_gets_404_and_nothing_of_a(world: World, key: str) -> None:
     r = call(world, key, "outsider", world.a)
     assert r.status_code == 404, r.text
-    assert not _leaks(r, "alpha", OWNER_EMAIL), r.text
+    assert _leaks(world, r, "a") == [], r.text
 
 
-@pytest.mark.parametrize(
-    "key",
-    _params("role", _keys(lambda s: s.access == WORKSPACE and s.role in (E, O))),
-)
+def test_an_outsider_is_not_shown_a(world: World) -> None:
+    listed = world.client.get("/api/v1/workspaces", headers=world.headers["outsider"]).json()
+    assert world.a["workspace_id"] not in {w["id"] for w in listed}
+    listed = world.client.get("/api/v1/workspaces", headers=world.headers["viewer"]).json()
+    assert world.a["workspace_id"] in {w["id"] for w in listed}  # the check can see it
+
+
+ROLED = _keys(lambda s: s.access == WORKSPACE and s.role in (E, O))
+
+
+@pytest.mark.parametrize("key", _params("role", ROLED))
 def test_a_member_below_the_role_gets_403(world: World, key: str) -> None:
     for caller in ["viewer", "editor"] if ROUTES[key].role == O else ["viewer"]:
         r = call(world, key, caller, world.a)
         assert r.status_code == 403, (caller, r.text)
+
+
+@pytest.mark.parametrize("key", _params("role-in-b", ROLED))
+def test_a_role_in_a_does_not_carry_to_b(world: World, key: str) -> None:
+    """The editor of A is a viewer of B: with B's ids, every editor or owner route refuses
+    them, whether the workspace is in the path or only behind the resource's id."""
+    r = call(world, key, "editor", world.b)
+    assert r.status_code == 403, r.text
 
 
 @pytest.mark.parametrize(
@@ -560,16 +697,19 @@ def test_a_child_of_b_under_a_is_not_found(world: World, key: str) -> None:
     values = {**world.a, **{p: world.b[p] for p in ROUTES[key].swap}}
     r = call(world, key, "owner", values)
     assert r.status_code == 404, r.text
-    assert not _leaks(r, "bravo", OUTSIDER_EMAIL), r.text
+    assert _leaks(world, r, "b") == [], r.text
 
 
-SWAPS: dict[str, tuple[str, Body]] = {
+# Each id a request body names, with B's value (route, field, body).
+SWAPS: dict[str, tuple[str, str, Body]] = {
     "experiment on B's version": (
         f"POST {W}/experiments",
+        "dataset_version_id",
         lambda w: {"json": {**_experiment(w)["json"], "dataset_version_id": w.b["version_id"]}},
     ),
     "experiment with B's strategy": (
         f"POST {W}/experiments",
+        "strategy_id",
         lambda w: {
             "json": {
                 **_experiment(w)["json"],
@@ -580,12 +720,14 @@ SWAPS: dict[str, tuple[str, Body]] = {
     ),
     "ML run on B's version": (
         f"POST {W}/ml-runs",
+        "dataset_version_id",
         lambda w: {
             "json": {"name": "probe", "dataset_version_id": w.b["version_id"], "config": ML}
         },
     ),
     "portfolio on B's version": (
         f"POST {W}/portfolios",
+        "dataset_version_id",
         lambda w: {
             "json": {
                 "name": "probe",
@@ -597,6 +739,7 @@ SWAPS: dict[str, tuple[str, Body]] = {
     ),
     "compare with B's experiment": (
         f"POST {W}/experiments/compare",
+        "experiment_ids",
         lambda w: {"json": {"experiment_ids": [w.b["experiment_id"]]}},
     ),
 }
@@ -614,7 +757,7 @@ def test_a_body_naming_a_resource_of_b_is_refused(
     """B's ids in the body of a request to A. To a member of A only, B's resources do not
     exist (404); a member of both is told the resource belongs to another workspace (422),
     except where the route reports any foreign child as not found."""
-    key, body = SWAPS[case]
+    key, _, body = SWAPS[case]
     if caller == "editor" and case in (
         "experiment with B's strategy",
         "compare with B's experiment",
@@ -622,7 +765,9 @@ def test_a_body_naming_a_resource_of_b_is_refused(
         expected = 404  # these routes look the child up within A only
     r = call(world, key, caller, world.a, body)
     assert r.status_code == expected, r.text
-    assert not _leaks(r, "bravo", OUTSIDER_EMAIL), r.text
+    if expected == 422:  # the route's refusal, not a schema error from a mistyped field
+        assert "another workspace" in r.json()["error"]["message"], r.text
+    assert _leaks(world, r, "b") == [], r.text
 
 
 def test_a_job_of_b_cannot_be_read_or_cancelled_through_a(world: World) -> None:
@@ -644,7 +789,8 @@ def test_a_job_of_b_cannot_be_read_or_cancelled_through_a(world: World) -> None:
     "key",
     _params(
         "allowed",
-        _keys(lambda s: not s.last) + _keys(lambda s: s.last),  # deletes and revokes last
+        # Deletes and revokes last: these cases rely on running in this order.
+        _keys(lambda s: not s.last) + _keys(lambda s: s.last),
     ),
 )
 def test_the_allowed_caller_gets_through(world: World, key: str) -> None:
@@ -654,3 +800,5 @@ def test_the_allowed_caller_gets_through(world: World, key: str) -> None:
     values = {**world.a, **{p: world.spare[k] for p, k in spec.use.items()}}
     r = call(world, key, spec.caller, values)
     assert r.status_code == spec.ok, r.text
+    if key.endswith("/assistant"):
+        assert r.json()["provider"] == "fake:faithful"  # never a real model
