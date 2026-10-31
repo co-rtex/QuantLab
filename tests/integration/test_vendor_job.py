@@ -137,3 +137,68 @@ def test_an_inverted_window_is_refused(client, seeded, monkeypatch, bad):
     job_id = _submit(seeded, **bad)
     assert run_pending_jobs() == ["failed"]
     assert "start must not be after end" in _job(job_id).error["message"]
+
+
+# --------------------------------------------------------------- #95 security review
+def _catalog(client, seeded) -> dict:
+    h = seeded["headers"]
+    versions = client.get(f"/api/v1/workspaces/{seeded['ws']}/dataset-versions", headers=h)
+    (listed,) = [v for v in versions.json() if v["id"] != seeded["dv"]]
+    detail = client.get(f"/api/v1/dataset-versions/{listed['id']}", headers=h).json()
+    inst = client.get(
+        f"/api/v1/dataset-versions/{listed['id']}/instruments?limit=50", headers=h
+    ).json()
+    return {"provenance": detail["provenance"], "instruments": inst["items"]}
+
+
+def test_naming_a_renamed_securitys_old_ticker_keeps_it_alive(client, seeded, monkeypatch):
+    # OLDA's reference row is inactive (renamed to NEWA). Filtering rows by ticker kept only
+    # that row, so identity() saw no active row and marked the security delisted.
+    fake = FakeMassive()
+    fake.extra_inactive.append(  # as the vendor lists a renamed security's old ticker
+        {
+            "ticker": "OLDA",
+            "name": "Synthetic Security 1",
+            "active": False,
+            "delisted_utc": "2024-01-09T21:00:00Z",
+            "share_class_figi": "BBGSYN000001",
+            "composite_figi": "BBCSYN000001",
+            "market": "stocks",
+            "type": "CS",
+        }
+    )
+    _configure(monkeypatch, fake, **ALL)
+    _submit(seeded, tickers=["olda"])
+    assert run_pending_jobs() == ["completed"]
+    rows = [i for i in _catalog(client, seeded)["instruments"]]
+    assert {r["instrument_id"] for r in rows} == {"BBGSYN000001"}
+    assert {r["symbol"] for r in rows} == {"OLDA", "NEWA"}
+    assert not any(r["delisted"] for r in rows)
+
+
+def test_tickers_the_vendor_does_not_know_fail_the_job(client, seeded, monkeypatch):
+    fake = FakeMassive()
+    _configure(monkeypatch, fake, **ALL)
+    job_id = _submit(seeded, tickers=["NEWA", "NOPE1", "NOPE2"])
+    assert run_pending_jobs() == ["failed"]
+    msg = _job(job_id).error["message"]
+    assert "2 requested tickers not in" in msg and "NOPE1" in msg
+
+
+def test_the_asset_limit_is_checked_before_any_per_security_request(client, seeded, monkeypatch):
+    fake = FakeMassive()
+    _configure(monkeypatch, fake, **ALL, max_dataset_assets=1)
+    job_id = _submit(seeded)
+    assert run_pending_jobs() == ["failed"]
+    assert "exceed the configured limit" in _job(job_id).error["message"]
+    assert fake.requests and all("/events" not in u for u in fake.requests)
+
+
+def test_provenance_records_full_counts_of_left_out_securities(client, seeded, monkeypatch):
+    _configure(monkeypatch, FakeMassive(), **ALL)
+    _submit(seeded)
+    assert run_pending_jobs() == ["completed"]
+    prov = _catalog(client, seeded)["provenance"]
+    assert prov["unidentified_count"] == len(prov["unidentified"]) == 1
+    assert prov["unidentified"] == ["NOFIGI"]
+    assert prov["skipped_no_composite_figi_count"] == len(prov["skipped_no_composite_figi"])

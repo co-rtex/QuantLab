@@ -140,6 +140,13 @@ Sources:
   with the current `active` flags, ingests by permanent id, fails rather than store a
   partial universe, runs the #10 gates, and stores the symbol history and master. No API
   route or UI offers it yet, and the vendor and licence remain the user's choice.
+  Optional `tickers` select *securities*: every reference row of each matching
+  `share_class_figi` is kept, so naming a renamed security's old ticker does not make it
+  look delisted. A ticker the vendor does not know fails the job. The asset limit is
+  checked on distinct securities before `identity()`, which makes one request per
+  security. Provenance records the full counts of unidentified and skipped securities.
+  Provenance (`fetched_at`, request counts) is not part of the version hash, so an
+  identical re-fetch reuses the existing version and keeps its first provenance.
 
 ## Licensing rules for this repository
 

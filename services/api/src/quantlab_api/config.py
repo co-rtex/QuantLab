@@ -76,7 +76,11 @@ def _create_dev_secret(path: Path) -> str:
 
 
 class Settings(BaseSettings):
-    model_config = SettingsConfigDict(env_prefix="QUANTLAB_", env_file=".env", extra="ignore")
+    # hide_input_in_errors: a failed guard must not print the raw settings, secrets
+    # included, into a startup log (#95 review: the key sat in the visible tail).
+    model_config = SettingsConfigDict(
+        env_prefix="QUANTLAB_", env_file=".env", extra="ignore", hide_input_in_errors=True
+    )
 
     environment: Literal["development", "test", "production"] = "development"
     database_url: str = "postgresql+psycopg://quantlab:quantlab@localhost:5433/quantlab"

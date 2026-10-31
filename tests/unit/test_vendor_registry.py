@@ -99,3 +99,47 @@ def test_a_configured_vendor_never_exposes_its_key():
     assert provider.api.auth == "bearer"
     assert KEY not in repr(provider.api) and KEY not in str(provider.describe())
     assert provider.describe()["license"] == CONFIGURED["market_data_license"]
+
+
+SECRETS = {
+    "jwt_secret": "JWTSECRET_" + "q" * 40,
+    "metrics_token": "METRICSTOKEN_0123456789",
+    "anthropic_api_key": "ANTHROPICKEY_0123456789",
+    "market_data_api_key": "MDKEY_abcdef0123456789",
+}
+PROD = {
+    "environment": "production",
+    "cookie_secure": True,
+    "market_data_provider": "massive",
+    **SECRETS,
+}
+
+
+@pytest.mark.parametrize(
+    "broken",
+    [
+        {"jwt_secret": None},  # unset
+        {"jwt_secret": "JWTSHORT_x"},  # too short: the value itself is a secret
+        {"jwt_secret": "insecure-change-me-" + "z" * 30},  # placeholder
+        {"metrics_token": None},
+        {"cookie_secure": False},
+        {"market_data_api_key": " "},  # provider without a key
+        {"market_data_provider": "polgon"},  # a field error follows the same rule
+    ],
+)
+def test_no_secret_appears_in_a_settings_error(broken):
+    from quantlab_api.config import Settings
+
+    values = {**PROD, **broken}
+    with pytest.raises(ValidationError) as exc:
+        Settings(_env_file=None, **{k: v for k, v in values.items() if v is not None})
+    import traceback
+
+    # What a startup log shows: the message and the formatted traceback. (``errors()``
+    # still carries the raw input for programmatic use; nothing here logs it.)
+    text = str(exc.value) + "".join(traceback.format_exception(exc.value))
+    secrets = [*SECRETS.values()]
+    secrets += [v for k, v in broken.items() if isinstance(v, str) and k != "market_data_provider"]
+    for secret in secrets:
+        if secret.strip():
+            assert secret not in text, f"{secret} leaked"
