@@ -17,6 +17,12 @@ COPY packages packages
 COPY services services
 RUN uv sync --frozen --no-dev \
  && useradd --create-home --uid 10001 quantlab && mkdir -p /data && chown quantlab /data
+# AWS RDS CA bundle, so QUANTLAB_DATABASE_URL can use sslmode=verify-full with
+# sslrootcert=/etc/ssl/certs/rds-global-bundle.pem (#19, infra/terraform/README.md).
+# Pinned: a mismatch fails the build ("digest mismatch"), and a new AWS bundle is a
+# deliberate update of this checksum. 0644 so uid 10001 can read it.
+ADD --checksum=sha256:90a6f1a7978a1b1b096dca6c57511ca48d3b8cf052f8e704baf358f34ea2f21b --chmod=0644 \
+    https://truststore.pki.rds.amazonaws.com/global/global-bundle.pem /etc/ssl/certs/rds-global-bundle.pem
 ENV PATH="/app/.venv/bin:$PATH" QUANTLAB_DATA_DIR=/data
 USER quantlab
 EXPOSE 8000
