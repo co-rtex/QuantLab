@@ -282,6 +282,11 @@ def run_backtest(
     pos_rows: list[tuple[pd.Timestamp, str, float, float]] = []
     decisions: list[tuple[pd.Timestamp, str, float]] = []
     cum = {"commission": 0.0, "slippage": 0.0, "dividends": 0.0}
+    # Positions marked at a zero-volume close: equity on such stale marks is not realisable.
+    stale_position_days = 0
+    # The largest share of equity on stale marks; None until something is held with
+    # positive equity.
+    stale_share: float | None = None
     slip = config.slippage_bps / 1e4
     comm = config.commission_bps / 1e4
 
@@ -501,6 +506,11 @@ def run_backtest(
         prices = {s: float(last_px[col[s]]) for s in ledger.positions}
         mv = ledger.market_value(prices)
         equity = ledger.cash + mv
+        stale_held = [s for s in ledger.positions if no_trade[k, col[s]]]
+        stale_position_days += len(stale_held)
+        if ledger.positions and equity > 0:
+            share = sum(ledger.positions[s] * prices[s] for s in stale_held) / equity
+            stale_share = share if stale_share is None else max(stale_share, share)
         records.append(
             {
                 "date": d,
@@ -600,6 +610,15 @@ def run_backtest(
             "delistings": delist_counts,
             # Universe bars in the window printed with zero volume: not tradable (#149).
             "zero_volume_bars": int(no_trade[start_pos:].sum()),
+            # The cost of keeping stale-quoted holdings (#149 review): equity marked at a
+            # zero-volume close is not realisable.
+            "stale_marks": {
+                "zero_volume_position_days": stale_position_days,
+                "max_equity_share": stale_share,
+                "undefined": {}
+                if stale_share is not None
+                else {"max_equity_share": "nothing was held on a day with positive equity"},
+            },
             "instrument_master_unmatched": master_unmatched,
             "instrument_master": instruments is not None and len(instruments) > 0,
             "first_session": str(trade_dates[0].date()),

@@ -78,6 +78,10 @@ def test_a_zero_volume_halt_cannot_be_sold_and_the_position_takes_the_reopen_mov
         assert "B" not in strategy.offered[d[k]]
     assert "B" in strategy.offered[d[8]]
     assert res.meta["zero_volume_bars"] == 4 and res.meta["engine_version"] == ENGINE_VERSION
+    # The cost is visible: 100 shares of B, the whole portfolio, on 4 stale marks.
+    stale = res.meta["stale_marks"]
+    assert stale["zero_volume_position_days"] == 4
+    assert stale["max_equity_share"] == pytest.approx(1.0) and stale["undefined"] == {}
     res.ledger.check_invariants()
     rebuilt = replay(res.ledger.transactions)
     assert rebuilt.cash == pytest.approx(res.ledger.cash)
@@ -104,6 +108,9 @@ def test_a_single_zero_volume_day_rejects_the_fill_and_the_next_decision_fills(e
     assert list(rej["date"]) == [d[2]] and list(rej["reason"]) == ["no_volume"]
     assert buys["date"].iloc[0] == d[4] and buys["price"].iloc[0] == pytest.approx(10.0)
     assert "B" not in strategy.offered[d[2]] and "B" in strategy.offered[d[3]]
+    # Held from session 4, after the zero-volume day: no stale mark, a defined share of 0.
+    assert res.meta["stale_marks"]["zero_volume_position_days"] == 0
+    assert res.meta["stale_marks"]["max_equity_share"] == 0.0
     res.ledger.check_invariants()
 
 
@@ -141,3 +148,24 @@ def test_a_zero_volume_last_bar_is_a_stale_mark_after_the_window():
     res = run_backtest(bars, NONE, Scripted(d, switch_at=None), cfg, instruments=master)
     assert res.meta["delistings"]["after_window"] == 1
     assert res.meta["delistings"]["after_window_current"] == 0
+
+
+class Cash(Strategy):
+    key: ClassVar[str] = "cash"
+    name: ClassVar[str] = "Cash"
+    description: ClassVar[str] = "test only"
+    Params: ClassVar[type[StrategyParams]] = StrategyParams
+
+    def target_weights(self, view: MarketView) -> pd.Series:
+        return pd.Series(dtype=float)
+
+
+def test_the_stale_mark_share_is_undefined_when_nothing_is_held():
+    bars, _ = _halt_case()
+    cfg = BacktestConfig(rebalance="daily", initial_capital=1000, **FREE)
+    stale = run_backtest(bars, NONE, Cash(), cfg).meta["stale_marks"]
+    assert stale["zero_volume_position_days"] == 0
+    assert (
+        stale["max_equity_share"] is None
+        and "nothing was held" in stale["undefined"]["max_equity_share"]
+    )

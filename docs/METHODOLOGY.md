@@ -314,6 +314,14 @@ Per session `k`:
    with zero volume marks the position too, but it is a **stale mark**, not a price
    anyone traded at. Such a bar still counts as a printed bar for the missing-bars
    delisting rule, so a stale-quoted holding is kept, not liquidated at its last close.
+   Counting it as missing would liquidate at the pre-halt close, the optimistic fill this
+   rule removes. The cost is that **equity on stale marks is not realisable**: a name
+   that prints stale quotes indefinitely is held at its stale close until it trades or
+   the master delists it. `meta.stale_marks` reports this cost:
+   * `zero_volume_position_days`: position-days marked at a zero-volume close;
+   * `max_equity_share`: the largest share of equity on such marks on any day. It is
+     None, with the reason in `undefined`, when nothing was held on a day with positive
+     equity.
    For a delisting after the window, a zero-volume last bar counts as a stale mark
    (`after_window`).
 6. On rebalance dates (last session of the period, plus the first session) the strategy
