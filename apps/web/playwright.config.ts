@@ -10,6 +10,9 @@ export default defineConfig({
   reporter: [["list"], ["html", { open: "never" }]],
   use: {
     baseURL: process.env.E2E_BASE_URL ?? "http://localhost:3000",
+    // For runs through the TLS edge (infra/edge/), whose development certificate comes from
+    // Caddy's local CA.
+    ignoreHTTPSErrors: process.env.E2E_IGNORE_HTTPS_ERRORS === "1",
     trace: "retain-on-failure",
     screenshot: "only-on-failure",
   },

@@ -1,0 +1,48 @@
+# QuantLab TLS edge (#3, ADR-0008). The only service that faces clients.
+#
+# It terminates TLS and states the client address to the web tier itself: the
+# X-Forwarded-For it sends upstream is *overwritten* with the TCP peer of this
+# connection, never appended to, so nothing a client sends can choose the address the
+# API rate-limits on. No `trusted_proxies` is configured, so Caddy also parses no client
+# IP from incoming headers. If a CDN or load balancer is ever put in front, the hop that
+# faces the internet must be the one that overwrites; only then list that hop's CIDRs
+# under `servers { trusted_proxies static ... }` and switch {remote_host} to {client_ip}.
+{
+	admin off
+	servers {
+		# Bounds on slow clients: headers within 10 s, a whole body (at most 110 MB, below)
+		# within 5 min. Uvicorn has no request-body timeout of its own.
+		timeouts {
+			read_header 10s
+			read_body 5m
+			idle 2m
+		}
+	}
+}
+
+{$QUANTLAB_EDGE_SITE:localhost} {
+	# `tls internal` issues a certificate from Caddy's local CA, for development and
+	# verification. With a public domain in QUANTLAB_EDGE_SITE, set QUANTLAB_EDGE_TLS to
+	# an ACME email (or remove the directive) to get a publicly trusted certificate.
+	tls {$QUANTLAB_EDGE_TLS:internal}
+
+	# Largest API body: 110 MiB, as in limits.py and route.ts (two 50 MiB CSV files plus
+	# multipart overhead). MiB, not MB: Caddy's MB is decimal.
+	request_body {
+		max_size 110MiB
+	}
+
+	header {
+		Strict-Transport-Security "max-age=31536000"
+		-Server
+	}
+
+	reverse_proxy web:3000 {
+		# The client address is this connection's peer, whatever the client claims.
+		header_up X-Forwarded-For {remote_host}
+		header_up -Forwarded
+		header_up -X-Real-IP
+		# Proves to the web tier that the request came through this edge (route.ts).
+		header_up X-QuantLab-Edge {$QUANTLAB_EDGE_SECRET}
+	}
+}
