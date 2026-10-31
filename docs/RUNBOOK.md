@@ -80,6 +80,24 @@ database time. The reaper then does one of four things:
 A late heartbeat or commit from the dead worker is fenced out by the attempt counter, so
 no duplicate result can be written.
 
+### A worker died or was restarted
+* **A crash or OOM kill restarts by itself.** The core services run with
+  `restart: unless-stopped`, so Docker restarts a worker that crashes or is OOM-killed. In
+  the #162 probe, both workers were back 4.7 s after a SIGKILL.
+* **A stop you ran stays stopped.** Docker treats `docker compose stop` and
+  `docker compose kill` as manual stops. Start the workers again with
+  `docker compose --profile app up -d worker`.
+* **A restarted worker rejoins at once.** Each start takes a new RQ name,
+  `<container hostname>-<pid>-<random>`.
+  * The dead process's name stays in `rq info` as a stale worker until its registration
+    expires, 8 minutes later. It holds no work.
+  * Its job is recovered as in the previous section, once its lease expires. In the probe,
+    the job completed on attempt 2 about 90–100 s after the kill.
+* **`QUANTLAB_WORKER_NAME` fixes the name instead.** Use it only for a single worker that
+  is always stopped cleanly. After an unclean exit, RQ refuses that name until the stale
+  registration expires. Until then the worker exits 1, and with the restart policy Docker
+  keeps restarting it. The name must not contain `:` and is at most 128 characters.
+
 ### A job keeps failing
 `GET /api/v1/jobs/{id}` → `error.type`, `error.message`, `error.trace` and `retryable`.
 Retryable errors are retried with the backoff above until `max_attempts`. Permanent
