@@ -298,7 +298,24 @@ Per session `k`:
    fill prices, every buy is scaled by the same factor (then rounded to whole shares
    unless fractional shares are enabled) and flagged `partial`, so no symbol is favoured
    by sort order. Orders without a price on the fill date are rejected (`no_price`).
-5. Mark-to-market at `close[k]` (last known close for symbols with a gap).
+   **A bar printed with zero volume is not tradable** (#149, engine 1.4.0): a vendor may
+   repeat the last open and close with volume 0 through a halt, and nobody could trade at
+   those prices.
+   * In both execution modes, an order meets such a bar as it meets a session without a
+     bar: it is rejected (`no_volume`) and not carried over.
+   * The strategy is not offered the symbol that day (`MarketView.tradable`).
+   * A held position therefore stays held through a zero-volume halt and takes the
+     reopen move.
+   * A NaN volume is unknown and tradable, because many datasets carry no volume at all.
+   * `meta.zero_volume_bars` counts the universe's zero-volume bars in the window.
+
+   Volume ≤ 0 counts as zero; negative volume is a quality error.
+5. Mark-to-market at `close[k]` (last known close for symbols with a gap). A close printed
+   with zero volume marks the position too, but it is a **stale mark**, not a price
+   anyone traded at. Such a bar still counts as a printed bar for the missing-bars
+   delisting rule, so a stale-quoted holding is kept, not liquidated at its last close.
+   For a delisting after the window, a zero-volume last bar counts as a stale mark
+   (`after_window`).
 6. On rebalance dates (last session of the period, plus the first session) the strategy
    sees bars dated `<= k` only and returns target weights. Weights are clipped to
    `max_weight`, scaled to `max_gross_exposure`, and converted to share targets using
