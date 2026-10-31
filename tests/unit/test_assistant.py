@@ -1,4 +1,5 @@
 import re
+from dataclasses import replace
 
 import pytest
 
@@ -418,3 +419,229 @@ def test_review_74_second_round_rejections(text, facts):
 )
 def test_review_74_second_round_legitimate(text, facts):
     assert verify_answer(text, facts)["grounded"], text
+
+
+# #79: the lead's fact set for the false rejects found after #74.
+FACTS_79 = [
+    Fact("F2", "max_drawdown", "Maximum drawdown", -0.283, "pct", "d"),
+    Fact("F3", "total_return", "Total return (net of costs)", 0.152, "pct", "t"),
+    Fact("F5", "volatility", "Annualized volatility", 0.183, "pct", "v"),
+    Fact("F7", "total_costs", "Total trading costs", 12345.0, "usd", "c"),
+    Fact("F10", "alpha", "Annualized Jensen alpha", -0.021, "pct", "a"),
+    Fact("F12", "historical_var", "One-day historical VaR (95%)", 0.0213, "pct", "r", (), (95.0,)),
+    Fact("F14", "worst_day", "Worst single-day return", -0.0412, "pct", "w"),
+    Fact("F18", "cost_drag_cagr", "CAGR lost to costs", 0.008, "pct", "k"),
+    Fact("F19", "annual_turnover", "Annual one-way turnover (x equity)", 3.2, "ratio", "o"),
+    Fact("F4", "benchmark_total_return", "SYNIDX total return", 0.101, "pct", "b"),
+    Fact("F11", "excess_total_return", "Total return minus SYNIDX", 0.051, "pct", "x"),
+]
+# The same with the benchmark and the excess return negative, for the sign pairs.
+FACTS_79_NEG = [
+    *(f for f in FACTS_79 if f.id not in ("F4", "F11")),
+    Fact("F4", "benchmark_total_return", "SYNIDX total return", -0.101, "pct", "b"),
+    Fact("F11", "excess_total_return", "Total return minus SYNIDX", -0.051, "pct", "x"),
+]
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        # A loss word in another clause is about something else.
+        "Although the benchmark fell, the strategy returned 15.2% [F3].",
+        "Despite losses elsewhere, the strategy returned 15.2% [F3].",
+        "After the drawdown, the strategy returned 15.2% [F3].",
+        # Two quantities, each bound to the figure of its own clause.
+        "Volatility was 18.3% and costs were $12,345 [F5][F7].",
+        "Turnover was 3.2x and costs dragged CAGR by 0.8% [F19][F18].",
+        # What costs take from CAGR is a cost.
+        "Costs reduced CAGR by 0.8% a year [F18].",
+        "Costs reduced CAGR by 0.8 percentage points [F18].",
+        "Costs reduced CAGR by 80 bps [F18].",
+        # A fall word right after the figure.
+        "The worst day was a 4.12% drop [F14].",
+        "Jensen alpha was 2.1% below zero [F10].",
+        # Drawdown phrasing.
+        "The deepest decline was 28.3% [F2].",
+        "The strategy was underwater by as much as 28.3% [F2].",
+        # "of" attaches the figure to the quantity named right before it.
+        "The expected shortfall exceeded the VaR of 2.13% [F12].",
+        # A semicolon joins clauses that share the citations.
+        "Total return: 15.2%; maximum drawdown: −28.3% [F3][F2].",
+        # Parentheses right after a name are an aside, not accounting notation.
+        "Total return (15.2%) [F3].",
+    ],
+)
+def test_issue_79_legitimate_phrasings_pass(text):
+    assert verify_answer(text, FACTS_79)["grounded"], text
+
+
+@pytest.mark.parametrize(
+    ("text", "facts"),
+    [
+        # The same shapes, misattributed: each must stay rejected.
+        ("Although the benchmark rose, the strategy lost 15.2% [F3].", FACTS_79),
+        ("Despite gains elsewhere, the strategy lost 15.2% [F3].", FACTS_79),
+        ("After the rally, the drawdown was 15.2% [F3].", FACTS_79),
+        ("Total return during the drawdown was 28.3% [F2].", FACTS_79),
+        ("Volatility was $12,345 and costs were 18.3% [F5][F7].", FACTS_79),
+        ("Turnover was 0.8x and costs dragged CAGR by 3.2% [F19][F18].", FACTS_79),
+        ("CAGR was 0.8% [F18].", FACTS_79),
+        ("Costs reduced CAGR by 15.2% [F3].", FACTS_79),
+        ("Total return was 15.2 percentage points [F3].", FACTS_79),
+        ("The worst day was a 4.12% gain [F14].", FACTS_79),
+        ("The best day was 4.12% [F14].", FACTS_79),
+        ("Jensen alpha was 2.1% above zero [F10].", FACTS_79),
+        ("The deepest decline was 15.2% [F3].", FACTS_79),
+        ("The VaR exceeded the expected shortfall of 2.13% [F12].", FACTS_79),
+        ("Total return: 28.3%; maximum drawdown: −15.2% [F3][F2].", FACTS_79),
+        ("Total return (28.3%) [F2].", FACTS_79),
+        ("Total return (15.2%) [F3].", SIGNED_FACTS),
+        ("Total return was (15.2%) [F3].", ISSUE_15_FACTS),
+    ],
+)
+def test_issue_79_misattributions_stay_rejected(text, facts):
+    assert not verify_answer(text, facts)["grounded"], text
+
+
+@pytest.mark.parametrize(
+    ("text", "facts"),
+    [
+        # A clause with no figure of its own still speaks for the figure next to it (#94).
+        ("Total return was 15.2%, a loss [F3].", FACTS_79),
+        ("Total return was 15.2%, which was a loss [F3].", FACTS_79),
+        ("Total return, which fell, was 15.2% [F3].", FACTS_79),
+        ("Total return, down sharply, was 15.2% [F3].", FACTS_79),
+        ("Total return, although it fell, was 15.2% [F3].", FACTS_79),
+        ("The maximum drawdown was 28.3%, a gain [F2].", FACTS_79),
+        ("The strategy posted a gain of 28.3% [F2].", FACTS_79),
+        # Accepted on main as well.
+        ("Total return was 15.2%, a decline [F3].", FACTS_79),
+        ("Total return was 15.2%, but negative [F3].", FACTS_79),
+        ("It lagged SYNIDX by 5.1 percentage points [F11].", FACTS_79),
+        # The figures swapped in the false rejects fixed below.
+        ("The strategy rose 28.3% despite a 15.2% drawdown [F3][F2].", FACTS_79),
+        ("Equity rose 28.3% while the drawdown reached 15.2% [F3][F2].", FACTS_79),
+        ("Total return (15.2%) beat SYNIDX (10.1%) [F3][F4].", FACTS_79_NEG),
+        ("The excess return was 5.1% (510 bps) [F11].", FACTS_79_NEG),
+    ],
+)
+def test_review_94_misattributions_rejected(text, facts):
+    assert not verify_answer(text, facts)["grounded"], text
+
+
+@pytest.mark.parametrize(
+    ("text", "facts"),
+    [
+        # The same shapes, stating the fact's real sign.
+        ("Total return was 15.2%, a loss [F3].", SIGNED_FACTS),
+        ("Total return was 15.2%, which was a loss [F3].", SIGNED_FACTS),
+        ("Total return, which fell, was 15.2% [F3].", SIGNED_FACTS),
+        ("Total return, down sharply, was 15.2% [F3].", SIGNED_FACTS),
+        ("Total return was 15.2%, a decline [F3].", SIGNED_FACTS),
+        ("Total return was 15.2%, but negative [F3].", SIGNED_FACTS),
+        ("The maximum drawdown was 28.3%, a deep loss [F2].", FACTS_79),
+        ("It lagged SYNIDX by 5.1 percentage points [F11].", FACTS_79_NEG),
+        # A figure-less clause before the figure speaks for it, too.
+        ("Alpha was negative, at 2.1% [F10].", FACTS_79),
+        # Lower-priority false rejects from the #94 review.
+        ("The strategy rose 15.2% despite a 28.3% drawdown [F3][F2].", FACTS_79),
+        ("Equity rose 15.2% while the drawdown reached 28.3% [F3][F2].", FACTS_79),
+        ("Total return (15.2%) beat SYNIDX (10.1%) [F3][F4].", FACTS_79),
+        ("The excess return was 5.1% (510 bps) [F11].", FACTS_79),
+    ],
+)
+def test_review_94_legitimate_phrasings(text, facts):
+    assert verify_answer(text, facts)["grounded"], text
+
+
+@pytest.mark.parametrize(
+    ("text", "facts"),
+    [
+        # An opening clause without a subject of its own is about the main clause (#94).
+        ("Although it fell, total return was 15.2% [F3].", FACTS_79),
+        ("While negative, the return was 15.2% [F3].", FACTS_79),
+        ("Though down, total return was 15.2% [F3].", FACTS_79),
+        ("While a loss, the return was 15.2% [F3].", FACTS_79),
+        ("Although it gained, the maximum drawdown was 28.3% [F2].", FACTS_79),
+        ("Despite falling, total return was 15.2% [F3].", FACTS_79),
+        ("After falling, total return was 15.2% [F3].", FACTS_79),
+        ("Although the return fell, total return was 15.2% [F3].", FACTS_79),
+        ("It fell, but total return was 15.2% [F3].", FACTS_79),
+        # A subject of its own does not hide a contradiction in the main clause.
+        ("Although the benchmark rose, total return fell 15.2% [F3].", FACTS_79),
+    ],
+)
+def test_review_94_opening_clause_misattributions_rejected(text, facts):
+    assert not verify_answer(text, facts)["grounded"], text
+
+
+@pytest.mark.parametrize(
+    ("text", "facts"),
+    [
+        ("Although it fell, total return was 15.2% [F3].", SIGNED_FACTS),
+        ("While negative, the return was 15.2% [F3].", SIGNED_FACTS),
+        ("Though down, total return was 15.2% [F3].", SIGNED_FACTS),
+        ("Despite falling, total return was 15.2% [F3].", SIGNED_FACTS),
+        # An opening clause with a subject of its own describes that subject.
+        ("Although the benchmark fell, total return was 15.2% [F3].", FACTS_79),
+        ("Although SYNIDX fell, total return was 15.2% [F3].", FACTS_79),
+        ("While the benchmark was negative, total return was 15.2% [F3].", FACTS_79),
+        ("The benchmark fell, but total return was 15.2% [F3].", FACTS_79),
+    ],
+)
+def test_review_94_opening_clause_legitimate(text, facts):
+    assert verify_answer(text, facts)["grounded"], text
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        # The strategy, however it is named, is the main clause's subject (#94).
+        "Although the portfolio fell, total return was 15.2% [F3].",
+        "Although the strategy fell, total return was 15.2% [F3].",
+        "Although equity fell, total return was 15.2% [F3].",
+        "Although the fund fell, total return was 15.2% [F3].",
+        "Although the account fell, total return was 15.2% [F3].",
+        "Although our strategy fell, total return was 15.2% [F3].",
+        "Although the strategy's equity fell, total return was 15.2% [F3].",
+        "Although the benchmark fell and so did the strategy, total return was 15.2% [F3].",
+        "Although the benchmark fell, as did the strategy, total return was 15.2% [F3].",
+    ],
+)
+def test_review_94_strategy_is_never_another_subject(text):
+    assert not verify_answer(text, FACTS_79)["grounded"], text
+    # The same sentence is fine when the return really fell.
+    assert verify_answer(text, SIGNED_FACTS)["grounded"], text
+
+
+def test_review_94_negative_opening_matches_a_negative_fact():
+    """'Although negative, alpha was 2.1%' states -2.1%: consistent with a -2.1% alpha."""
+    assert verify_answer("Although negative, alpha was 2.1% [F10].", FACTS_79)["grounded"]
+    positive = [replace(f, value=0.021) if f.id == "F10" else f for f in FACTS_79]
+    assert not verify_answer("Although negative, alpha was 2.1% [F10].", positive)["grounded"]
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        # Found by a sign sweep against main (#94): each must read as the sign it states.
+        "In a falling market, total return was 15.2% [F3].",  # the market falls, not F3
+        "Despite the decline, total return was 15.2% [F3].",  # whose decline? F3's
+        "Since falling, total return rose 15.2% [F3].",  # both directions: rejected
+        "Total return was 15.2% lower [F3].",  # "lower" states a fall
+    ],
+)
+def test_review_94_sign_sweep_cases(text):
+    verdicts = [verify_answer(text, fs)["grounded"] for fs in (FACTS_79, SIGNED_FACTS)]
+    assert verdicts.count(True) <= 1, (text, verdicts)  # never both signs
+
+
+def test_review_94_sign_sweep_reads_each_sign():
+    pos, neg = FACTS_79, SIGNED_FACTS  # F3 = +15.2%, -15.2%
+    assert verify_answer("In a falling market, total return was 15.2% [F3].", pos)["grounded"]
+    assert not verify_answer("In a falling market, total return was 15.2% [F3].", neg)["grounded"]
+    assert not verify_answer("Despite the decline, total return was 15.2% [F3].", pos)["grounded"]
+    assert verify_answer("Despite the decline, total return was 15.2% [F3].", neg)["grounded"]
+    assert not verify_answer("Since falling, total return rose 15.2% [F3].", neg)["grounded"]
+    assert verify_answer("Total return was 15.2% lower [F3].", neg)["grounded"]
+    assert not verify_answer("Total return was 15.2% lower [F3].", pos)["grounded"]

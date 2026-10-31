@@ -121,13 +121,60 @@ negatives). Each one fails on main's verifier, on the first draft,
 or on both. The one exception is "The strategy earned 2.1% of alpha [F4]" for -2.1% alpha,
 which every version rejects; it stays as a guard.
 
-Known limits: the verifier reads words, not grammar. A loss word before a figure states
-a loss even when it describes something else ("After losing streaks, total return was
-15.2%" is a false reject), negation is not understood ("did not lose 15.2%"), and "minus"
-is not read as a sign. Words bind to the nearest figure by character distance, so a
-sentence that names two kinds near one figure ("The probability that the Sharpe ratio is
-real is 62%") is a false reject. A spaced dash between two figures ("10 - 15%") reads the
-second as negative. These false rejects fall back to the deterministic answer.
+False rejects after #74 (#79), each fixed with a regression test that keeps the matching
+misattribution rejected (`test_issue_79_*`):
+* Scopes. Commas, semicolons, "and", "but", "while" and "whereas" separate clauses, and
+  a clause that carries a figure starts a scope. A clause with no figure of its own joins
+  the scope beside it, so "Total return was 15.2%, a loss", "Total return, which fell,
+  was 15.2%" and "Alpha was negative, at 2.1%" are read as one. (An earlier draft of #94
+  cut these off and accepted the misattributions; review caught it.) A figure-less clause
+  that opens the sentence is a scope of its own only when it is subordinate ("Although",
+  "After", "While" ...) or followed by "but", and has a subject of its own: "Although
+  the benchmark fell,", "After the drawdown,", "Despite losses elsewhere,", "The
+  benchmark fell, but". Its words then describe that subject. A pronoun, a participle,
+  an article or a bare adjective ("Although it fell", "Despite falling", "While a loss",
+  "While negative"), or a named quantity with a direction ("Although the return fell"),
+  is about the main clause, so its words apply there, as do the strategy itself under
+  any name ("the portfolio", "equity", "the fund", "our strategy") and a direction noun
+  ("Despite the decline"). An opening clause that also names the strategy ("and so did
+  the strategy") is about it too. (Earlier drafts of #94 kept these apart; review
+  caught them.) A participle after an article describes its noun, not the figure ("In a
+  falling market"), and a figure stated with both a fall and a rise ("Since falling,
+  total return rose 15.2%") is rejected. "15.2% lower" states a fall.
+
+  Each round was also checked with a sign sweep: 276 sentences (23 opening clauses × 12
+  main clauses) against a +15.2% and a -15.2% return. None is accepted under both signs,
+  and every sentence accepted here but rejected on main was read by hand. A figure is
+  read with the names of its scope when there are any, and with the direction words of
+  its scope up to the next figure, so "15.2%, a decline" and "15.2%, but negative" state
+  a loss. In "Volatility was 18.3% and costs were $12,345" each figure has its own kind.
+  A figure whose scope names nothing takes the nearest name from a leading clause
+  ("During the drawdown, equity rose 28.3%" stays rejected), never across another figure
+  ("rose 15.2% despite a 28.3% drawdown": the drawdown is the 28.3%).
+* "lagged" and "trailed" state underperformance, like "underperformed".
+* "of" attaches: in "The expected shortfall exceeded the VaR of 2.13%" the figure is the
+  VaR's. Without "of", every name in the clause must agree ("Total return during the
+  drawdown was 28.3%" stays rejected).
+* Cost drag: "Costs reduced CAGR by 0.8%" (also "dragged", "cut", "lowered", "a drag on
+  CAGR") names a cost, not a return; "CAGR was 0.8%" for the cost drag stays rejected.
+* A fall word right after the figure states a loss ("a 4.12% drop"), as does "below zero".
+* Drawdown phrasing: "deepest/largest/worst decline, fall, drop or loss" and "underwater".
+* A semicolon no longer ends a sentence, so "Total return: 15.2%; maximum drawdown:
+  -28.3% [F3][F2]" keeps its citations for both halves.
+* "Total return (15.2%)", "SYNIDX (10.1%)", "5.1% (510 bps)": parentheses right after a
+  name, a word of a cited label, or another figure are an aside, not accounting notation.
+  "Total return was (15.2%)" still reads as negative.
+* Percentage points are a unit of their own, allowed only for differences between rates
+  (cost drag, excess return, alpha): "Total return was 15.2 percentage points" is rejected.
+
+Known limits: the verifier reads words, not grammar. A loss word in the same clause as a
+figure states a loss even when it describes something else ("After losing streaks total
+return was 15.2%", without a comma, is a false reject), negation is not understood ("did
+not lose 15.2%"), and "minus" is not read as a sign. Within a clause, words bind to the
+nearest figure by character distance, so a clause that names two kinds near one figure
+("The probability that the Sharpe ratio is real is 62%") is a false reject. A spaced dash
+between two figures ("10 - 15%") reads the second as negative. These false rejects fall
+back to the deterministic answer.
 
 Adversarial stand-ins (`LabelBypassProvider` in `assistant/evals.py`) write each bypass
 with real figures from the evidence. Every number they state is some fact's magnitude,

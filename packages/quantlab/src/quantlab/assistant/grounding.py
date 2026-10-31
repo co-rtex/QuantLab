@@ -7,8 +7,10 @@ number in an answer must match a fact (within display rounding) or the answer is
 
 from __future__ import annotations
 
+import bisect
 import math
 import re
+from collections.abc import Callable
 from dataclasses import asdict, dataclass, field, replace
 from typing import Any, Literal
 
@@ -452,25 +454,28 @@ def _norm(text: str) -> str:
 
 
 def _unit(m: re.Match[str]) -> str:
-    """How a figure in prose is expressed: "%", "bp", "x", "$" or "" (a bare number)."""
+    """How a figure in prose is expressed: "%", "pp" (percentage points), "bp", "x", "$" or
+    "" (a bare number)."""
     suffix = (m["unit"] or "").strip().lower()
     if suffix in ("x", "×"):
         return "x"
     if suffix.startswith("b"):
         return "bp"
+    if suffix.startswith("percentage"):
+        return "pp"
     if suffix:
         return "%"
     return "$" if m["cur"] else ""
 
 
-def _value(m: re.Match[str]) -> float:
+def _value(m: re.Match[str], accounting_ok: bool = True) -> float:
     """The signed figure. A minus may be followed by one space ("- 15.2%"), unless it is a
     bullet at the start of a line, and a parenthesised percentage or amount is negative,
-    as in accounts ("(15.2%)", "($1,234)")."""
+    as in accounts ("(15.2%)", "($1,234)"), unless ``accounting_ok`` is false."""
     x = float(m["num"].replace(",", ""))
     sign = m["sign"] or ""
     bullet = " " in sign and not m.string[: m.start()].strip()
-    accounting = bool(m["open"] and m["close"]) and _unit(m) in ("%", "$", "bp")
+    accounting = accounting_ok and bool(m["open"] and m["close"]) and _unit(m) in ("%", "$", "bp")
     return -x if (sign and not bullet) or m["sign2"] or accounting else x
 
 
@@ -481,6 +486,9 @@ def _numbers_in(text: str) -> list[tuple[float, str]]:
 
 # Ratios that are probabilities, which prose may state as a percentage.
 _PROBABILITY_KEYS = {"deflated_sharpe"}
+# Differences between two rates, which prose may state in percentage points (#79): "costs
+# cut CAGR by 0.8 percentage points". A total return is not a number of points.
+_POINT_KEYS = {"cost_drag_cagr", "excess_total_return", "alpha"}
 
 # (value, tolerance, units it may be written in, the sign it carries, from the label template)
 Candidate = tuple[float, float, frozenset[str], float, bool]
@@ -505,7 +513,7 @@ def _candidates(f: Fact) -> list[Candidate]:
     v = float(f.value)
     if f.unit == "pct":
         out += [
-            (v * 100, 0.051, frozenset({"%"}), v, False),
+            (v * 100, 0.051, frozenset({"%", "pp"} if f.key in _POINT_KEYS else {"%"}), v, False),
             (v * 10_000, 0.51, frozenset({"bp"}), v, False),
             (v, 0.0051, _BARE, v, False),
         ]
@@ -522,8 +530,24 @@ def _candidates(f: Fact) -> list[Candidate]:
 
 # Sentence boundaries: end punctuation followed by space, or a line break. Decimal points
 # ("0.46") are not followed by whitespace, so they never split a sentence, and neither does
-# the space before a citation ("... regimes. [F34]" keeps its citation).
-_SENTENCE = re.compile(r"(?<=[.!?;])\s+(?!\[F\d+\])|\n+")
+# the space before a citation ("... regimes. [F34]" keeps its citation). A semicolon joins
+# clauses that share the citations at the end ("Total return: 15.2%; maximum drawdown:
+# -28.3% [F3][F2]"), so it is a clause boundary (below), not a sentence one (#79).
+_SENTENCE = re.compile(r"(?<=[.!?])\s+(?!\[F\d+\])|\n+")
+# Clause boundaries (commas in numbers, "12,345", are not followed by a space). A figure is
+# read with the words of its scope: its own clause plus the clauses around it that carry no
+# figure of their own, so "15.2%, a loss" and "Total return, which fell, was 15.2%" still
+# state a loss (#94). Only a leading subordinate clause with no figure is a scope of its
+# own: in "Although the benchmark fell, the strategy returned 15.2%" the fall is the
+# benchmark's (#79).
+_CLAUSE = re.compile(r"[,;]\s|\s(?:and|but|while|whereas)\s", re.I)
+_SUBORDINATE = re.compile(
+    r"\s*(?:although|though|even though|despite|in spite of|after|before|unlike|since|"
+    r"during|whereas|while|when)\b",
+    re.I,
+)
+# "the VaR of 2.13%": a quantity named right before "of" owns the figure.
+_OF = re.compile(r"\s+of\s+(?:(?:about|around|roughly|nearly|almost|just|only)\s+)?", re.I)
 
 # What kind of quantity each fact is, so prose that names a quantity can only be backed by a
 # fact of that kind (#15): "Total return was 28.3% [F2]" is unsupported when F2 is the
@@ -577,7 +601,9 @@ _KIND_WORDS: list[tuple[frozenset[str], re.Pattern[str], str | None]] = [
     (
         frozenset({"drawdown"}),
         re.compile(
-            r"\bdraw-?downs?\b|\bpeak[- ]to[- ]trough\b|\b(?:from|below) (?:its |the )?peak\b",
+            r"\bdraw-?downs?\b|\bpeak[- ]to[- ]trough\b|\b(?:from|below) (?:its |the )?peak\b|"
+            r"\b(?:deepest|largest|biggest|worst|maximum|max) (?:decline|fall|drop|loss)\b|"
+            r"\bunderwater\b",
             re.I,
         ),
         None,
@@ -603,6 +629,16 @@ _KIND_WORDS: list[tuple[frozenset[str], re.Pattern[str], str | None]] = [
     ),
     (frozenset({"pnl"}), re.compile(r"\bP&L\b|\bPnL\b|\bprofit and loss\b", re.I), None),
     (frozenset({"sessions"}), re.compile(r"\bsessions\b|\btrading days\b", re.I), None),
+    # Before "return": what costs take from CAGR is a cost ("Costs reduced CAGR by 0.8%").
+    (
+        frozenset({"costs"}),
+        re.compile(
+            r"\b(?:reduc(?:e|es|ed|ing)|cut|cuts|lower(?:s|ed)?|drag(?:s|ged)?|shaved|trimmed)"
+            r"\s+(?:the\s+)?(?:annual(?:ized)?\s+)?(?:CAGR|returns?)\b|\bdrag on (?:the\s+)?CAGR\b",
+            re.I,
+        ),
+        None,
+    ),
     (frozenset({"return"}), re.compile(r"\b(?:total )?returns?\b|\bCAGR\b", re.I), None),
     (
         _GAINS,
@@ -614,21 +650,41 @@ _KIND_WORDS: list[tuple[frozenset[str], re.Pattern[str], str | None]] = [
         ),
         "gain",
     ),
-    (frozenset({"return", "alpha"}), re.compile(r"\bunderperform(?:s|ed)?\b", re.I), "loss"),
+    (
+        frozenset({"return", "alpha"}),
+        re.compile(r"\bunderperform(?:s|ed)?\b|\blag(?:s|ged|ging)\b|\btrail(?:s|ed|ing)\b", re.I),
+        "loss",
+    ),
     (_LOSSES, re.compile(r"\blos(?:e|es|t|ing|s|ses)\b", re.I), "loss"),
 ]
 # Words that state a fall without naming a quantity ("Equity fell 4%").
 _FALL = re.compile(
-    r"\b(?:fell|fall(?:s|en)?|declin(?:e|es|ed|ing)|drop(?:s|ped)?|down|shed|sheds|slid|"
-    r"sank|tumbled|negative)\b",
+    r"\b(?:fell|fall(?:s|en|ing)?|declin(?:e|es|ed|ing)|drop(?:s|ped|ping)?|down|shed|sheds|"
+    r"slid|sliding|sinking|"
+    r"sank|tumbled|negative|below zero|lower|worse)\b",
     re.I,
 )
+
+
+def _directions(pattern: re.Pattern[str], body: str) -> list[re.Match[str]]:
+    """The direction words of ``pattern`` in ``body``, without attributive participles:
+    in "In a falling market" the market is falling, not the figure."""
+    return [
+        d
+        for d in pattern.finditer(body)
+        if not (
+            d.group(0).lower().endswith("ing")
+            and re.search(r"\b(?:a|an|the|this|that)\s+$", body[: d.start()], re.I)
+        )
+    ]
+
+
 # Words that state a rise. They state a gain for the figure they modify, before it ("equity
 # rose 28.3%") or right after it ("28.3% higher"), unless their subject is a loss: in "the
 # drawdown grew to 28.3%" the loss deepened (#74).
 _RISE = re.compile(
-    r"\b(?:rose|rise[sn]?|grew|grow(?:s|n)?|increas(?:e|es|ed)|up(?! to\b)|higher|"
-    r"climb(?:s|ed)?|advanc(?:e|es|ed))\b",
+    r"\b(?:rose|rise[sn]?|rising|grew|grow(?:s|n|ing)?|increas(?:e|es|ed|ing)|up(?! to\b)|"
+    r"higher|climb(?:s|ed|ing)?|advanc(?:e|es|ed|ing))\b",
     re.I,
 )
 # Words that may stand between a loss and the rise it is the subject of.
@@ -674,17 +730,19 @@ Binding = tuple[frozenset[str], "Fact | None"]
 
 
 def _assign(
-    mentions: list[Mention], numbers: list[tuple[int, int]]
+    mentions: list[Mention], numbers: list[tuple[int, int]], clause: Callable[[int], int]
 ) -> dict[tuple[int, int], list[Mention]]:
     """Give each mention to the adjacent number it is closest to (the following one on a
-    tie: "Sharpe 0.46, drawdown 28.3%"). A number must be supported under every mention
-    it gets, so a kind word placed after a number cannot rebind it away from the one
-    before it: in "Total return was 28.3% drawdown" both words go to 28.3%, and they
-    disagree."""
+    tie: "Sharpe 0.46, drawdown 28.3%"), among the numbers of its own clause when it has
+    any: in "Volatility was 18.3% and costs were $12,345" the costs are the $12,345 (#79).
+    A number must be supported under every mention it gets, so a kind word placed after
+    a number cannot rebind it away from the one before it: in "Total return was 28.3%
+    drawdown" both words go to 28.3%, and they disagree."""
     out: dict[tuple[int, int], list[Mention]] = {n: [] for n in numbers}
     for m in mentions:
-        prev = [n for n in numbers if n[1] <= m[0]]
-        nxt = [n for n in numbers if n[0] >= m[1]]
+        mine = [n for n in numbers if clause(n[0]) == clause(m[0])] or numbers
+        prev = [n for n in mine if n[1] <= m[0]]
+        nxt = [n for n in mine if n[0] >= m[1]]
         options = []
         if prev:
             p = max(prev, key=lambda n: n[1])
@@ -708,6 +766,104 @@ def _nearest(start: int, end: int, mentions: list[Mention]) -> Mention | None:
         return (start - m[1], 0) if m[1] <= start else (m[0] - end, 1)
 
     return min(mentions, key=distance)
+
+
+# Words that cannot be a subject of their own: a clause that starts with one ("Although it
+# fell", "While negative", "While a loss", "Despite falling") is about the main clause's
+# subject, so its words apply there (#94).
+_NO_SUBJECT = frozenset(
+    re.findall(
+        r"\w+",
+        "it its they their them this that these those there he she we a an negative "
+        "positive down up lower higher flat weak weaker strong stronger small modest sharp "
+        "sharply slightly briefly still so very much more less mostly largely deeply also "
+        "then again initially once recently",
+    )
+)
+
+
+# The strategy under test, however it is named: the subject of the main clause, never one
+# of its own (#94). "Although the portfolio fell, total return was 15.2%" is about it.
+_MAIN_SUBJECT = re.compile(
+    r"\b(?:strateg(?:y|ies)|portfolios?|equity|funds?|accounts?|it|its|our|we|us)\b", re.I
+)
+
+
+def _own_subject(
+    masked: str, s: int, e: int, upto: int, mentions: list[Mention], directions: list[int]
+) -> bool:
+    """Whether the figure-less clause masked[s:e] is about something other than the main
+    clause: "Although the benchmark fell", "Despite losses elsewhere", "After the
+    drawdown", but not "Although it fell", "Although the portfolio fell" or "Although the
+    return fell". Nothing up to the main clause (``upto``) may name the strategy itself:
+    in "Although the benchmark fell, and so did the strategy," the fall is its, too."""
+    text = masked[s:e]
+    if _MAIN_SUBJECT.search(masked[s:upto]):
+        return False
+    if re.search(r"\b(?:elsewhere|others?)\b", text, re.I):
+        return True
+    # A quantity named with a direction ("the return fell") is the main clause's quantity.
+    if any(s <= w[0] < e for w in mentions) and any(s <= d < e for d in directions):
+        return False
+    lead = _SUBORDINATE.match(text)
+    words = re.findall(r"[A-Za-z][\w'&-]*", text[lead.end() :] if lead else text)
+    while words and words[0].lower() in ("a", "an", "the", "this", "that", "these", "those"):
+        words.pop(0)
+    if not words:
+        # Only a named quantity: its own subject ("After the drawdown"), unless it states a
+        # direction ("While a loss").
+        named = [w for w in mentions if s <= w[0] < e]
+        return bool(named) and not any(w[4] for w in named)
+    w = words[0]
+    return not (
+        w.lower() in _NO_SUBJECT
+        or w.lower().endswith("ing")
+        or _FALL.fullmatch(w) is not None
+        or _RISE.fullmatch(w) is not None
+    )
+
+
+def _scopes(
+    masked: str, figures: list[int], mentions: list[Mention], directions: list[int]
+) -> list[tuple[int, int, bool]]:
+    """(start, end, carries a figure) for each scope of a sentence: a clause that carries
+    a figure, with the figure-less clauses that trail or lead it. A figure-less clause
+    that opens the sentence and has a subject of its own is a scope of its own when it is
+    subordinate ("Although the benchmark fell,") or followed by "but" ("The benchmark
+    fell, but ...")."""
+    cuts = list(_CLAUSE.finditer(masked))
+    edges = [0, *(c.end() for c in cuts), len(masked)]
+    out: list[list[Any]] = []  # [start, end, has figure, closed]
+    for i in range(len(edges) - 1):
+        s, e = edges[i], edges[i + 1]
+        fig = any(s <= p < e for p in figures)
+        # Where the clause with the next figure starts.
+        upto = next(
+            (
+                edges[j]
+                for j in range(i, len(edges) - 1)
+                if any(edges[j] <= p < edges[j + 1] for p in figures)
+            ),
+            len(masked),
+        )
+        sep = cuts[i - 1].group(0).strip().lower() if i else ""
+        nxt = masked[e : edges[i + 2]] if i + 2 < len(edges) else ""
+        sub = sep in ("while", "whereas") or _SUBORDINATE.match(masked[s:e]) is not None
+        contrast = re.match(r"\s*but\b", nxt, re.I) is not None
+        # Opens the sentence: "Total return, although it fell," does not.
+        leading = not out or out[-1][3]
+        if (
+            (sub or contrast)
+            and not fig
+            and leading
+            and _own_subject(masked, s, e, upto, mentions, directions)
+        ):
+            out.append([s, e, False, True])
+        elif out and not out[-1][3] and (not fig or not out[-1][2]):
+            out[-1][1], out[-1][2] = e, out[-1][2] or fig
+        else:
+            out.append([s, e, fig, False])
+    return [(s, e, fig) for s, e, fig, _ in out]
 
 
 def verify_answer(text: str, facts: list[Fact]) -> dict[str, Any]:
@@ -761,10 +917,29 @@ def verify_answer(text: str, facts: list[Fact]) -> dict[str, Any]:
         body = re.sub(r"#\d+", " ", body)  # ordinal references such as "Drawdown #1"
         body = re.sub(r"\b\d+(?:\.\d+)?%? (?:bootstrap|confidence)", " ", body)  # "95% ..."
         mentions = _mentions(body, cited)
-        falls = [m.end() for m in _FALL.finditer(body)]
+        masked = body
+        for w in mentions:  # "profit and loss" is one name, not two clauses
+            masked = masked[: w[0]] + " " * (w[1] - w[0]) + masked[w[1] :]
+        numbers = list(_NUM.finditer(body))
+        directions = [
+            *(d.start() for d in _directions(_FALL, body)),
+            *(d.start() for d in _directions(_RISE, body)),
+            *(w[0] for w in mentions if w[4]),
+        ]
+        scopes = _scopes(masked, [n.start() for n in numbers], mentions, directions)
+        firsts = [s[0] for s in scopes]
+
+        def clause(pos: int, firsts: list[int] = firsts) -> int:
+            return bisect.bisect_right(firsts, pos) - 1
+
+        # Words of a cited fact's label ("SYNIDX"): "SYNIDX (10.1%)" is an aside.
+        label_words = {w.lower() for f in cited for w in re.findall(r"[A-Za-z]{2,}", f.label)}
+        templates = {x for f in cited for x in f.label_numbers}
+
+        falls = [(m.start(), m.end()) for m in _directions(_FALL, body)]
         rises = [
             (r.start(), r.end())
-            for r in _RISE.finditer(body)
+            for r in _directions(_RISE, body)
             if not any(
                 w[2] & _MAGNITUDE_KINDS
                 and w[1] <= r.start()
@@ -772,28 +947,60 @@ def verify_answer(text: str, facts: list[Fact]) -> dict[str, Any]:
                 for w in mentions
             )
         ]
-        numbers = list(_NUM.finditer(body))
-        assigned = _assign(mentions, [(m.start(), m.end()) for m in numbers])
+        assigned = _assign(mentions, [(m.start(), m.end()) for m in numbers], clause)
         prev_end = 0
-        for m in numbers:
-            x, unit = _value(m), _unit(m)
+        for k, m in enumerate(numbers):
+            # "Total return (15.2%)", "SYNIDX (10.1%)", "5.1% (510 bps)": parentheses right
+            # after a name or another figure are an aside, not accounting notation (#79).
+            before = body[: m.start()].rstrip()
+            last = re.search(r"([A-Za-z]{2,})$", before)
+            aside = (
+                any(w[1] <= m.start() and not body[w[1] : m.start()].strip() for w in mentions)
+                or (k > 0 and not body[numbers[k - 1].end() : m.start()].strip())
+                or (last is not None and last.group(1).lower() in label_words)
+            )
+            x, unit = _value(m, accounting_ok=not aside), _unit(m)
             claim = m.group(0).strip()
             claims.append(claim)
-            # A word states the direction of the first number after it ("gained 15.2% with
-            # a 28.3% drawdown" asserts a gain of 15.2% only), or of the number it is
-            # assigned to ("a 15.2% loss").
+            c = clause(m.start())
+            start = max(prev_end, scopes[c][0])
+            # Direction words after the figure count up to the next figure of its scope
+            # ("15.2%, a decline", "15.2%, but negative").
+            later = [n.start() for n in numbers[k + 1 :] if clause(n.start()) == c]
+            stop = min([*later, scopes[c][1]])
+            # The words of the figure's own clause speak for it when there are any; a
+            # quantity attached by "of" ("the VaR of 2.13%") speaks for it alone.
             own = assigned[(m.start(), m.end())]
-            words = [w for w in mentions if prev_end <= w[1] <= m.start()] + own
-            loss = any(prev_end <= e <= m.start() for e in falls) or any(
+            own = [w for w in own if clause(w[0]) == c] or own
+            own = [
+                w for w in own if w[1] <= m.start() and _OF.fullmatch(body[w[1] : m.start()])
+            ] or own
+            # A word states the direction of the first number after it in its clause
+            # ("gained 15.2% with a 28.3% drawdown" asserts a gain of 15.2% only), or of
+            # the number it is assigned to ("a 15.2% loss", "a 4.12% drop").
+            words = [w for w in mentions if start <= w[1] <= m.start()] + own
+            loss = any(start <= e <= m.start() or m.end() <= s < stop for s, e in falls) or any(
                 w[4] == "loss" for w in words
             )
-            gain = (
-                any(w[4] == "gain" for w in words)
-                or any(prev_end <= e <= m.start() for _, e in rises)
-                or any(s >= m.end() and not body[m.end() : s].strip() for s, _ in rises)
+            gain = any(w[4] == "gain" for w in words) or any(
+                start <= e <= m.start() or m.end() <= s < stop for s, e in rises
             )
             prev_end = m.end()
-            near = _nearest(m.start(), m.end(), mentions)
+            # The nearest name speaks for a figure no word was given to, from its own scope,
+            # else from a leading clause with no figure ("During the drawdown, equity rose
+            # 28.3%"), but never across another figure: in "rose 15.2% despite a 28.3%
+            # drawdown" the drawdown is the 28.3%.
+            pool = [w for w in mentions if clause(w[0]) == c] or [
+                w for w in mentions if not scopes[clause(w[0])][2]
+            ]
+            # A label's template number ("VaR (95%)") is part of the name, not a figure.
+            figures = [n for n in numbers if n is not m and abs(_value(n)) not in templates]
+            pool = [
+                w
+                for w in pool
+                if not any(min(w[1], m.start()) <= n.start() < max(w[0], m.end()) for n in figures)
+            ]
+            near = _nearest(m.start(), m.end(), pool)
             bindings: list[Binding | None] = [(w[2], w[3]) for w in own]
             bindings.append(None if near is None else (near[2], near[3]))
             if all(_supported(x, unit, cited, b, loss, gain) for b in bindings):
@@ -842,6 +1049,8 @@ def _supported(
                 if gain and signed < 0:
                     continue  # "the drawdown gained 28.3%"
                 return True
+            if loss and gain and x >= 0:
+                continue  # "Since falling, total return rose 15.2%": which is it?
             negative = x < 0 or loss
             if signed != 0 and negative != (signed < 0):
                 continue  # "lost 15.2%" for +15.2%, "15.2%" for -15.2%
