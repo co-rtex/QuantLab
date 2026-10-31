@@ -279,3 +279,91 @@ def test_numbers_from_text_facts_keep_their_sign():
     assert verify_answer("Stress window (warning): Worst month was -4.1%. [F1]", f)["grounded"]
     assert verify_answer("The worst month was -4.1% [F1].", f)["grounded"]
     assert not verify_answer("The strategy gained 4.1% in its worst month [F1].", f)["grounded"]
+
+
+# Review of #74: the same facts with a negative return and alpha, for sign flips.
+SIGNED_FACTS = [
+    Fact("F1", "sharpe", "Sharpe ratio", 0.4567, "ratio", "s"),
+    Fact("F2", "max_drawdown", "Maximum drawdown", -0.283, "pct", "d"),
+    Fact("F3", "total_return", "Total return (net of costs)", -0.152, "pct", "t"),
+    Fact("F4", "alpha", "Annualized Jensen alpha", -0.021, "pct", "a"),
+    Fact("F5", "historical_var", "One-day historical VaR (95%)", 0.021, "pct", "v", (), (95.0,)),
+    Fact("F6", "cost_drag_cagr", "CAGR lost to costs", 0.008, "pct", "c"),
+    Fact("F7", "wf_folds", "Walk-forward folds", 5, "count", "w"),
+    Fact(
+        "F8", "integrity_stress", "Stress window (warning)", "Worst month was -4.1%.", "text", "i"
+    ),
+]
+
+
+@pytest.mark.parametrize(
+    ("text", "facts"),
+    [
+        # A drawdown backs an unsigned figure only when the sentence calls it a drawdown;
+        # main rejected these and an earlier draft of #74 accepted them.
+        ("Equity rose 28.3% [F2].", ISSUE_15_FACTS),
+        ("The portfolio grew by 28.3% [F2].", ISSUE_15_FACTS),
+        ("The account increased 28.3% [F2].", ISSUE_15_FACTS),
+        ("It came in at 28.3% [F2].", ISSUE_15_FACTS),
+        ("Equity rose 2.1% [F5].", SIGNED_FACTS),
+        # Units: a percentage is not a fraction, a ratio is not a percentage.
+        ("Total return was 0.152% [F3].", ISSUE_15_FACTS),
+        ("Sharpe ratio was 0.46% [F1].", ISSUE_15_FACTS),
+        ("Total return was 15.2 bps [F3].", ISSUE_15_FACTS),
+        ("Total return was 15.2 [F3].", ISSUE_15_FACTS),
+        ("Total return was $15.2 [F3].", ISSUE_15_FACTS),
+        # Signed kinds: an unsigned figure states a positive value.
+        ("Total return was 15.2% [F3].", SIGNED_FACTS),
+        ("Alpha was positive at 2.1% [F4].", SIGNED_FACTS),
+        ("The strategy earned 2.1% of alpha [F4].", SIGNED_FACTS),
+        ("Total return was 4.1% [F8].", SIGNED_FACTS),
+        # Unicode minus and en dash are minus signs.
+        ("Total return was −15.2% [F3].", ISSUE_15_FACTS),
+        ("Total return was –15.2% [F3].", ISSUE_15_FACTS),
+        # Gain synonyms, and "lose".
+        ("The strategy delivered 28.3% [F2].", ISSUE_15_FACTS),
+        ("The strategy yielded 28.3% [F2].", ISSUE_15_FACTS),
+        ("The portfolio appreciated 28.3% [F2].", ISSUE_15_FACTS),
+        ("The strategy earns 28.3% [F2].", ISSUE_15_FACTS),
+        ("The strategy was up 28.3% [F2].", ISSUE_15_FACTS),
+        ("It outperformed by 28.3% [F2].", ISSUE_15_FACTS),
+        ("The strategy would lose 15.2% [F3].", ISSUE_15_FACTS),
+        ("The strategy had a 15.2% loss [F3].", ISSUE_15_FACTS),
+        # Text and kind-less facts back only numbers the sentence names no kind for.
+        ("Total return was -4.1% [F8].", SIGNED_FACTS),
+        ("Sharpe ratio was 5 [F7].", SIGNED_FACTS),
+    ],
+)
+def test_review_74_rejections(text, facts):
+    assert not verify_answer(text, facts)["grounded"], text
+
+
+@pytest.mark.parametrize(
+    ("text", "facts"),
+    [
+        # False rejects in an earlier draft of #74.
+        ("The strategy lost 28.3% at its worst [F2].", ISSUE_15_FACTS),
+        ("It lost 28.3% peak to trough [F2].", ISSUE_15_FACTS),
+        ("Losses peaked at 28.3% [F2].", ISSUE_15_FACTS),
+        ("Equity fell 28.3% from its peak [F2].", ISSUE_15_FACTS),
+        ("Total return was 1520 bps [F3].", ISSUE_15_FACTS),
+        ("Total return was 15.2 percent [F3].", ISSUE_15_FACTS),
+        ("Total return was 0.152 [F3].", ISSUE_15_FACTS),
+        ("The strategy delivered 15.2% [F3].", ISSUE_15_FACTS),
+        ("Total return was -15.2% [F3].", SIGNED_FACTS),
+        ("Total return was −15.2% [F3].", SIGNED_FACTS),
+        ("Total return was –15.2% [F3].", SIGNED_FACTS),
+        ("The strategy lost 15.2% [F3].", SIGNED_FACTS),
+        ("The strategy had a 15.2% loss [F3].", SIGNED_FACTS),
+        ("Alpha was negative at 2.1% [F4].", SIGNED_FACTS),
+        ("It underperformed by 2.1% of alpha a year [F4].", SIGNED_FACTS),
+        ("The one-day VaR was 2.1% [F5].", SIGNED_FACTS),
+        ("On a bad day it could lose 2.1% [F5].", SIGNED_FACTS),
+        ("It lost 0.8% a year to costs [F6].", SIGNED_FACTS),
+        ("Walk-forward folds: 5 [F7].", SIGNED_FACTS),
+        ("The worst month was -4.1% [F8].", SIGNED_FACTS),
+        ("Maximum drawdown was −28.30% [F2].", SIGNED_FACTS),
+    ],
+)
+def test_review_74_legitimate_phrasings(text, facts):
+    assert verify_answer(text, facts)["grounded"], text

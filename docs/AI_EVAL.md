@@ -83,10 +83,38 @@ The new rules (`assistant/grounding.py`, `verify_answer`):
   rejected). Automated security reviews found both cases in earlier drafts.
 * A cited text fact (an integrity finding) quoted in full stands for that fact. Its own
   numbers are not separate claims. Numbers paraphrased from it keep the sign checks:
-  "gained 4.1%" from a finding that says "-4.1%" is rejected.
-* Signs: return verbs ("returned", "made", "earned", "gained", "profit", "lost") state a
-  sign for whatever they govern. Neutral movement verbs ("grew", "fell") state one only
-  for returns, P&L and alpha, so a drawdown may "grow".
+  "gained 4.1%" from a finding that says "-4.1%" is rejected. A text fact, or a numeric
+  fact with no known kind, backs a number named as some kind of quantity only if the
+  fact is of that kind ("Total return was -4.1%" does not come from that finding).
+* Units: a percentage fact of 0.152 may be written "15.2%", "15.2 percent", "1520 bps" or
+  "0.152", not "0.152%", "15.2" or "15.2 bps". A ratio is not a percentage ("Sharpe
+  0.46%" is rejected), except the deflated Sharpe probability. A "$" goes with amounts.
+* Signs: a figure states a negative value when it has a minus sign (also the Unicode
+  minus or an en dash) or a word says it fell or was lost ("lost", "lose", "fell",
+  "down", "negative", "underperformed", "a 15.2% loss"). Otherwise it states a positive
+  value. Either way it must match the fact's sign: "Total return was 15.2%" is rejected
+  for a -15.2% return, and "Alpha was positive at 2.1%" for -2.1% alpha.
+* Magnitudes: only drawdowns, VaR, expected shortfall and costs may be stated without
+  their sign, and only when the sentence says the figure is one: next to the fact's
+  label, "drawdown", "VaR", "costs", "peak to trough", "from its peak" or a loss word.
+  "The drawdown grew to 28.3%" and "Losses peaked at 28.3%" pass; "Equity rose 28.3%",
+  "The portfolio grew by 28.3%" and "It came in at 28.3%" do not, even when they cite the
+  drawdown. A gain word ("returned", "made", "earned", "delivered", "yielded",
+  "appreciated", "outperformed") never backs a drawdown.
+
+Review of the first draft of this change (PR #74) found that it accepted "Equity rose
+28.3% [F2]", which the PR #1 verifier rejected: it exempted movement verbs whenever the
+cited fact was a drawdown. The review also found unit confusion, sign flips on signed
+kinds, unparsed Unicode minus signs, and false rejects such as "It lost 28.3% peak to
+trough [F2]". `tests/unit/test_assistant.py` keeps each case from that review as a
+regression (`test_review_74_*`). Each one fails on main's verifier, on the first draft,
+or on both. The one exception is "The strategy earned 2.1% of alpha [F4]" for -2.1% alpha,
+which every version rejects; it stays as a guard.
+
+Known limits: the verifier reads words, not grammar. A loss word before a figure states
+a loss even when it describes something else ("After losing streaks, total return was
+15.2%" is a false reject), negation is not understood ("did not lose 15.2%"), and "minus"
+is not read as a sign.
 
 Adversarial stand-ins (`LabelBypassProvider` in `assistant/evals.py`) write each bypass
 with real figures from the evidence. Every number they state is some fact's magnitude,
