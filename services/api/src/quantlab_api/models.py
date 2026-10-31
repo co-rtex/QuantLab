@@ -136,7 +136,17 @@ class DatasetVersion(Base):
 
 class Instrument(Base):
     __tablename__ = "instruments"
-    __table_args__ = (UniqueConstraint("dataset_version_id", "symbol"),)
+    # One row per (ticker, instrument) in a version: a reused ticker has a row per holder.
+    # NULLS NOT DISTINCT keeps versions without identity data at one row per ticker.
+    __table_args__ = (
+        UniqueConstraint(
+            "dataset_version_id",
+            "symbol",
+            "instrument_id",
+            name="uq_instruments_version_symbol_instrument",
+            postgresql_nulls_not_distinct=True,
+        ),
+    )
     id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=new_id)
     dataset_version_id: Mapped[uuid.UUID] = mapped_column(
         ForeignKey("dataset_versions.id", ondelete="CASCADE"), index=True

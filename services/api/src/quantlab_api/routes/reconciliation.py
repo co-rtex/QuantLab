@@ -28,7 +28,10 @@ router = APIRouter(tags=["reconciliation"])
 PREFIX = "reconciliation"  # stored report names start with this
 
 
-def _reports(db: DB, user: User, workspace_id: uuid.UUID, version_id: uuid.UUID) -> dict[str, Any]:
+def _reports(
+    db: DB, user: User, workspace_id: uuid.UUID, version_id: uuid.UUID, unreadable: list[str]
+) -> dict[str, Any]:
+    """The version's reconciliation reports; names of unreadable files go to ``unreadable``."""
     require_workspace(db, user, workspace_id)
     row = db.execute(
         select(DatasetVersion, Dataset)
@@ -43,7 +46,11 @@ def _reports(db: DB, user: User, workspace_id: uuid.UUID, version_id: uuid.UUID)
         dv = store.open(ds.slug, dv_row.version_hash)
     except FileNotFoundError as exc:
         raise ApiError(404, "not_found", "Dataset version files not found") from exc
-    return {k: v for k, v in store.load_reports(dv).items() if k.startswith(PREFIX)}
+    found = store.load_reports(dv, unreadable=unreadable)
+    unreadable[:] = [k for k in unreadable if k.startswith(PREFIX)]
+    for name in unreadable:
+        log.warning("reconciliation_report_unreadable", report=name, version=str(version_id))
+    return {k: v for k, v in found.items() if k.startswith(PREFIX)}
 
 
 @router.get(
@@ -54,7 +61,7 @@ def list_reconciliations(
     workspace_id: uuid.UUID, version_id: uuid.UUID, user: CurrentUser, db: DB
 ) -> list[ReconciliationSummaryOut]:
     out = []
-    for name, r in sorted(_reports(db, user, workspace_id, version_id).items()):
+    for name, r in sorted(_reports(db, user, workspace_id, version_id, []).items()):
         try:
             out.append(ReconciliationSummaryOut.model_validate({**r, "name": name}))
         except ValidationError:  # one unreadable file must not hide the valid reports
@@ -71,10 +78,14 @@ def get_reconciliation(
 ) -> ReconciliationOut:
     if not REPORT_NAME.fullmatch(name):
         raise ApiError(404, "not_found", "Reconciliation report not found")
-    reports = _reports(db, user, workspace_id, version_id)
+    unreadable: list[str] = []
+    reports = _reports(db, user, workspace_id, version_id, unreadable)
+    # A corrupt stored file is the server's fault, not the request's: 500, never 422.
+    if name in unreadable:
+        raise ApiError(500, "invalid_report", "Stored reconciliation report is unreadable")
     if name not in reports:
         raise ApiError(404, "not_found", "Reconciliation report not found")
     try:
         return ReconciliationOut.model_validate({**reports[name], "name": name})
     except ValidationError as exc:
-        raise ApiError(422, "invalid_report", "Stored reconciliation report is malformed") from exc
+        raise ApiError(500, "invalid_report", "Stored reconciliation report is malformed") from exc
