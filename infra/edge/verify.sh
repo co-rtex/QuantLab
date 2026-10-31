@@ -12,11 +12,16 @@
 # their own source address depends on the Docker host: rootful Linux Docker with iptables
 # NAT keeps it for remote clients; Docker Desktop, rootless Docker's default port driver
 # and docker-proxy (loopback) replace it with a gateway address, which would put every user
-# in one bucket again. That needs a request from another machine:
+# in one bucket again. That needs a request from another machine, whose address as this
+# host sees it you know in advance (its LAN address, or `curl https://ifconfig.me` run on
+# it for an internet path):
 #
 #   (remote)  curl -sk https://HOST:PORT/api/v1/auth/login -H 'content-type: application/json' \
 #               -d '{"email":"remote@MARKER.example.com","password":"probe-pass-1"}'
-#   (here)    infra/edge/verify.sh --check-remote-probe MARKER
+#   (here)    infra/edge/verify.sh --check-remote-probe MARKER REMOTE_IP
+#
+# It passes only if the API recorded exactly REMOTE_IP. Any other address, including one
+# outside Docker's subnets (Docker Desktop's 192.168.65.x, rootless slirp), fails (#39).
 set -eu
 
 project=${COMPOSE_PROJECT_NAME:?set COMPOSE_PROJECT_NAME (eval "$(scripts/stack-env.sh)")}
@@ -45,17 +50,32 @@ probe_ip() { # marker -> address the API recorded for that probe's failed login
        and details->>'email_domain' = '$1.example.com' order by created_at desc limit 1"
 }
 
+# Exit 0 when two addresses are the same (so "::ffff:1.2.3.4" equals "1.2.3.4").
+same_addr() {
+  python3 -c '
+import ipaddress, sys
+def norm(s):
+    ip = ipaddress.ip_address(s.strip())
+    return getattr(ip, "ipv4_mapped", None) or ip
+sys.exit(0 if norm(sys.argv[1]) == norm(sys.argv[2]) else 1)
+' "$1" "$2" 2>/dev/null
+}
+
 if [ "${1:-}" = "--check-remote-probe" ]; then
-  marker=$(printf '%s' "${2:?usage: verify.sh --check-remote-probe MARKER}" | tr -cd 'a-z0-9-')
+  usage="usage: verify.sh --check-remote-probe MARKER REMOTE_IP"
+  marker=$(printf '%s' "${2:?$usage}" | tr -cd 'a-z0-9-')
+  expected=${3:?$usage}
   ip=$(probe_ip "$marker")
   if [ -z "$ip" ]; then echo "FAIL  no failed login for remote@$marker.example.com reached the API"; exit 1; fi
-  if docker_addr "$ip"; then
-    echo "FAIL  the remote client was recorded as $ip, a Docker address: this host replaces"
-    echo "      client addresses (Docker Desktop, rootless Docker or docker-proxy). Do not expose it."
-    exit 1
+  if same_addr "$ip" "$expected"; then
+    echo "PASS  the remote client was recorded with its own address ($ip)"
+    exit 0
   fi
-  echo "PASS  the remote client was recorded with its own address ($ip)"
-  exit 0
+  echo "FAIL  the remote client was recorded as $ip, not $expected: this host does not keep"
+  echo "      client source addresses (Docker Desktop, rootless Docker, docker-proxy or a"
+  echo "      proxy in front). Every client would share one rate-limit bucket. Do not expose it."
+  if docker_addr "$ip"; then echo "      ($ip is inside a Docker network of this stack.)"; fi
+  exit 1
 fi
 
 cleanup() { docker rm -f "$victim_c" "$attacker_c" >/dev/null 2>&1 || true; }
@@ -156,7 +176,7 @@ else
 fi
 
 if [ "$fail" -eq 0 ]; then
-  echo "ALL EDGE CHECKS PASSED. Before exposing, also pass: verify.sh --check-remote-probe MARKER"
+  echo "ALL EDGE CHECKS PASSED. Before exposing, also pass: verify.sh --check-remote-probe MARKER REMOTE_IP"
 else
   echo "SOME CHECKS FAILED"; exit 1
 fi
