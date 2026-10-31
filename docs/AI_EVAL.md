@@ -53,6 +53,105 @@ unrelated fact; semantic checking of that kind needs a hosted-model evaluation. 
 case because its naive keyword matching cites facts outside the requested topic; that is
 a property of the stand-in, and shows the suite measures relevance as well as accuracy.
 
+## Verifier binding (2026-10-31, #15)
+
+The PR #1 verifier accepted a number if its magnitude matched a fact cited in the same
+sentence, applied sign checks only after a short list of gain verbs, and matched uncited
+sentences against every fact. These sentences passed it, given F1 Sharpe 0.4567,
+F2 maximum drawdown -28.3% and F3 total return +15.2%:
+
+| Sentence | Old verifier | New verifier | Why it is wrong |
+|---|---|---|---|
+| Total return was 28.3% [F2]. | accepted | rejected | names a return, cites the drawdown |
+| The strategy returned 28.3% [F2]. | accepted | rejected | same, with a return verb |
+| The strategy made a 28.3% profit [F2]. | accepted | rejected | same |
+| The strategy returned 28.3%. | accepted | rejected | no citation |
+| The strategy lost 15.2% [F3]. | accepted | rejected | "lost" for a +15.2% return |
+| The drawdown grew to 28.3% [F2]. | **rejected** | accepted | correct: a deeper drawdown |
+| Max drawdown increased to 28.3% [F2]. | **rejected** | accepted | correct |
+
+The new rules (`assistant/grounding.py`, `verify_answer`):
+* A sentence that states a number must cite a fact. Each number must come from a fact
+  cited in that sentence.
+* Each number is bound to what the sentence says it is. A cited fact's own label next to
+  it binds it to that fact. A word naming a kind of quantity ("returned", "drawdown",
+  "Sharpe", "costs") binds it to facts of that kind. Each word goes to the adjacent
+  number it is closest to, and a number must satisfy every word it gets as well as the
+  mention nearest to it. So a kind word placed after a number cannot rebind it ("Total
+  return was 28.3% drawdown [F2]" is rejected), and a number no word was given to still
+  speaks about what the sentence names ("Total return was 15.2% and 28.3% [F2] [F3]" is
+  rejected). Automated security reviews found both cases in earlier drafts.
+* A cited text fact (an integrity finding) quoted in full stands for that fact. Its own
+  numbers are not separate claims. Numbers paraphrased from it keep the sign checks:
+  "gained 4.1%" from a finding that says "-4.1%" is rejected. A text fact, or a numeric
+  fact with no known kind, backs a number named as some kind of quantity only if the
+  fact is of that kind ("Total return was -4.1%" does not come from that finding).
+* Units: a percentage fact of 0.152 may be written "15.2%", "15.2 percent", "1520 bps" or
+  "0.152", not "0.152%", "15.2" or "15.2 bps". A ratio is not a percentage ("Sharpe
+  0.46%" is rejected). The deflated Sharpe ratio is a probability: it may be a
+  percentage only where the sentence names it ("deflated Sharpe", "DSR", "probability"),
+  and "The Sharpe ratio was 0.62" does not come from it. A "$" goes with amounts.
+* Signs: a figure states a negative value when it has a minus sign (also the Unicode
+  minus or an en dash, attached or after one space, but not a bullet at the start of a
+  line), when a percentage or amount is in accounting parentheses ("(15.2%)"), or when a
+  word says it fell or was lost ("lost", "lose", "fell",
+  "down", "negative", "underperformed", "a 15.2% loss"). Otherwise it states a positive
+  value. Either way it must match the fact's sign: "Total return was 15.2%" is rejected
+  for a -15.2% return, and "Alpha was positive at 2.1%" for -2.1% alpha.
+* Magnitudes: only drawdowns, VaR, expected shortfall and costs may be stated without
+  their sign, and only when the sentence says the figure is one: next to the fact's
+  label, "drawdown", "VaR", "costs", "peak to trough", "from its peak" or a loss word.
+  "The drawdown grew to 28.3%" and "Losses peaked at 28.3%" pass; "Equity rose 28.3%",
+  "The portfolio grew by 28.3%" and "It came in at 28.3%" do not, even when they cite the
+  drawdown. A gain word ("returned", "made", "earned", "delivered", "yielded",
+  "appreciated", "outperformed") never backs a drawdown, and a rise word ("rose", "up",
+  "higher", "grew", "increased") that modifies the figure states a gain even when a
+  drawdown is named elsewhere: "During the drawdown, equity rose 28.3%" and "Drawdowns
+  aside, the strategy was 28.3% higher" are rejected. The exception is a rise whose
+  subject is the loss itself ("The drawdown has grown to 28.3%", "Losses rose to 28.3%").
+
+Review of the first draft of this change (PR #74) found that it accepted "Equity rose
+28.3% [F2]", which the PR #1 verifier rejected: it exempted movement verbs whenever the
+cited fact was a drawdown. The review also found unit confusion, sign flips on signed
+kinds, unparsed Unicode minus signs, and false rejects such as "It lost 28.3% peak to
+trough [F2]". `tests/unit/test_assistant.py` keeps each case from that review as a
+regression (`test_review_74_*`), as does the second round (rise words beside a named
+drawdown, the deflated Sharpe ratio read as a Sharpe ratio, spaced and parenthesised
+negatives). Each one fails on main's verifier, on the first draft,
+or on both. The one exception is "The strategy earned 2.1% of alpha [F4]" for -2.1% alpha,
+which every version rejects; it stays as a guard.
+
+Known limits: the verifier reads words, not grammar. A loss word before a figure states
+a loss even when it describes something else ("After losing streaks, total return was
+15.2%" is a false reject), negation is not understood ("did not lose 15.2%"), and "minus"
+is not read as a sign. Words bind to the nearest figure by character distance, so a
+sentence that names two kinds near one figure ("The probability that the Sharpe ratio is
+real is 62%") is a false reject. A spaced dash between two figures ("10 - 15%") reads the
+second as negative. These false rejects fall back to the deterministic answer.
+
+Adversarial stand-ins (`LabelBypassProvider` in `assistant/evals.py`) write each bypass
+with real figures from the evidence. Every number they state is some fact's magnitude,
+which a test checks, so a magnitude check alone cannot catch them. Run on the same facts
+as the results table (momentum on synthetic data, 42 facts), counting in-scope answers
+whose provider text reached the user rather than the deterministic fallback:
+
+| Provider | Old verifier | New verifier |
+|---|---|---|
+| bypass-label | 10/10 shown | 0/10 |
+| bypass-returned | 10/10 shown | 0/10 |
+| bypass-profit | 10/10 shown | 0/10 |
+| bypass-loss | 10/10 shown | 0/10 |
+| bypass-uncited | 0/10 (the service already rejected uncited answers) | 0/10 |
+| faithful (no false rejects) | 10/10 shown | 10/10 shown |
+
+With the new verifier every provider passes 14/14, except the faithful stand-in (13/14,
+unchanged: its keyword matching cites outside the requested topic). The deterministic
+engine passes 14/14 with 76 numeric claims, down from 102 (the faithful stand-in: 19,
+down from 30). Numbers inside a quoted fact label (the 95 in "VaR (95%)") or inside a
+quoted text fact are no longer counted as separate claims; they are part of the fact. The caveat
+above still applies: these scores use the product verifier. The independent judge and
+the hosted-model run in #15 remain blocked on `QUANTLAB_ANTHROPIC_API_KEY`.
+
 ## Not yet measured
 
 No hosted model was evaluated: no LLM credentials are configured in this environment

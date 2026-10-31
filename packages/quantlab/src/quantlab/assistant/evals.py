@@ -15,7 +15,7 @@ from __future__ import annotations
 import json
 import re
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, ClassVar
 
 from quantlab.assistant.grounding import Fact, verify_answer
 from quantlab.assistant.service import ProviderError, answer_question
@@ -91,6 +91,52 @@ class MisattributingProvider:
         return f"The strategy lost -{src['value']} [{src['id']}]."
 
 
+def _facts_in(system: str) -> list[dict[str, Any]]:
+    return list(json.loads(system.split("<facts>\n", 1)[1].split("\n</facts>", 1)[0]))
+
+
+def _fact(data: list[dict[str, Any]], label_start: str) -> dict[str, Any]:
+    return next(d for d in data if str(d["description"]).startswith(label_start))
+
+
+class LabelBypassProvider:
+    """The #15 bypasses: a real figure restated under the wrong label, with a wrong sign,
+    or without a citation. Every number exists among the facts, and the PR #1 verifier
+    accepted all of them (docs/AI_EVAL.md)."""
+
+    TEMPLATES: ClassVar[dict[str, str]] = {
+        "label": "Total return was {dd} [{dd_id}].",
+        "returned": "The strategy returned {dd} [{dd_id}].",
+        "profit": "The strategy made a {dd} profit [{dd_id}].",
+        "uncited": "The strategy returned {dd}.",
+        "loss": "The strategy lost {tr} [{tr_id}].",
+    }
+
+    def __init__(self, variant: str) -> None:
+        self.variant = variant
+        self.name = f"fake:bypass-{variant}"
+
+    def complete(self, system: str, question: str) -> str:
+        data = _facts_in(system)
+        dd = _fact(data, "Maximum drawdown")
+        # A positive return figure, so "lost" contradicts its sign.
+        tr = next(
+            (
+                d
+                for d in data
+                if d["description"].startswith(("Total return", "CAGR"))
+                and not str(d["value"]).startswith("-")
+            ),
+            _fact(data, "Total return"),
+        )
+        return self.TEMPLATES[self.variant].format(
+            dd=str(dd["value"]).lstrip("-"),
+            dd_id=dd["id"],
+            tr=str(tr["value"]).lstrip("-"),
+            tr_id=tr["id"],
+        )
+
+
 class AdviceProvider:
     name = "fake:advice"
 
@@ -157,6 +203,7 @@ PROVIDERS = [
     FaithfulProvider(),
     HallucinatingProvider(),
     MisattributingProvider(),
+    *(LabelBypassProvider(v) for v in LabelBypassProvider.TEMPLATES),
     AdviceProvider(),
     MalformedProvider(),
     FailingProvider(),
