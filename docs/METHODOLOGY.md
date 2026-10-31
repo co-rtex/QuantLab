@@ -261,6 +261,13 @@ replay); equity equals cash plus marked positions every day; cash never negative
 positions never negative; deterministic fingerprints for identical inputs; truncating
 data after a decision date leaves that decision unchanged (no look-ahead).
 
+**Reproduction.** The input hash covers the dataset version, strategy, parameters,
+config and `ENGINE_VERSION`. Re-running an experiment from an older engine therefore has
+different inputs even when nothing else changed. The reproducibility comparison lists
+each differing input (`input_differences`, for example `engine_version 1.2.0 → 1.3.0`).
+The integrity report only uses same-input re-runs to verify or fail reproducibility; it
+names changed-input re-runs and leaves the check "not assessed" if they are the only ones.
+
 ## Performance statistics (`quantlab.analytics.performance`)
 
 | Statistic | Definition |

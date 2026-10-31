@@ -334,15 +334,22 @@ def trades(
     user: CurrentUser,
     db: DB,
     symbol: str | None = Query(None, max_length=32),
+    instrument_id: str | None = Query(None, max_length=64),
     side: str | None = None,
     limit: int = Query(100, ge=1, le=1000),
     offset: int = Query(0, ge=0, le=MAX_OFFSET),
 ) -> dict[str, Any]:
+    """Trades, optionally filtered by ``symbol`` (the ticker shown on the trade's date),
+    ``instrument_id`` (the permanent id, across renames) and ``side``."""
     exp = load_experiment(db, user, experiment_id)
     _require_result(db, exp)
     t = artifacts.read_frame(exp.id, "trades")
     if symbol and len(t):
         t = t[t["symbol"] == symbol.upper()]
+    if instrument_id and len(t):
+        # Runs without identity data have no id column; there the id is the ticker.
+        ids = t["instrument_id"] if "instrument_id" in t else t["symbol"]
+        t = t[ids.astype(str) == instrument_id.upper()]
     if side in ("buy", "sell") and len(t):
         t = t[t["side"] == side]
     total = len(t)
@@ -447,11 +454,13 @@ def reproducibility(experiment_id: uuid.UUID, user: CurrentUser, db: DB) -> dict
         ores = _result(db, rid)
         if other is None:
             continue
+        original, rerun = (other, exp) if rid == exp.parent_id else (exp, other)
         checks.append(
             {
                 "experiment_id": str(rid),
                 "name": other.name,
                 "same_inputs": other.input_hash == exp.input_hash,
+                "input_differences": input_differences(original, rerun),
                 "same_code_version": other.code_version == exp.code_version,
                 "fingerprint_match": (
                     res is not None and ores is not None and res.fingerprint == ores.fingerprint
@@ -465,6 +474,29 @@ def reproducibility(experiment_id: uuid.UUID, user: CurrentUser, db: DB) -> dict
         "fingerprint": res.fingerprint if res else None,
         "comparisons": checks,
     }
+
+
+def input_differences(original: Experiment, rerun: Experiment) -> list[dict[str, Any]]:
+    """The hashed inputs that differ between a run and its reproduction, by name.
+
+    The engine version is part of the input hash, so re-running an older experiment on a
+    newer engine has different inputs without any change to its data or configuration.
+    Naming the input keeps that from reading like a reproducibility failure.
+    """
+    out: list[dict[str, Any]] = []
+
+    def diff(name: str, a: Any, b: Any) -> None:
+        if a != b:
+            out.append({"input": name, "original": a, "reproduction": b})
+
+    diff("engine_version", original.engine_version, rerun.engine_version)
+    diff("dataset_version_id", str(original.dataset_version_id), str(rerun.dataset_version_id))
+    diff("strategy_key", original.strategy_key, rerun.strategy_key)
+    diff("strategy_params", original.strategy_params, rerun.strategy_params)
+    a, b = original.config or {}, rerun.config or {}
+    for k in sorted(set(a) | set(b)):
+        diff(f"config.{k}", a.get(k), b.get(k))
+    return out
 
 
 @router.get("/experiments/{experiment_id}/manifest")

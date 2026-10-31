@@ -321,3 +321,31 @@ def test_zero_variance_strategy_gets_undefined_sharpe_not_a_crash():
         {"bootstrap": jsonable(boot)},
     )
     assert any("Sharpe ratio is undefined" in c for c in ctx["conclusions"])
+
+
+def _repro_check(reps):
+    ev = _evidence()
+    ev["reproductions"] = reps
+    return {c["key"]: c for c in build_integrity_report(ev)["checks"]}["reproducibility"]
+
+
+def test_a_rerun_on_another_engine_is_named_not_failed():
+    engine = {"input": "engine_version", "original": "1.2.0", "reproduction": "1.3.0"}
+    moved = {
+        "status": "completed",
+        "same_inputs": False,
+        "fingerprint_match": False,
+        "input_differences": [engine],
+    }
+    check = _repro_check([moved])
+    assert check["status"] == "unassessed"
+    assert "engine_version 1.2.0 → 1.3.0" in check["finding"]
+    # A same-input re-run still decides the status; the changed one is ignored.
+    same = {"status": "completed", "same_inputs": True, "fingerprint_match": True}
+    assert _repro_check([moved, same])["status"] == "verified"
+    broken = {**same, "fingerprint_match": False}
+    assert _repro_check([moved, broken])["status"] == "failed"
+    # Comparisons stored before same_inputs existed keep their old meaning.
+    assert _repro_check([{"status": "completed", "fingerprint_match": False}])["status"] == (
+        "failed"
+    )

@@ -355,3 +355,56 @@ def test_ml_excludes_the_benchmark_and_user_tickers_on_a_keyed_dataset(client, s
     custom = _ml_predictions(client, seeded, {"exclude": ["SYNIDX", "syn001"]})
     assert not {"QLSYN001", "QLSYNIDX"} & set(custom["instrument_id"])
     assert "SYN001" not in set(custom["symbol"])
+
+
+# ------------------------------------------------------------------------------- #63
+def test_reproducing_an_older_engines_run_names_the_engine_change(client, seeded):
+    from quantlab.backtest.engine import ENGINE_VERSION
+    from quantlab_api.db import SessionLocal
+    from quantlab_api.models import Experiment
+
+    h = seeded["headers"]
+    exp = _experiment(client, seeded, seeded["dv"], {"start": "2020-03-02"})
+    assert run_pending_jobs() == ["completed"]
+    exp_id = exp["experiment"]["id"]
+    with SessionLocal() as db:  # as if it had run on an older engine
+        row = db.get(Experiment, uuid.UUID(exp_id))
+        row.engine_version = "1.2.0"
+        row.input_hash = "0" * 64
+        db.commit()
+    child = client.post(f"/api/v1/experiments/{exp_id}/reproduce", headers=h).json()
+    assert run_pending_jobs() == ["completed"]
+    child_id = child["experiment"]["id"]
+    for eid in (child_id, exp_id):  # both directions name it the same way
+        comp = client.get(f"/api/v1/experiments/{eid}/reproducibility", headers=h).json()
+        (c,) = comp["comparisons"]
+        assert c["same_inputs"] is False
+        assert c["input_differences"] == [
+            {"input": "engine_version", "original": "1.2.0", "reproduction": ENGINE_VERSION}
+        ]
+    report = client.get(f"/api/v1/experiments/{child_id}/integrity", headers=h).json()
+    check = next(c for c in report["checks"] if c["key"] == "reproducibility")
+    assert check["status"] == "unassessed", check  # not "failed"
+    assert f"engine_version 1.2.0 → {ENGINE_VERSION}" in check["finding"]
+
+
+def test_trades_filter_by_instrument_across_a_rename(client, seeded):
+    bars, acts, history = _renamed_and_reused()
+    dv = _add_version(seeded["dv"], bars, acts, history=history)
+    exp = _experiment(
+        client,
+        seeded,
+        dv,
+        {"start": "2020-03-02", "universe": ["SYN001", "SYN003"], "rebalance": "monthly"},
+    )
+    assert run_pending_jobs() == ["completed"]
+    url = f"/api/v1/experiments/{exp['experiment']['id']}/trades?limit=500"
+    h = seeded["headers"]
+    by_id = client.get(f"{url}&instrument_id=qlsyn003", headers=h).json()
+    assert by_id["total"] > 0
+    assert {t["instrument_id"] for t in by_id["items"]} == {"QLSYN003"}
+    assert {t["symbol"] for t in by_id["items"]} == {"SYN003", "NEW03"}  # both tickers
+    by_ticker = client.get(f"{url}&symbol=NEW03", headers=h).json()
+    assert 0 < by_ticker["total"] < by_id["total"]
+    none = client.get(f"{url}&instrument_id=QLNOPE", headers=h).json()
+    assert none["total"] == 0
