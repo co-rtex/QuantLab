@@ -141,7 +141,7 @@ def test_inconsistent_histories_are_rejected(rows, message):
 
 # ------------------------------------------------------------ keyed research frames
 def _rename_case() -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
-    """OLD trades for 6 sessions, then the same company trades as NEW (flat price)."""
+    """OLD trades for 6 sessions, then the same security trades as NEW (rising prices)."""
     prices = [50.0, 51.0, 52.0, 53.0, 54.0, 55.0, 56.0, 57.0, 58.0, 59.0, 60.0, 61.0]
     raw = make_bars({"X": prices, "B": [10.0] * 12})
     d = pd.DatetimeIndex(sorted(raw["date"].unique()))
@@ -295,8 +295,58 @@ def test_synthetic_market_carries_permanent_ids():
     assert not is_legacy(h)
     assert set(master["instrument_id"]) == set(h["instrument_id"])
     gone = master[master["delisting_date"].notna()]
-    assert len(gone) and (gone["delisting_reason"] == "other").all()
+    assert len(gone) and gone["delisting_reason"].isna().all()  # cause not modelled
     assert gone["delisting_return"].isna().all()  # unknown, never invented
     bars, acts = key_by_instrument(m.bars, m.actions, h)
     assert len(bars) == len(m.bars) and len(acts) == len(m.actions)
     assert bars["symbol"].str.startswith("QLSYN").all()
+
+
+# ------------------------------------------------------------- review regressions
+def test_back_to_back_intervals_canonicalize_and_hash_the_same():
+    from quantlab.data.store import content_hash
+
+    one = _hist([("I1", "X", "2010-01-01", None)])
+    split = _hist([("I1", "X", "2010-01-01", "2015-01-01"), ("I1", "X", "2015-01-01", None)])
+    pd.testing.assert_frame_equal(one, split)
+    bars = make_bars({"X": [1.0, 2.0]})
+    assert content_hash(bars, normalize_actions(None), one) == content_hash(
+        bars, normalize_actions(None), split
+    )
+    # A gap between the intervals is real information and is kept.
+    gap = _hist([("I1", "X", "2010-01-01", "2015-01-01"), ("I1", "X", "2015-02-02", None)])
+    assert len(gap) == 2
+
+
+def test_duplicate_history_rows_are_reported_as_duplicates():
+    with pytest.raises(IdentityError, match="duplicate symbol history rows"):
+        _hist([("I1", "X", "2010-01-01", None), ("I1", "X", "2010-01-01", None)])
+
+
+def test_key_by_instrument_accepts_raw_vendor_timestamps():
+    raw, acts, h = _rename_case()
+    vendor = raw.assign(
+        date=(raw["date"] + pd.Timedelta(hours=9, minutes=30)).dt.tz_localize("America/New_York")
+    )
+    bars, _ = key_by_instrument(vendor, acts, h)
+    expected, _ = key_by_instrument(raw, acts, h)
+    pd.testing.assert_frame_equal(bars, expected)
+    tz_hist = h.assign(valid_from=h["valid_from"].dt.tz_localize("UTC") + pd.Timedelta(hours=14))
+    pd.testing.assert_frame_equal(normalize_history(tz_hist), h)
+
+
+def test_duplicate_bars_for_one_ticker_are_named_as_such():
+    raw, acts, h = _rename_case()
+    with pytest.raises(IdentityError, match="duplicate bars for one ticker"):
+        key_by_instrument(pd.concat([raw, raw.iloc[[0]]]), acts, h)
+
+
+def test_verify_returns_false_for_a_tampered_invalid_history(tmp_path):
+    from quantlab.data.store import DatasetStore
+
+    raw, acts, h = _rename_case()
+    store = DatasetStore(tmp_path)
+    dv = store.write("identity", raw, acts, {"provider": "test"}, symbol_history=h)
+    bad = pd.concat([h, h.iloc[[0]].assign(instrument_id="Q9")])  # OLD -> two instruments
+    bad.to_parquet(dv.path / "symbol_history.parquet", index=False)
+    assert store.verify(dv) is False

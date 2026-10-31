@@ -29,6 +29,7 @@ import pandas as pd
 
 from quantlab.data.identity import (
     HISTORY_COLUMNS,
+    IdentityError,
     is_legacy,
     key_by_instrument,
     legacy_history,
@@ -204,5 +205,8 @@ class DatasetStore:
 
     def verify(self, dv: DatasetVersion) -> bool:
         """Recompute the content hash; False means the stored files were tampered with."""
-        history = self.load_symbol_history(dv)
+        try:
+            history = self.load_symbol_history(dv)
+        except IdentityError:  # a history edited into an invalid one was tampered with
+            return False
         return content_hash(self.load_bars(dv), self.load_actions(dv), history) == dv.version

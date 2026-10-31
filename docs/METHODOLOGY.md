@@ -33,7 +33,23 @@ the source of truth; tests in `tests/unit` pin each definition to a golden examp
   supplies one, a delisting return (unknown is `NaN`, never 0). Datasets without identity
   data use the legacy map (each ticker is its own instrument), which re-keys nothing and
   leaves their content hashes unchanged. A real symbol history is part of a version's
-  content hash. Synthetic data carries `QLSYN…` ids and remains labelled synthetic.
+  content hash. Back-to-back intervals of one (instrument, ticker) pair are merged first,
+  so a vendor file that splits a row at a name or exchange change hashes the same.
+  Synthetic data carries `QLSYN…` ids and remains labelled synthetic. Conventions and
+  limits:
+  * An id identifies a *security* (a share class), not a company: BRK.A and BRK.B are two
+    instruments.
+  * A security trading under two tickers at once (when-issued alongside regular-way) is
+    rejected; such feeds must be collapsed before ingestion.
+  * Vendor end dates that are inclusive (CRSP style) must be converted to the next day
+    for `valid_to`; otherwise the final day's bars are rejected as unmapped.
+  * Many vendors file a security's *whole* history under its current ticker. Such data
+    must be keyed by the vendor's permanent id directly, not resolved as of each bar's
+    date: if the current ticker once belonged to another security, as-of resolution
+    would silently assign the old bars to that security. This is the vendor adapter's
+    responsibility (#11).
+  * The instrument master (including delisting returns) is not yet part of the content
+    hash. It will be once delisting returns affect backtests (#9 part B).
   *Not yet wired:* API dataset and backtest jobs still key by ticker until the catalog
   migration (#9, slot M2) lands. Universes must then be resolved as of the backtest start,
   not as of today, or the universe becomes survivor-only.

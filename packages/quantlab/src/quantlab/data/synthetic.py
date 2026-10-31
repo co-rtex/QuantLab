@@ -223,7 +223,7 @@ def generate_market(spec: SyntheticSpec | None = None) -> SyntheticMarket:
             "asset_class": "equity",
             "listed": dates[first],
             "delisted": delisted,
-            "delisting_reason": [None if pd.isna(d) else "other" for d in delisted],
+            "delisting_reason": None,  # the generator models no specific cause
             "delisting_return": np.nan,
             "beta_true": np.round(beta, 4),
             "is_synthetic": True,

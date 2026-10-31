@@ -40,7 +40,13 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
-from quantlab.data.schema import SYMBOL_PATTERN, SchemaError, normalize_actions, normalize_bars
+from quantlab.data.schema import (
+    EXCHANGE_TZ,
+    SYMBOL_PATTERN,
+    SchemaError,
+    normalize_actions,
+    normalize_bars,
+)
 
 HISTORY_COLUMNS = ["instrument_id", "symbol", "valid_from", "valid_to"]
 MASTER_COLUMNS = [
@@ -80,9 +86,35 @@ def _ids(series: pd.Series, what: str) -> pd.Series:
 def _dates(series: pd.Series, what: str) -> pd.Series:
     try:
         parsed = pd.to_datetime(series)
+        if parsed.dt.tz is not None:  # same rule as bars: the New York calendar date
+            parsed = parsed.dt.tz_convert(EXCHANGE_TZ).dt.tz_localize(None)
+        return parsed.dt.normalize().astype("datetime64[ns]")
     except (ValueError, TypeError) as exc:
         raise IdentityError(f"{what} is not a date: {exc}") from exc
-    return parsed.dt.normalize().astype("datetime64[ns]")
+
+
+def _merge_adjacent(h: pd.DataFrame) -> pd.DataFrame:
+    """Join back-to-back intervals of one (instrument, ticker) pair.
+
+    Vendor name files often split a row at an exchange or name change that keeps the
+    ticker; the identity is the same, so it must canonicalize (and hash) the same way.
+    """
+    h = h.sort_values(["instrument_id", "symbol", "valid_from"], kind="stable")
+    key = ["instrument_id", "symbol"]
+    prev_end = h.groupby(key)["valid_to"].shift(1)
+    starts = ~(h.groupby(key).cumcount() > 0) | (prev_end != h["valid_from"])
+    run = starts.cumsum()
+    return (
+        h.groupby(run, sort=False)
+        .agg(
+            instrument_id=("instrument_id", "first"),
+            symbol=("symbol", "first"),
+            valid_from=("valid_from", "first"),
+            # ``last`` would skip NaT, which here means "still valid".
+            valid_to=("valid_to", lambda s: s.iloc[-1]),
+        )
+        .reset_index(drop=True)
+    )
 
 
 def _overlaps(history: pd.DataFrame, key: str) -> pd.DataFrame:
@@ -111,6 +143,10 @@ def normalize_history(frame: pd.DataFrame) -> pd.DataFrame:
     empty = h["valid_to"].notna() & (h["valid_to"] <= h["valid_from"])
     if empty.any():
         raise IdentityError(f"empty validity intervals: {_rows(h[empty])}")
+    repeated = h.duplicated(HISTORY_COLUMNS, keep=False)
+    if repeated.any():
+        raise IdentityError(f"duplicate symbol history rows: {_rows(h[repeated])}")
+    h = _merge_adjacent(h[HISTORY_COLUMNS])
     for key, rule in (
         ("symbol", "a ticker maps to two instruments at once"),
         ("instrument_id", "an instrument has two tickers at once"),
@@ -237,8 +273,18 @@ def key_by_instrument(
     Each bar is resolved as of its session date and each action as of its ex-date. Data
     that no interval covers, or two tickers of one instrument printing on the same
     session, raise :class:`IdentityError` with a sample: guessing would silently merge or
-    split histories.
+    split histories. Inputs are normalized first, so raw vendor frames (time-zone-aware
+    timestamps included) resolve on their session dates.
     """
+    bars, actions = normalize_bars(bars), normalize_actions(actions)
+    if actions["ex_date"].isna().any():
+        raise IdentityError("corporate actions without an ex_date cannot be keyed")
+    same_ticker = bars.duplicated(["symbol", "date"], keep=False)
+    if same_ticker.any():
+        raise IdentityError(
+            f"duplicate bars for one ticker and session: "
+            f"{_rows(bars.loc[same_ticker, ['symbol', 'date']])}"
+        )
     bar_ids = resolve_ids(history, bars["symbol"], bars["date"])
     unmapped = bar_ids.isna()
     if unmapped.any():
