@@ -1,6 +1,6 @@
 # Status (authoritative handoff)
 
-_Last updated: 2026-10-31 (lead integration cycle 2: 18 PRs merged; main `72b934b`)_
+_Last updated: 2026-10-31 (lead integration cycle 2: 23 PRs merged; main `337e9fe`)_
 
 ## Where things stand
 All roadmap phases 0–10 are implemented. An independent audit on 2026-10-30
@@ -67,10 +67,16 @@ leases and migration slots: [docs/COORDINATION.md](docs/COORDINATION.md).
   * #34 reconciliation report (library; #12 API exposure pending).
   * #33 Massive adapter as a **fixture-only contract**. #50 must be fixed before live
     wiring.
+  * #53 (lead) E2E workflow-spec budget (#16).
+  * #49 delisting returns from the instrument master (#9 part B). Bit-for-bit unchanged
+    without a master (28 hashed runs). Follow-ups in #59.
+  * #57 CSV ambiguous-commit race (#51).
+  * #58 same-day dividends kept through ingestion (#50 finding 2; this also affected
+    existing ingestion).
 * Every merge had an independent read-only lead review: no blockers. Should-fix items are
   tracked in #8, #51, #52 and #55 (Agent 2), #39 (gate), and #41, #50 and #54 (Agent 3).
 
-## Last verified (2026-10-31, main `72b934b`)
+## Last verified (2026-10-31, main `337e9fe`)
 Each merge was verified on a trial merge with current main, with pytest output written to a
 file rather than piped:
 * #28, #32, #36, #29, #30, #31: tree identical to main afterwards; 314 passed;
@@ -86,6 +92,10 @@ file rather than piped:
   cause is #16's 90 s budget (fix: #53).
 * main + #47 + #48 + #34 + #33 (`06ad9ca`, byte-identical to main `72b934b`): **486
   passed, exit 0**; **Playwright 13/13**.
+* #49 on main: 510 passed. main + #57 + #58 (byte-identical to main `337e9fe`): **514
+  passed, exit 0**. E2E not rerun (library-only and route-only changes).
+* One full serial run on main@5e07deb was 11/13 and is **contaminated**: the lead ran a
+  pytest suite at the same time. Recorded on #16; it doesn't count either way.
 
 CI is green on every merged head. CI doesn't run Playwright (#17).
 
@@ -97,17 +107,17 @@ E2E failures this cycle were resource starvation, not regressions:
 Full-stack runs are now serialized machine-wide (`make e2e-serial`).
 
 ## Next steps (issues carry owners and acceptance criteria)
-1. **Agent 2:** #51 (ambiguous-commit race), #52 (synthetic-route idempotency), the #8 batch,
-   then #55 (lockout from a few addresses, register enumeration).
+1. **Agent 2:** #52 (synthetic-route idempotency), the #8 batch, then #55 (lockout from a few
+   addresses, register enumeration).
 2. **Agent 3:**
-   * #49 (#9 part B, delisting returns);
+   * #59 (delisting follow-ups, with or before part C);
    * #9 part C (M2 open; `tasks.py`, `models.py` and `schemas.py` leased; also #12's
      report API);
    * #50 (P0, Massive adapter fixes; the same-day dividend collapse also affects existing
      ingestion);
    * #54, #41, #24.
 3. **Lead:**
-   * merge #53 (#16);
+   * #16: needs clean serial full-suite runs on main with nothing else heavy running;
    * #17 E2E in CI (private-repo Actions minutes: confirm with the user);
    * the rest of #22;
    * #25.
