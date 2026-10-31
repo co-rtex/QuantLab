@@ -5,13 +5,16 @@
 #
 # The proxy_protocol listener wrapper replaces the connection's remote address with the
 # one in the PROXY header, but only for connections from QUANTLAB_EDGE_PROXY_CIDRS (the
-# NLB's subnets). `fallback_policy reject` rejects a PROXY header from any other source,
-# so no other host can claim an address. Such a connection is not refused: it is served
-# with its own peer address. Only the NLB can connect at all (the edge's security group
-# admits only the NLB's group). {remote_host} below is therefore the real client, and it
-# overwrites X-Forwarded-For exactly as in compose.
+# NLB's subnets). `fallback_policy reject` makes a connection from any other source that
+# sends a PROXY header fail (400), so no other host can claim an address. A connection
+# from another source without a PROXY header is served with its own peer address. Only
+# the NLB can connect at all (the edge's security group admits only the NLB's group).
+# {remote_host} below is therefore the real client, and it overwrites X-Forwarded-For
+# exactly as in compose.
 #
-# NOT VALIDATED: this file has not been checked by `caddy adapt` (README.md, "Validation").
+# Checked locally with Caddy 2.10.2 (`caddy adapt`, `caddy validate`, and the PROXY
+# protocol behaviour above): ./check-proxy-protocol.sh. NOT verified behind a real NLB,
+# which is part of the #39 gate (README.md, "Validation").
 {
 	admin off
 	# Never autosave the running config: it contains the edge secret (#39).
