@@ -76,6 +76,9 @@ services:
     build: { context: ., dockerfile: services/api/Dockerfile }
     environment: *app-env
     command: ["quantlab-cli", "reaper", "--interval", "15"]
+    # The reaper sweeps uploads, orphaned versions and the trash in the data directory, so
+    # it must see the same volume as the API and workers (it ran against an empty /data).
+    volumes: [appdata:/data]
     depends_on:
       api: { condition: service_healthy }
     profiles: ["app"]
