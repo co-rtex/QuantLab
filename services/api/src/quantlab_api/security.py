@@ -345,20 +345,29 @@ class RateLimiter:
     cannot all pass a check-then-record gap. ``refund`` gives back one attempt.
 
     Degraded mode (Redis unavailable): counts go to a fixed table of ``SHARDS`` counters
-    per process, indexed by a keyed hash with a random per-process secret. Memory is
-    constant, lookups are O(1) and nothing is ever evicted, so a key flood cannot reset
-    anyone's counter. Hash collisions can only make throttling stricter, never looser.
-    Refunds are ignored in degraded mode because a shard may be shared by several
-    principals. See DECISIONS.md (ADR-0007).
+    per process and per window length, indexed by a keyed hash with a random per-process
+    secret. Memory is constant per window length, lookups are O(1) and nothing is ever
+    evicted, so a key flood cannot reset anyone's counter. Hash collisions can only make
+    throttling stricter, never looser. That holds because each table serves one window
+    length: when one-hour invitation limits shared shards with one-minute login limits,
+    the two keys kept resetting each other's count (#37 review). Refunds are ignored in
+    degraded mode because a shard may be shared by several principals. See DECISIONS.md
+    (ADR-0007).
     """
 
     SHARDS = 4096
 
     def __init__(self) -> None:
-        self._counts = [0] * self.SHARDS
-        self._windows = [0] * self.SHARDS
+        # window length -> (count per shard, window index each count belongs to)
+        self._tables: dict[int, tuple[list[int], list[int]]] = {}
         # Keyed hash with a per-process secret: shard collisions cannot be precomputed.
         self._salt = os.urandom(16)
+
+    def _table(self, window: int) -> tuple[list[int], list[int]]:
+        table = self._tables.get(window)
+        if table is None:
+            table = self._tables.setdefault(window, ([0] * self.SHARDS, [0] * self.SHARDS))
+        return table
 
     @staticmethod
     def _bucket(key: str, window: int) -> str:
@@ -369,11 +378,12 @@ class RateLimiter:
         return int.from_bytes(digest) % self.SHARDS
 
     def _local_reserve(self, key: str, limit: int, window: int) -> bool:
+        counts, windows = self._table(window)
         i, w = self._shard(key), int(time.time() // window)
-        if self._windows[i] != w:
-            self._windows[i], self._counts[i] = w, 0
-        self._counts[i] += 1
-        return self._counts[i] <= limit
+        if windows[i] != w:
+            windows[i], counts[i] = w, 0
+        counts[i] += 1
+        return counts[i] <= limit
 
     def reserve(self, key: str, limit: int, window: int = 60) -> bool:
         """Atomically count one attempt; False if it exceeds ``limit`` in this window."""
@@ -404,16 +414,16 @@ class RateLimiter:
         try:
             return int(redis_conn().get(self._bucket(key, window)) or 0)
         except Exception:
+            counts, windows = self._table(window)
             i = self._shard(key)
-            return self._counts[i] if self._windows[i] == int(time.time() // window) else 0
+            return counts[i] if windows[i] == int(time.time() // window) else 0
 
     def check(self, key: str, limit: int, window: int = 60) -> None:
         if not self.reserve(key, limit, window):
             raise ApiError(429, "rate_limited", "Too many attempts; try again later")
 
     def reset(self) -> None:
-        self._counts = [0] * self.SHARDS
-        self._windows = [0] * self.SHARDS
+        self._tables = {}
 
 
 login_limiter = RateLimiter()

@@ -10,7 +10,7 @@ import uuid
 from datetime import UTC, datetime
 
 from fastapi import APIRouter, Request, Response
-from sqlalchemy import func, select, update
+from sqlalchemy import func, or_, select, update
 from sqlalchemy.orm import Session
 
 from quantlab_api import invitations as inv_mod
@@ -77,6 +77,10 @@ def create_invitation(
     db.execute(
         select(Workspace.id).where(Workspace.id == workspace_id).with_for_update(key_share=True)
     )
+    # The inviter may have been demoted while this request waited for the lock.
+    inviter = lock_members(db, workspace_id, {user.id}).get(user.id)
+    if inviter is None or inviter.role != Role.owner:
+        raise ApiError(403, "forbidden", "Requires owner role")
     db.execute(
         update(Invitation)
         .where(
@@ -199,21 +203,39 @@ def _addressed_to(db: Session, user: User, token: str) -> Invitation:
     return invitation
 
 
-def _require_inviter_still_owner(db: Session, i: Invitation) -> None:
-    """An invitation carries its inviter's authority: once they are no longer an owner (or
-    no longer a member) it is withdrawn. The inviter's membership row is read with a share
-    lock, so a concurrent demotion or removal finishes first and is seen."""
-    role = None
-    if i.invited_by is not None:
-        role = db.scalar(
-            select(WorkspaceMember.role)
-            .where(
-                WorkspaceMember.workspace_id == i.workspace_id,
-                WorkspaceMember.user_id == i.invited_by,
-            )
-            .with_for_update(read=True)
+def lock_members(
+    db: Session, workspace_id: uuid.UUID, user_ids: set[uuid.UUID], *, owners: bool = False
+) -> dict[uuid.UUID, WorkspaceMember]:
+    """Lock these members' rows (and every owner's, with ``owners``) in one statement, in
+    user-id order, and return them freshly read.
+
+    Every path that locks member rows goes through here (accept, preview, role change,
+    removal), so they all lock in one global order and cannot deadlock. Accept used to lock
+    the inviter's row and then the invitee's while a role change locked the owners and then
+    its target, which deadlocked when an invitee with a lower id was already an owner.
+    """
+    match = WorkspaceMember.user_id.in_(user_ids)
+    rows = db.scalars(
+        select(WorkspaceMember)
+        .where(
+            WorkspaceMember.workspace_id == workspace_id,
+            or_(match, WorkspaceMember.role == Role.owner) if owners else match,
         )
-    if role != Role.owner:
+        .order_by(WorkspaceMember.user_id)
+        .with_for_update()
+        .execution_options(populate_existing=True)
+    ).all()
+    return {m.user_id: m for m in rows}
+
+
+def _require_inviter_still_owner(
+    db: Session, i: Invitation, locked: dict[uuid.UUID, WorkspaceMember]
+) -> None:
+    """An invitation carries its inviter's authority: once they are no longer an owner (or
+    no longer a member) it is withdrawn. ``locked`` holds the inviter's row, locked, so a
+    concurrent demotion or removal finishes first and is seen."""
+    inviter = locked.get(i.invited_by) if i.invited_by is not None else None
+    if inviter is None or inviter.role != Role.owner:
         db.execute(
             update(Invitation)
             .where(Invitation.id == i.id, Invitation.status == "pending")
@@ -266,7 +288,8 @@ def _respond(db: Session, i: Invitation, user: User, status: str) -> None:
 def preview_invitation(body: InvitationTokenIn, user: CurrentUser, db: DB) -> InvitationPreview:
     i = _addressed_to(db, user, body.token)
     _require_pending(i)
-    _require_inviter_still_owner(db, i)
+    inviter_ids = {i.invited_by} if i.invited_by is not None else set()
+    _require_inviter_still_owner(db, i, lock_members(db, i.workspace_id, inviter_ids))
     ws = db.get(Workspace, i.workspace_id)
     inviter = db.get(User, i.invited_by) if i.invited_by else None
     assert ws is not None
@@ -285,10 +308,12 @@ def accept_invitation(
 ) -> MemberOut:
     i = _addressed_to(db, user, body.token)
     _require_pending(i)
-    _require_inviter_still_owner(db, i)
+    wanted = {user.id} | ({i.invited_by} if i.invited_by is not None else set())
+    locked = lock_members(db, i.workspace_id, wanted)
+    _require_inviter_still_owner(db, i, locked)
     _respond(db, i, user, "accepted")
     role = Role(i.role)
-    member = db.get(WorkspaceMember, (i.workspace_id, user.id), with_for_update=True)
+    member = locked.get(user.id)
     if member is None:
         member = WorkspaceMember(workspace_id=i.workspace_id, user_id=user.id, role=role)
         db.add(member)

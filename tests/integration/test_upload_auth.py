@@ -571,7 +571,7 @@ def test_upload_holds_no_database_connection_while_streaming(client, uploads_dir
     from quantlab_api.db import SessionLocal
 
     h, ws = _authorized(client)
-    # The pool request sessions use (get_engine() and get_engine(None) cache separately).
+    # The pool that request sessions use.
     with SessionLocal() as probe:
         pool = probe.get_bind().pool
     baseline = pool.checkedout()  # type: ignore[attr-defined]

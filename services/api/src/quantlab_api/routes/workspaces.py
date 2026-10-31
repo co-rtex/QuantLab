@@ -10,8 +10,8 @@ from quantlab_api.config import get_settings
 from quantlab_api.errors import ApiError
 from quantlab_api.invitations import MemberRoleIn
 from quantlab_api.models import AuditEvent, Role, User, Workspace, WorkspaceMember
+from quantlab_api.routes.invitations import lock_members, revoke_invitations_from
 from quantlab_api.routes.invitations import owner_router as invitation_routes
-from quantlab_api.routes.invitations import revoke_invitations_from
 from quantlab_api.schemas import (
     MAX_OFFSET,
     AuditOut,
@@ -115,26 +115,23 @@ def list_members(workspace_id: uuid.UUID, user: CurrentUser, db: DB) -> list[Mem
     ]
 
 
-def _lock_owners(db: Session, workspace_id: uuid.UUID, actor: User) -> set[uuid.UUID]:
-    """Lock the workspace's owner rows and return their user ids.
+def _lock_owners(
+    db: Session, workspace_id: uuid.UUID, actor: User, target: uuid.UUID
+) -> tuple[set[uuid.UUID], WorkspaceMember | None]:
+    """Lock the owner rows and the target's row together, in user-id order (``lock_members``,
+    shared with invitation acceptance so they cannot deadlock), and return the owners' ids
+    and the target's freshly read row.
 
-    Every member change takes these locks first and in user-id order, so two owners
-    changing each other cannot deadlock. A request that waits re-reads the rows after the
-    other commits: two owners demoting or removing each other used to both see two owners
-    and leave the workspace with none. Authorization is rechecked under the lock, because
-    the actor may have been demoted while waiting.
+    A request that waits re-reads the rows after the other commits: two owners demoting or
+    removing each other used to both see two owners and leave the workspace with none.
+    Authorization is rechecked under the lock, because the actor may have been demoted
+    while waiting.
     """
-    owners = set(
-        db.scalars(
-            select(WorkspaceMember.user_id)
-            .where(WorkspaceMember.workspace_id == workspace_id, WorkspaceMember.role == Role.owner)
-            .order_by(WorkspaceMember.user_id)
-            .with_for_update()
-        ).all()
-    )
+    rows = lock_members(db, workspace_id, {target}, owners=True)
+    owners = {uid for uid, m in rows.items() if m.role == Role.owner}
     if actor.id not in owners:
         raise ApiError(403, "forbidden", "Requires owner role")
-    return owners
+    return owners, rows.get(target)
 
 
 # Members join only by accepting an invitation (routes/invitations.py, #5). Adding an
@@ -153,10 +150,7 @@ def set_member_role(
 ) -> MemberOut:
     """Change an existing member's role."""
     require_workspace(db, user, workspace_id, Role.owner)
-    owners = _lock_owners(db, workspace_id, user)
-    m = db.get(
-        WorkspaceMember, (workspace_id, user_id), with_for_update=True, populate_existing=True
-    )
+    owners, m = _lock_owners(db, workspace_id, user, user_id)
     target = db.get(User, user_id)
     if m is None or target is None:
         raise ApiError(404, "not_found", "Member not found")
@@ -186,10 +180,7 @@ def remove_member(
     workspace_id: uuid.UUID, user_id: uuid.UUID, user: CurrentUser, db: DB, request: Request
 ) -> None:
     require_workspace(db, user, workspace_id, Role.owner)
-    owners = _lock_owners(db, workspace_id, user)
-    m = db.get(
-        WorkspaceMember, (workspace_id, user_id), with_for_update=True, populate_existing=True
-    )
+    owners, m = _lock_owners(db, workspace_id, user, user_id)
     if m is None:
         raise ApiError(404, "not_found", "Member not found")
     if m.role == Role.owner and len(owners) <= 1:

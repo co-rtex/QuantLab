@@ -312,9 +312,37 @@ def test_fallback_limiter_is_bounded_and_atomic_reserve():
     for i in range(20_000):  # a key flood cannot evict or reset the victim's counter
         lim.reserve(f"k{i}", 10**9)
     assert lim.reserve("victim", 2) is False
-    assert len(lim._counts) == RateLimiter.SHARDS  # constant memory
+    # Constant memory: one fixed table per window length, however many keys.
+    assert [len(counts) for counts, _ in lim._tables.values()] == [RateLimiter.SHARDS]
     lim.refund("victim")  # ignored in degraded mode (shards may be shared)
     assert lim.reserve("victim", 2) is False
+
+
+def test_fallback_limiter_keeps_windows_of_different_lengths_apart(monkeypatch):
+    """#37 review: one-hour invitation limits and one-minute login limits shared shards.
+    With Redis down, a colliding pair kept resetting each other's count: 100 of 100
+    invitations passed a limit of 20, and login throttles were reset too."""
+    from quantlab_api.jobs import set_redis
+    from quantlab_api.security import RateLimiter
+
+    class Down:
+        def __getattr__(self, name):
+            raise ConnectionError("down")
+
+    set_redis(Down())  # type: ignore[arg-type]
+    lim = RateLimiter()
+    monkeypatch.setattr(lim, "_shard", lambda key: 7)  # every key collides
+    invites, logins = [], []
+    for _ in range(100):  # interleaved, as live traffic would be
+        invites.append(lim.reserve("invite:user:a", 20, 3600))
+        logins.append(lim.reserve("login:ip:b", 10, 60))
+    assert invites.count(True) == 20
+    assert logins.count(True) == 10
+    # Same-window collisions still only make throttling stricter: they share one count.
+    other = RateLimiter()
+    monkeypatch.setattr(other, "_shard", lambda key: 7)
+    both = [other.reserve(k, 5, 60) for _ in range(5) for k in ("x", "y")]
+    assert both.count(True) == 5
 
 
 def test_blank_secrets_are_treated_as_unset():

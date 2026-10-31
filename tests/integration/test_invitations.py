@@ -495,3 +495,66 @@ def test_model_module_is_safe_for_alembic_to_import():
     env = {"PROMETHEUS_MULTIPROC_DIR": "/nonexistent/prometheus", "PATH": ""}
     done = subprocess.run([sys.executable, "-c", code], env=env, capture_output=True, text=True)
     assert done.returncode == 0, done.stderr
+
+
+# ---------------------------------------------------------------- lock ordering
+def _member_locks(statements: list[str]) -> list[str]:
+    return [
+        " ".join(s.split())
+        for s in statements
+        if "workspace_members" in s and ("FOR UPDATE" in s or "FOR SHARE" in s)
+    ]
+
+
+def test_member_rows_are_locked_once_in_user_id_order(client, team):
+    """#37 review: accept locked the inviter's row and then the invitee's, while a role
+    change locked the owners and then its target. Every path now takes its member locks
+    in one statement ordered by user id, so no two can wait on each other in a cycle."""
+    from quantlab_api.db import SessionLocal
+
+    join_workspace(client, team["owner"], team["ws"], team["bob"], "bob@example.com", "editor")
+    token = _token(client, team["owner"], team["ws"], "bob@example.com", "owner")
+    with SessionLocal() as probe:
+        engine = probe.get_bind()
+    statements: list[str] = []
+
+    def record(conn: Any, cursor: Any, statement: str, *args: Any) -> None:
+        statements.append(statement)
+
+    event.listen(engine, "before_cursor_execute", record)
+    try:
+        assert client.post(ACCEPT, headers=team["bob"], json={"token": token}).status_code == 200
+        accept = _member_locks(statements)
+        statements.clear()
+        url = f"/api/v1/workspaces/{team['ws']}/members/{_uid(client, team['bob'])}"
+        assert client.patch(url, headers=team["owner"], json={"role": "editor"}).status_code == 200
+        patch = _member_locks(statements)
+    finally:
+        event.remove(engine, "before_cursor_execute", record)
+    for locks in (accept, patch):
+        assert len(locks) == 1, locks
+        assert "ORDER BY workspace_members.user_id FOR UPDATE" in locks[0], locks
+
+
+def test_accept_and_role_change_race_without_deadlock(client, no_invite_limits):
+    """The reviewer's scenario: the invitee is already an owner with a lower id than the
+    inviter, and accepts while another owner changes a role."""
+    from tests.integration.test_concurrency import _race
+
+    users = {n: register(client, f"{n}@example.com") for n in ("o", "p", "q", "d")}
+    ids = {n: uuid.UUID(_uid(client, h)) for n, h in users.items()}
+    c, x = sorted(("p", "q"), key=lambda n: ids[n])  # invitee c sorts before inviter x
+    ws = workspace_id(client, users["o"])
+    for name, role in ((x, "owner"), (c, "owner"), ("d", "viewer")):
+        join_workspace(client, users["o"], ws, users[name], f"{name}@example.com", role)
+    url = f"/api/v1/workspaces/{ws}/members/{ids['d']}"
+    for trial in range(8):
+        token = _token(client, users[x], ws, f"{c}@example.com", "editor")
+        role = "editor" if trial % 2 else "viewer"
+
+        def act(cl, i, token=token, role=role):  # type: ignore[no-untyped-def]
+            if i == 0:
+                return cl.post(ACCEPT, headers=users[c], json={"token": token}).status_code
+            return cl.patch(url, headers=users["o"], json={"role": role}).status_code
+
+        assert _race(2, act) == [200, 200], trial

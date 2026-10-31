@@ -23,7 +23,7 @@ type State =
   | { kind: "signed-out" }
   | { kind: "missing" }
   | { kind: "ready"; user: User; preview: Preview; token: string }
-  | { kind: "error"; message: string; user?: User }
+  | { kind: "error"; message: string; user?: User; retry?: boolean }
   | { kind: "done"; message: string; workspace?: string };
 
 function readToken(): string | null {
@@ -47,6 +47,19 @@ function forget() {
   } catch {
     /* storage unavailable: nothing was stored */
   }
+}
+
+// Used, withdrawn or expired invitations are final. "Not for this account" is not: the token
+// is kept so the user can sign in with the invited address and open /invite again.
+function isFinal(e: unknown): boolean {
+  return e instanceof ApiError && e.status >= 400 && e.status < 500 && e.code !== "invitation_not_found";
+}
+
+async function signOutAndRetry() {
+  await api("/auth/logout", { method: "POST" }).catch(() => undefined);
+  // Full navigation (not router.push): the session is gone and app state must reset.
+  // eslint-disable-next-line @next/next/no-location-assign-relative-destination
+  window.location.assign("/login?next=/invite");
 }
 
 function explain(e: unknown): string {
@@ -84,8 +97,8 @@ export function InviteResponse() {
         const preview = await api<Preview>("/auth/invitations/preview", { method: "POST", json: { token } });
         setState({ kind: "ready", user, preview, token });
       } catch (e) {
-        if (e instanceof ApiError && e.status >= 400 && e.status < 500) forget(); // final answer
-        setState({ kind: "error", message: explain(e), user });
+        if (isFinal(e)) forget();
+        setState({ kind: "error", message: explain(e), user, retry: !isFinal(e) });
       }
     })();
   }, []);
@@ -102,8 +115,8 @@ export function InviteResponse() {
           : { kind: "done", message: "Invitation declined." },
       );
     } catch (e) {
-      if (e instanceof ApiError && e.status >= 400 && e.status < 500) forget(); // final answer
-      setState({ kind: "error", message: explain(e), user: state.user });
+      if (isFinal(e)) forget();
+      setState({ kind: "error", message: explain(e), user: state.user, retry: !isFinal(e) });
     } finally {
       setBusy(false);
     }
@@ -133,6 +146,11 @@ export function InviteResponse() {
           {state.message}
         </p>
         {state.user && <p className="text-ink-2">Signed in as {state.user.email}.</p>}
+        {state.user && state.retry && (
+          <button className="btn btn-primary" onClick={signOutAndRetry}>
+            Sign out and use another account
+          </button>
+        )}
         <Link href="/" className="btn btn-quiet">
           Go to QuantLab
         </Link>
