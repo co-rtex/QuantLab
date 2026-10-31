@@ -5,6 +5,10 @@ const email = `e2e-${unique}@example.com`;
 const password = "E2e-research-2026";
 
 test("research workflow: data -> backtest -> results -> reproduction", async ({ page }) => {
+  // Five chained jobs (dataset, backtest, validation, ML, reproduction) share this budget.
+  // Each takes 3-5 s on an idle machine but 4-6x that under load, which overran the default
+  // 90 s even though every job completed (#16). The per-step waits still bound each job.
+  test.setTimeout(240_000);
   await page.goto("/");
   await expect(page).toHaveURL(/\/login/);
 
