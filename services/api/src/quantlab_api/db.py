@@ -43,18 +43,26 @@ def _instrument(engine: Engine) -> None:
         ).observe(time.perf_counter() - start)
 
 
-@lru_cache
 def get_engine(url: str | None = None) -> Engine:
-    engine = create_engine(
-        url or get_settings().database_url, pool_pre_ping=True, pool_size=10, max_overflow=20
-    )
+    # Cache by the resolved URL: keying on the argument made get_engine() and
+    # get_engine(None) two cache entries, i.e. two engines with two connection pools.
+    return _engine(url or get_settings().database_url)
+
+
+@lru_cache
+def _engine(url: str) -> Engine:
+    engine = create_engine(url, pool_pre_ping=True, pool_size=10, max_overflow=20)
     _instrument(engine)
     return engine
 
 
-@lru_cache
 def _factory(url: str | None = None) -> sessionmaker[Session]:
-    return sessionmaker(bind=get_engine(url), expire_on_commit=False)
+    return _sessionmaker(url or get_settings().database_url)
+
+
+@lru_cache
+def _sessionmaker(url: str) -> sessionmaker[Session]:
+    return sessionmaker(bind=_engine(url), expire_on_commit=False)
 
 
 def SessionLocal() -> Session:  # noqa: N802 - factory-style name
