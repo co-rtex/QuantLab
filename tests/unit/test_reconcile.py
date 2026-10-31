@@ -15,6 +15,7 @@ import pytest
 
 from quantlab.data.providers import CSVProvider
 from quantlab.data.reconcile import CLASSES, Source, Tolerances, reconcile
+from quantlab.data.schema import normalize_actions, normalize_bars
 from quantlab.data.synthetic import SyntheticSpec, generate_market
 
 
@@ -68,7 +69,8 @@ def test_csv_round_trip_as_second_source(mkt, tmp_path):
     s, e = mkt.bars["date"].min(), mkt.bars["date"].max()
     bars = pd.concat([csv.fetch_bars(x, s, e) for x in csv.symbols()])
     acts = pd.concat([csv.fetch_actions(x, s, e) for x in csv.symbols()])
-    r = reconcile(_primary(mkt), _secondary(mkt, bars, acts, name="csv"))
+    # Ticker-keyed, with no history of its own: resolved through the primary's history.
+    r = reconcile(_primary(mkt), Source("csv", bars, acts, None, is_synthetic=True))
     assert r.status == "pass", r.samples
 
 
@@ -232,3 +234,148 @@ def test_report_is_attached_beside_the_immutable_version(mkt, tmp_path):
     assert [v.version for v in store.versions("demo")] == [dv.version]
     with pytest.raises(ValueError):
         store.write_report(dv, "../escape", report)
+
+
+# ------------------------------------------------- lead review of #34: required fixes
+def test_non_finite_values_are_flagged_not_passed(mkt):
+    b = mkt.bars.copy()
+    rows = b.index[b["symbol"] == _pick(mkt)]
+    b.loc[rows[30], "close"] = np.nan
+    b.loc[rows[31], "volume"] = np.inf
+    r = reconcile(_primary(mkt), _secondary(mkt, bars=b))
+    _only(r, "invalid_value", 2)
+    assert r.status == "fail"
+
+
+def _renamed_primary(mkt):
+    """The primary says one security changed ticker on 2021-07-01 (FB -> META style)."""
+    sym = _pick(mkt, 4)
+    h = mkt.symbol_history
+    iid = h.loc[h["symbol"] == sym, "instrument_id"].iloc[0]
+    row = h[h["instrument_id"] == iid].iloc[0]
+    switch = pd.Timestamp("2021-07-01")
+    history = pd.concat(
+        [
+            h[h["instrument_id"] != iid],
+            pd.DataFrame(
+                [{**row, "valid_to": switch}, {**row, "symbol": f"{sym}X", "valid_from": switch}]
+            ),
+        ],
+        ignore_index=True,
+    )
+    b, a = mkt.bars.copy(), mkt.actions.copy()
+    b.loc[(b["symbol"] == sym) & (b["date"] >= switch), "symbol"] = f"{sym}X"
+    a.loc[(a["symbol"] == sym) & (a["ex_date"] >= switch), "symbol"] = f"{sym}X"
+    return Source("primary", b, a, history, is_synthetic=True), sym
+
+
+def test_history_less_secondary_resolves_a_rename_through_the_primary(mkt):
+    primary, _ = _renamed_primary(mkt)
+    # Identical data, ticker-keyed, no history: previously an identity failure.
+    r = reconcile(primary, Source("csv", primary.bars, primary.actions, None, is_synthetic=True))
+    assert r.status == "pass", r.samples
+
+
+def test_history_less_secondary_with_an_unknown_ticker(mkt):
+    primary, sym = _renamed_primary(mkt)
+    b = primary.bars.copy()
+    # The secondary still uses the old ticker after the rename date.
+    b.loc[b["symbol"] == f"{sym}X", "symbol"] = sym
+    r = reconcile(primary, Source("csv", b, primary.actions, None, is_synthetic=True))
+    assert r.counts["identity_mismatch"] >= 1
+    issue = r.samples["identity_mismatch"][0]
+    assert issue["ticker"] == sym and "unknown to primary" in issue["issue"]
+    assert issue["from"] >= "2021-07-01"
+
+
+@pytest.mark.parametrize(("shift", "expect"), [(1, "mismatch"), (3, "mismatch"), (6, "missing")])
+def test_ex_date_tolerance_pairs_a_late_action(mkt, shift, expect):
+    from quantlab.data.calendar import trading_days
+
+    divs = mkt.actions.index[mkt.actions["kind"] == "dividend"]
+    i = divs[len(divs) // 2]
+    a = mkt.actions.copy()
+    sessions = trading_days(a.loc[i, "ex_date"], a.loc[i, "ex_date"] + pd.Timedelta(days=20))
+    a.loc[i, "ex_date"] = sessions[shift]  # recorded `shift` sessions late
+    r = reconcile(_primary(mkt), _secondary(mkt, actions=a))
+    if expect == "mismatch":
+        _only(r, "action_mismatch", 1)
+        assert r.samples["action_mismatch"][0]["issue"] == "ex_date differs"
+    else:
+        _only(r, "action_missing", 2)
+
+
+def test_report_records_its_inputs_and_is_never_silently_overwritten(mkt, tmp_path):
+    from quantlab.data.store import DatasetStore, content_hash
+
+    store = DatasetStore(tmp_path)
+    dv = store.write(
+        "demo", mkt.bars, mkt.actions, mkt.provenance, symbol_history=mkt.symbol_history
+    )
+    p = Source("primary", mkt.bars, mkt.actions, mkt.symbol_history, True, version=dv.version)
+    s = Source(
+        "vendor-b",
+        mkt.bars,
+        mkt.actions,
+        None,
+        True,
+        provider={"provider": "synthetic copy", "license": "synthetic"},
+    )
+    rep = reconcile(p, s).to_dict()
+    assert rep["inputs"]["primary"]["version"] == dv.version
+    assert rep["inputs"]["primary"]["version_is_computed"] is False
+    assert rep["inputs"]["secondary"]["version"] == content_hash(
+        normalize_bars(mkt.bars), normalize_actions(mkt.actions)
+    )
+    assert rep["inputs"]["secondary"]["provider"]["provider"] == "synthetic copy"
+    assert rep["created_at"].endswith("+00:00")
+    store.write_report(dv, "reconciliation-vendor-b", rep)
+    with pytest.raises(FileExistsError):
+        store.write_report(dv, "reconciliation-vendor-b", rep)
+    store.write_report(dv, "reconciliation-vendor-b", {**rep, "status": "warn"}, replace=True)
+    assert store.load_reports(dv)["reconciliation-vendor-b"]["status"] == "warn"
+    with pytest.raises(TypeError):  # non-JSON payloads raise instead of being stringified
+        store.write_report(dv, "bad", {"when": pd.Timestamp("2024-01-02")})
+    leftovers = [
+        x
+        for x in (tmp_path / "demo" / "_reports" / dv.version).iterdir()
+        if x.name.startswith(".tmp-")
+    ]
+    assert leftovers == []
+
+
+def test_adjusted_secondary_is_classified_once_per_instrument(mkt):
+    from quantlab.data.adjust import adjusted_close
+
+    adj = adjusted_close(mkt.bars, mkt.actions).stack().rename("close").reset_index()
+    b = mkt.bars.drop(columns="close").merge(adj, on=["date", "symbol"])
+    r = reconcile(_primary(mkt), _secondary(mkt, bars=b))
+    with_actions = set(mkt.actions["symbol"])
+    flagged = {row["instrument_id"] for row in r.samples["adjusted_series"]}
+    hist = mkt.symbol_history.set_index("symbol")["instrument_id"]
+    assert flagged and flagged <= {hist[s] for s in with_actions}
+    assert r.counts["price_mismatch"] == 0  # explained, not reported bar by bar
+
+
+def test_price_floor_scales_with_price():
+    from tests.conftest import make_bars
+
+    def run(p_close: float, s_close: float) -> int:
+        pb = make_bars({"A": [p_close] * 3})
+        sb = make_bars({"A": [p_close, s_close, p_close]})
+        none = normalize_actions(None)
+        return reconcile(Source("p", pb, none), Source("s", sb, none)).counts["price_mismatch"]
+
+    assert run(0.02, 0.024) == 1  # 20% on a penny stock is a mismatch
+    assert run(0.02, 0.02004) == 0  # within half a sub-penny tick
+    assert run(10.0, 10.004) == 0  # half-cent rounding
+    assert run(10.0, 10.02) == 1
+
+
+def test_many_to_one_id_map_is_rejected(mkt):
+    h = mkt.symbol_history
+    vendor = h.assign(instrument_id="V" + h["instrument_id"])
+    ids = list(vendor["instrument_id"])
+    bad = {ids[0]: h["instrument_id"].iloc[0], ids[1]: h["instrument_id"].iloc[0]}
+    with pytest.raises(ValueError, match="one-to-one"):
+        reconcile(_primary(mkt), _secondary(mkt, history=vendor), id_map=bad)

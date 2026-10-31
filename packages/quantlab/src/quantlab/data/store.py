@@ -207,17 +207,31 @@ class DatasetStore:
         # Beside the version, never inside it: a version directory is immutable.
         return self._dir(dv.slug, dv.version).parent / REPORTS_DIR / dv.version
 
-    def write_report(self, dv: DatasetVersion, name: str, payload: dict[str, Any]) -> Path:
-        """Attach a JSON report (e.g. a reconciliation) to a version; replaces same name."""
+    def write_report(
+        self, dv: DatasetVersion, name: str, payload: dict[str, Any], *, replace: bool = False
+    ) -> Path:
+        """Attach a JSON report (e.g. a reconciliation) to a version.
+
+        An existing report of the same name is kept unless ``replace`` is True, so a
+        rerun never silently overwrites the evidence of an earlier one. The payload must
+        be JSON-native; anything else raises rather than being stringified.
+        """
         if not REPORT_NAME.fullmatch(name):
             raise ValueError(f"invalid report name {name!r}")
         target = self._reports_dir(dv)
+        path = target / f"{name}.json"
+        if path.exists() and not replace:
+            raise FileExistsError(f"report {name!r} already exists for {dv.short}")
         target.mkdir(parents=True, exist_ok=True)
         fd, tmp = tempfile.mkstemp(prefix=".tmp-", dir=target)
-        with os.fdopen(fd, "w") as fh:
-            json.dump(payload, fh, indent=2, default=str)
-        os.replace(tmp, target / f"{name}.json")  # atomic
-        return target / f"{name}.json"
+        try:
+            with os.fdopen(fd, "w") as fh:
+                json.dump(payload, fh, indent=2, allow_nan=False)
+            os.replace(tmp, path)  # atomic
+        except BaseException:
+            Path(tmp).unlink(missing_ok=True)
+            raise
+        return path
 
     def load_reports(self, dv: DatasetVersion) -> dict[str, dict[str, Any]]:
         d = self._reports_dir(dv)
