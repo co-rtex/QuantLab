@@ -6,7 +6,9 @@ Usage (stack from ``make app-up``)::
     uv run python benchmarks/load_and_scaling.py scaling --workers 1 2 4 --jobs 24
 
 ``scaling`` resizes the compose ``worker`` service with ``docker compose up --scale``.
-Results are written to ``benchmarks/results/``.
+Results are written to ``benchmarks/results/<timestamp>-<mode>[-contended].json`` with the
+machine and load metadata of ``benchmarks/harness.py``. Every row here is measured over
+HTTP against the stack (``in_process: false``); ``--repeats`` repeats each load level.
 """
 
 from __future__ import annotations
@@ -15,6 +17,7 @@ import argparse
 import asyncio
 import json
 import subprocess
+import sys
 import time
 import uuid
 from datetime import UTC, datetime
@@ -23,6 +26,9 @@ from typing import Any
 
 import httpx
 import numpy as np
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import harness
 
 API = "http://localhost:8000"
 OUT = Path(__file__).resolve().parent / "results"
@@ -98,10 +104,17 @@ async def hammer(
         "p50_ms": round(float(np.percentile(ms, 50)), 2),
         "p95_ms": round(float(np.percentile(ms, 95)), 2),
         "p99_ms": round(float(np.percentile(ms, 99)), 2),
+        "in_process": False,
     }
 
 
-def load() -> dict[str, Any]:
+def _spread(runs: list[dict[str, Any]], key: str) -> dict[str, Any]:
+    xs = np.asarray([r[key] for r in runs], dtype=float)
+    q1, med, q3 = np.percentile(xs, [25, 50, 75])
+    return {"median": round(float(med), 2), "iqr": round(float(q3 - q1), 2), "samples": xs.tolist()}
+
+
+def load(repeats: int = 3) -> dict[str, Any]:
     c = httpx.Client(base_url=API, timeout=60)
     s = setup(c, assets=50)
     h = {"Authorization": f"Bearer {s['token']}"}
@@ -113,7 +126,21 @@ def load() -> dict[str, Any]:
     }
     out: dict[str, Any] = {}
     for name, path in endpoints.items():
-        out[name] = [asyncio.run(hammer(path, h, cc, max(200, cc * 20))) for cc in (1, 8, 32, 64)]
+        levels = []
+        for cc in (1, 8, 32, 64):
+            runs = [asyncio.run(hammer(path, h, cc, max(200, cc * 20))) for _ in range(repeats)]
+            levels.append(
+                {
+                    "concurrency": cc,
+                    "throughput_rps": _spread(runs, "throughput_rps"),
+                    "p50_ms": _spread(runs, "p50_ms"),
+                    "p99_ms": _spread(runs, "p99_ms"),
+                    "errors": sum(r["errors"] for r in runs),
+                    "runs": runs,
+                    "in_process": False,
+                }
+            )
+        out[name] = levels
     return out
 
 
@@ -170,8 +197,8 @@ def scaling(workers: list[int], jobs: int) -> dict[str, Any]:
         )
         print(results[-1], flush=True)
     base = results[0]["wall_s"]
-    for r in results:
-        r["speedup"] = round(base / r["wall_s"], 2)
+    for row in results:
+        row["speedup"] = round(base / row["wall_s"], 2)
     return {"assets": 200, "sessions_traded": "2018-2023", "results": results}
 
 
@@ -180,10 +207,17 @@ def main() -> None:
     ap.add_argument("mode", choices=["load", "scaling"])
     ap.add_argument("--workers", type=int, nargs="+", default=[1, 2, 4])
     ap.add_argument("--jobs", type=int, default=24)
+    ap.add_argument("--repeats", type=int, default=3)
     a = ap.parse_args()
-    res = load() if a.mode == "load" else scaling(a.workers, a.jobs)
+    start = harness.load_snapshot()
+    body = load(a.repeats) if a.mode == "load" else scaling(a.workers, a.jobs)
+    res = harness.finalize(
+        {"mode": a.mode, "environment": harness.machine(), "data_is_synthetic": True, **body},
+        start,
+    )
     OUT.mkdir(exist_ok=True)
-    path = OUT / f"{datetime.now(UTC):%Y%m%dT%H%M%SZ}-{a.mode}.json"
+    tag = "-contended" if res["contended"] else ""
+    path = OUT / f"{datetime.now(UTC):%Y%m%dT%H%M%SZ}-{a.mode}{tag}.json"
     path.write_text(json.dumps(res, indent=2))
     print(json.dumps(res, indent=2))
 
