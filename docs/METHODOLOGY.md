@@ -298,7 +298,59 @@ Per session `k`:
    fill prices, every buy is scaled by the same factor (then rounded to whole shares
    unless fractional shares are enabled) and flagged `partial`, so no symbol is favoured
    by sort order. Orders without a price on the fill date are rejected (`no_price`).
-5. Mark-to-market at `close[k]` (last known close for symbols with a gap).
+   **A bar printed with zero volume is not tradable** (#149, engine 1.4.0): a vendor may
+   repeat the last open and close with volume 0 through a halt, and nobody could trade at
+   those prices.
+   * In both execution modes, the fill uses the fill bar's volume. An order meets a
+     zero-volume bar as it meets a session without a bar: it is rejected (`no_volume`)
+     and not carried over.
+   * The strategy is still offered the symbol (`MarketView.tradable` means it has a
+     bar). The fill rule alone blocks the escape from a halt, and a held position stays
+     held through zero-volume sessions and takes the reopen move. Hiding the symbol from
+     the strategy would make it drop the name from its targets, so a single zero-volume
+     rebalance day would sell the holding and rebuy it later.
+   * Buy and hold invests once. A name whose first fill session prints zero volume is
+     rejected there and never bought, exactly as with a missing bar on that session.
+   * A NaN volume is unknown and tradable. Only library callers can pass it: the
+     platform's quality gate rejects non-finite volume, so data without volume has to be
+     uploaded as 0, and is then never traded.
+   * `meta.zero_volume_bars` counts the universe's zero-volume bars in the window and
+     `meta.no_volume_rejections` the orders rejected on one. `meta.never_traded` names
+     the universe symbols whose bars in the window all have zero volume, out of
+     `meta.symbols_with_bars`.
+   * The integrity report's `zero_volume` check:
+     * **fails** only when every universe symbol with bars in the window never traded,
+       which is data recorded with volume 0. A target that cannot fill stays in cash,
+       which is modelled correctly, so a single dead name, even one the strategy
+       targeted, does not contradict the method;
+     * **warns** when the run was affected: never-traded symbols (named, counted against
+       `symbols_with_bars`, with the advice not to record missing volume as 0), an order
+       rejected or a holding marked on a zero-volume bar, or any stale-mark exposure
+       (`stale_marks.max_equity_share > 0`), including exposure from missing bars alone;
+     * **verifies** otherwise, stating the zero-volume bar count;
+     * is absent for results from before #149.
+
+   Volume ≤ 0 counts as zero; negative volume is a quality error.
+5. Mark-to-market at `close[k]` (last known close for symbols with a gap). A close printed
+   with zero volume marks the position too, but it is a **stale mark**, not a price
+   anyone traded at. Such a bar still counts as a printed bar for the missing-bars
+   delisting rule, so a stale-quoted holding is kept, not liquidated at its last close.
+   Counting it as missing would liquidate at the pre-halt close, the optimistic fill this
+   rule removes. The cost is that **equity on stale marks is not realisable**: a name
+   that prints stale quotes indefinitely is held at its stale close until it trades or
+   the master delists it. `meta.stale_marks` reports this cost over **held** positions:
+   * `position_days`: position-days marked at a stale price, either a zero-volume close
+     or the last close across a missing bar; `zero_volume_position_days` is the
+     zero-volume part;
+   * `max_equity_share`: the largest share of equity on such marks on any day, divided by
+     that day's equity;
+   * `final_equity_share`: the same share on the last session, so a holding still on a
+     stale mark when the window ends (a zombie name) is visible.
+
+   Each share is None, with the reason in `undefined`, when nothing was held with
+   positive equity (on any day, or on the last session).
+   For a delisting after the window, a zero-volume last bar counts as a stale mark
+   (`after_window`).
 6. On rebalance dates (last session of the period, plus the first session) the strategy
    sees bars dated `<= k` only and returns target weights. Weights are clipped to
    `max_weight`, scaled to `max_gross_exposure`, and converted to share targets using

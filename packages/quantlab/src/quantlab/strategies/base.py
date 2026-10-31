@@ -27,8 +27,9 @@ class MarketView:
 
     ``close`` holds total-return-adjusted closes as of ``date`` (only corporate actions with
     ex-date <= ``date`` are applied). ``returns`` are exact daily total returns.
-    ``tradable`` marks symbols with a bar on ``date``. ``holdings`` are current portfolio
-    weights at the close of ``date`` before any rebalance.
+    ``tradable`` marks symbols with a bar on ``date``, including one printed with zero
+    volume; nothing fills on such a bar (#149). ``holdings`` are current portfolio weights
+    at the close of ``date`` before any rebalance.
     """
 
     date: pd.Timestamp

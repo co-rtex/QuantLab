@@ -191,7 +191,7 @@ def build_integrity_report(ev: dict[str, Any]) -> dict[str, Any]:
         if stale:
             concerns.append(
                 f"{stale} held position(s) delist after the backtest window and are marked at "
-                "a stale close (no bar on the last session)"
+                "a stale close (no bar, or a zero-volume bar, on the last session)"
             )
         if assumed:
             evidence["assumed_performance_delisting_return"] = assumption
@@ -243,6 +243,66 @@ def build_integrity_report(ev: dict[str, Any]) -> dict[str, Any]:
                     evidence,
                 )
             )
+
+    # 3c. zero-volume bars and stale marks (engine meta, absent before #149). FAILED only
+    # when nothing could be traded at all (data recorded with volume 0): a target that
+    # cannot fill stays in cash, which is modelled correctly. Otherwise the check warns
+    # when the run was affected (a rejected fill, a holding on a stale mark) and verifies
+    # when it was not.
+    zero_bars = _get(analysis, "meta", "zero_volume_bars")
+    if isinstance(zero_bars, int):
+        meta = _get(analysis, "meta") or {}
+        never = [str(s) for s in meta.get("never_traded") or []]
+        with_bars = int(meta.get("symbols_with_bars") or 0)
+        rejected = int(meta.get("no_volume_rejections") or 0)
+        marks = meta.get("stale_marks") or {}
+        evidence = {
+            "zero_volume_bars": zero_bars,
+            "symbols_with_bars": with_bars,
+            "never_traded": never,
+            "no_volume_rejections": rejected,
+            "stale_marks": marks,
+        }
+        concerns = []
+        if never:
+            listed = ", ".join(never[:10]) + (", ..." if len(never) > 10 else "")
+            concerns.append(
+                f"{len(never)} of {with_bars} universe symbols with bars printed zero volume on "
+                f"every bar in the window and could never be traded ({listed}). Data without "
+                "volume must not be recorded as volume 0"
+            )
+        on_zero = int(marks.get("zero_volume_position_days") or 0)
+        if rejected or on_zero:
+            concerns.append(
+                f"{_plural(rejected, 'order')} could not fill on a zero-volume bar, and held "
+                f"positions were marked at a zero-volume close on "
+                f"{_plural(on_zero, 'position-day')}"
+            )
+        share, final = marks.get("max_equity_share"), marks.get("final_equity_share")
+        if isinstance(share, (int, float)) and share > 0:
+            at_end = f"{final:.0%}" if isinstance(final, (int, float)) else "none"
+            concerns.append(
+                f"held positions sat on stale marks (zero-volume or missing bars) on "
+                f"{_plural(int(marks.get('position_days') or 0), 'position-day')}, at most "
+                f"{share:.0%} of equity on one day and {at_end} at the end; that equity was "
+                "not realisable"
+            )
+        if never and with_bars > 0 and len(never) >= with_bars:
+            zv_status: CheckStatus = "failed"
+            zv_finding = "Nothing in the universe could be traded: " + "; ".join(concerns) + "."
+        elif concerns:
+            zv_status = "warning"
+            zv_finding = "; ".join(concerns) + "."
+            zv_finding = zv_finding[0].upper() + zv_finding[1:]
+        else:
+            zv_status = "verified"
+            zv_finding = (
+                f"{_plural(zero_bars, 'universe bar')} printed zero volume, but none affected "
+                "the run: no order met one and nothing held was marked on one."
+                if zero_bars
+                else "No universe bar in the window printed zero volume."
+            )
+        checks.append(Check("zero_volume", "Zero-volume bars", zv_status, zv_finding, evidence))
 
     # 4. execution timing
     checks.append(

@@ -527,6 +527,8 @@ def _for_display(
     meta["universe_instrument_ids"] = universe
     meta["universe"] = [named(i) for i in universe]
     meta["not_listed_in_window"] = [named(i) for i in absent]
+    if "never_traded" in meta:  # a subset of the universe (#149)
+        meta["never_traded"] = [named(str(i)) for i in meta["never_traded"]]
     if meta.get("benchmark"):
         meta["benchmark_instrument_id"] = meta["benchmark"]
         meta["benchmark"] = label_ids(inputs.history, [meta["benchmark"]], when)[meta["benchmark"]]

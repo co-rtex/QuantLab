@@ -17,15 +17,17 @@ Timeline for each session ``k`` (all prices are raw, as traded):
 2. **Open execution** (``execution="next_open"``) — orders decided at the previous
    rebalance close are filled at ``open[k]`` adjusted for slippage. Sells run before buys.
 3. **Close execution** (``execution="next_close"``) — as above but at ``close[k]``.
-4. **Mark-to-market** at ``close[k]`` (last known close for symbols with a gap).
+4. **Mark-to-market** at ``close[k]`` (last known close for symbols with a gap). A close
+   printed with zero volume marks the position too, but it is a stale mark.
 5. **Decision** — on rebalance dates the strategy receives a ``MarketView`` containing only
    bars dated ``<= k`` with corporate actions placed on sessions ``<= k`` and returns target
    weights. Orders are sized against ``close[k]`` and queued for the *next* session, so no
    order is ever filled at a price the strategy could not have known at decision time.
 
-Orders that cannot be filled (no bar on the execution date, insufficient cash, sells
-exceeding holdings) are rejected and recorded with a reason; buys that exceed available
-cash are reduced to the affordable quantity and flagged as partial fills.
+Orders that cannot be filled (no bar on the execution date, a bar with zero volume,
+insufficient cash, sells exceeding holdings) are rejected and recorded with a reason; buys
+that exceed available cash are reduced to the affordable quantity and flagged as partial
+fills.
 """
 
 from __future__ import annotations
@@ -47,7 +49,7 @@ from quantlab.data.schema import wide
 from quantlab.portfolio.ledger import Ledger, LedgerError
 from quantlab.strategies.base import MarketView, Strategy
 
-ENGINE_VERSION = "1.3.0"
+ENGINE_VERSION = "1.4.0"
 
 
 class BacktestConfig(BaseModel):
@@ -229,6 +231,16 @@ def run_backtest(
     C = close_raw.to_numpy()
     O = open_raw.to_numpy()
     has_bar = np.isfinite(C)
+    # A bar with zero volume printed an open and a close nobody traded at (#149), so nothing
+    # fills on it: an order meets it as it meets a session without a bar (rejected, here
+    # as `no_volume`). The fill rule alone blocks the escape from a halt. The strategy is
+    # still offered the symbol (it has a bar), so a holding is not sold and rebought just
+    # because one session printed zero volume. Its close still marks a position (a stale
+    # mark), and it still counts as a printed bar for the missing-bars delisting rule, so
+    # a stale-quoted holding is kept until it trades again. An unknown (NaN) volume is
+    # tradable; only library callers can pass it, as the platform's quality gate rejects it.
+    no_trade = has_bar & (volume.to_numpy(dtype=float) <= 0)
+    traded_bar = has_bar & ~no_trade
     missing_run = np.zeros(len(universe), dtype=np.int64)
     col = {s: j for j, s in enumerate(universe)}
     # From its delisting date on, a security is not offered to the strategy.
@@ -272,6 +284,14 @@ def run_backtest(
     pos_rows: list[tuple[pd.Timestamp, str, float, float]] = []
     decisions: list[tuple[pd.Timestamp, str, float]] = []
     cum = {"commission": 0.0, "slippage": 0.0, "dividends": 0.0}
+    # Held positions marked at a stale price: a zero-volume close, or the last close when
+    # the session has no bar. Equity on stale marks is not realisable.
+    stale_position_days = 0
+    zero_volume_position_days = 0  # the subset marked at a zero-volume close
+    # The largest share of equity on stale marks, and the share on the last session; None
+    # where nothing is held with positive equity.
+    stale_share: float | None = None
+    final_share: float | None = None
     slip = config.slippage_bps / 1e4
     comm = config.commission_bps / 1e4
 
@@ -320,7 +340,7 @@ def run_backtest(
                         "decision_date": o.decision_date,
                         "symbol": o.symbol,
                         "quantity": o.quantity,
-                        "reason": "no_price",
+                        "reason": "no_volume" if no_trade[k, j] else "no_price",
                     }
                 )
                 continue
@@ -482,7 +502,8 @@ def run_backtest(
                 traded += abs(q) * last_px[j]
         # 2/3. execute orders queued at the previous decision
         if pending:
-            traded += fill(k, O[k] if config.execution == "next_open" else C[k], pending)
+            px_row = O[k] if config.execution == "next_open" else C[k]
+            traded += fill(k, np.where(no_trade[k], np.nan, px_row), pending)
             pending = []
         # 4. mark to market
         row = C[k]
@@ -490,6 +511,13 @@ def run_backtest(
         prices = {s: float(last_px[col[s]]) for s in ledger.positions}
         mv = ledger.market_value(prices)
         equity = ledger.cash + mv
+        stale_held = [s for s in ledger.positions if not traded_bar[k, col[s]]]
+        stale_position_days += len(stale_held)
+        zero_volume_position_days += sum(bool(no_trade[k, col[s]]) for s in stale_held)
+        final_share = None
+        if ledger.positions and equity > 0:
+            final_share = sum(ledger.positions[s] * prices[s] for s in stale_held) / equity
+            stale_share = final_share if stale_share is None else max(stale_share, final_share)
         records.append(
             {
                 "date": d,
@@ -539,11 +567,12 @@ def run_backtest(
 
     # A held security the master delists on or after the last session never reaches its
     # delisting inside the window. If it traded on the last session its mark is a real
-    # close (a study ending before its data does); if not, it is a stale mark frozen at an
-    # earlier close, which overstates a failing security. Only the stale case is a concern.
+    # close (a study ending before its data does); if not (no bar, or a zero-volume one), it
+    # is a stale mark frozen at an earlier close, which overstates a failing security. Only
+    # the stale case is a concern.
     for sym, (when, _) in delist_at.items():
         if when >= dates[-1] and abs(ledger.quantity(sym)) > 1e-12:
-            stale = not has_bar[-1, col[sym]]
+            stale = not traded_bar[-1, col[sym]]
             delist_counts["after_window" if stale else "after_window_current"] += 1
     ledger.check_invariants()
     eq = pd.DataFrame(records).set_index("date")
@@ -566,6 +595,13 @@ def run_backtest(
         b_ret.iloc[0] = 0.0
         bench_series = config.initial_capital * (1 + b_ret).cumprod()
         bench_series.name = bench
+    stale_undefined: dict[str, str] = {}
+    if stale_share is None:
+        stale_undefined["max_equity_share"] = "nothing was held on a day with positive equity"
+    if final_share is None:
+        stale_undefined["final_equity_share"] = (
+            "nothing was held on the last session with positive equity"
+        )
     result = BacktestResult(
         config=config,
         strategy=strategy.describe(),
@@ -584,6 +620,28 @@ def run_backtest(
             "not_listed_in_window": not_listed,
             "corporate_actions": action_counts,
             "delistings": delist_counts,
+            # Universe bars in the window printed with zero volume: not tradable (#149).
+            "zero_volume_bars": int(no_trade[start_pos:].sum()),
+            # Orders rejected because their fill bar printed zero volume.
+            "no_volume_rejections": sum(r["reason"] == "no_volume" for r in rejects),
+            # Universe symbols with bars in the window, and those whose bars there all have
+            # zero volume: the backtest could never trade them (a CSV uploaded with volume
+            # 0, say).
+            "symbols_with_bars": int(has_bar[start_pos:].any(axis=0).sum()),
+            "never_traded": [
+                s
+                for j, s in enumerate(universe)
+                if has_bar[start_pos:, j].any() and not traded_bar[start_pos:, j].any()
+            ],
+            # The cost of keeping stale-marked holdings (#149 review): equity marked at a
+            # zero-volume close, or at the last close across a missing bar, is not realisable.
+            "stale_marks": {
+                "position_days": stale_position_days,
+                "zero_volume_position_days": zero_volume_position_days,
+                "max_equity_share": stale_share,
+                "final_equity_share": final_share,
+                "undefined": stale_undefined,
+            },
             "instrument_master_unmatched": master_unmatched,
             "instrument_master": instruments is not None and len(instruments) > 0,
             "first_session": str(trade_dates[0].date()),
