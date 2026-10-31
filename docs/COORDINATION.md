@@ -75,6 +75,7 @@ Alembic revisions form one linear chain, so only one migration may be in flight 
 | M2 | Agent 3 | #9 part C, revision `9a4c6e2f1b37` → `7c3e5a1d9b20` | **merged** (#62, `925cc1c`) |
 | M3 | Agent 3 | #66 revision `b5e1d7c3a924` → `9a4c6e2f1b37`: instruments key `(dataset_version_id, symbol, instrument_id)` `NULLS NOT DISTINCT` | **merged** (#87, `52508ed`) |
 | M4 | Agent 2 | #123 revision `4d2b8e6f0c15` → `b5e1d7c3a924`: nullable `jobs.not_before` | **merged** (#129, `db005e4`) |
+| M5 | Agent 2 | #167 revision `18869f6a1dae` → `4d2b8e6f0c15`: nullable `jobs.attempt_started_at` | in review (#171) |
 
 Rules: request the slot on the issue before running `alembic revision`; set `down_revision`
 to the current head on `main` at the time; include a working `downgrade`; the migration
@@ -93,6 +94,35 @@ Each agent works only in its own worktree, branch and Compose project. Slots are
 | Agent 2 | `.claude/worktrees/agent-2-security` | 21 | 20420 / 20421 / 20423 / 20424 |
 | Agent 3 | `.claude/worktrees/agent-3-data` | 31 | 20620 / 20621 / 20623 / 20624 |
 | Lead verification | `.claude/worktrees/lead-verify` | 85 | 21700 / 21701 / 21703 / 21704 |
+| Lead trial | `.claude/worktrees/lead-trial` | 86 | from `scripts/stack-env.sh` |
+| Lead docs | `.claude/worktrees/lead-docs` | 87 | from `scripts/stack-env.sh` |
+| RC assessor (fresh clone) | scratchpad clone | 88 | from `scripts/stack-env.sh` |
+
+**Use `make`, or load `scripts/stack-env.sh`, for every compose command.** The Compose
+project name (`COMPOSE_PROJECT_NAME`) comes only from `scripts/stack-env.sh`, which the
+Makefile loads. A bare `docker compose ...`, or `scripts/fullstack-lock.sh` run with only
+`QUANTLAB_SLOT` set, falls back to the project `quantlab`: that is the **main checkout's**
+stack, ports and named volumes. Use `QUANTLAB_SLOT=n make up|app-up|down`, or
+`eval "$(scripts/stack-env.sh | sed 's/^/export /')"` first, and check
+`echo $COMPOSE_PROJECT_NAME` before any `down`.
+
+**Incident (2026-10-31): E2E data written into the main checkout's volumes.** Two of Agent
+2's targeted E2E runs (for #144 and #151) used a wrapper that set `QUANTLAB_SLOT=21` but
+didn't load `scripts/stack-env.sh`. So they ran as project `quantlab`, on ports
+3000/8000 and the main checkout's named volumes `quantlab_pgdata`, `quantlab_appdata`
+and `quantlab_redisdata` (created 2026-10-30).
+* **What was written:** E2E test accounts (`e2e-*`, `errors-*`, `ml-panel-*`), synthetic
+  datasets, one experiment and one ML run.
+* **Schema:** Alembic ran `upgrade head` from branches based on main, so there is no
+  schema beyond main.
+* **Nothing else touched:** no main-checkout containers were running at either time, so
+  `down` stopped nothing of anyone's. The results of those runs stand, and the full
+  `make e2e-serial` trials ran on lead slots.
+* **Fix:** Agent 2's wrapper now loads stack-env and refuses any other project name.
+* **User decision (2026-10-31):** leave all of this data and every volume **untouched**:
+  no reset, no row deletion, no file removal. A precise cleanup may be evaluated later,
+  after the affected records are identified and a verified backup exists. It needs the
+  user's separate explicit approval.
 
 Export `QUANTLAB_SLOT` in every shell (`export QUANTLAB_SLOT=21`), then use `make up`,
 `make test`, `make app-up`, `make e2e` as usual. Integration tests use a per-worktree test
@@ -102,10 +132,12 @@ database.
 stack peaks around 1.7 GB, and three full stacks at once caused API OOM kills
 (2026-10-30). Rules:
 * For pytest, run `make up` (Postgres + Redis only, under 100 MB).
-* Full-stack runs are **serialized machine-wide**. Use `make e2e-serial`: it takes the
-  lock in `scripts/fullstack-lock.sh` (shared by every worktree through git's common
-  directory), runs `app-up` with `QUANTLAB_API_WORKERS=2`, Playwright with one worker
-  (`E2E_WORKERS=n` to override), then `down`. `scripts/fullstack-lock.sh status` shows
+* Full-stack runs are **serialized**. Use `make e2e-serial`: it takes the lock in
+  `scripts/fullstack-lock.sh`, which every worktree of this repository shares through
+  git's common directory. A separate clone has its own lock, so stop its stacks first. It runs `app-up` with `QUANTLAB_API_WORKERS=2`, Playwright with one worker
+  (`E2E_WORKERS=n` to override), then `down`. Memory sweeps and probes that start an app stack
+  go through `scripts/fullstack-lock.sh run ...` as well. The host has 8 GB of RAM, and
+  on 2026-10-31 two concurrent stacks took it to critically low memory. `scripts/fullstack-lock.sh status` shows
   the holder. A manual `make app-up` must be wrapped in
   `scripts/fullstack-lock.sh run ...` too.
 * Playwright defaults to one worker. With 4 parallel spec files, each registration's
@@ -113,8 +145,9 @@ stack peaks around 1.7 GB, and three full stacks at once caused API OOM kills
   and registrations took 25 s.
 * An E2E failure is a regression only if the API wasn't OOM-killed
   (`docker inspect <api> --format '{{.State.OOMKilled}}'`), it reproduces with the failing
-  spec run alone, and the report includes `uptime` load. **CI does not run Playwright
-  (#17)**, so green CI is not E2E evidence.
+  spec run alone, and the report includes `uptime` load. Playwright runs in Actions on
+  relevant PRs (#159), on a clean runner. Green CI is evidence there, but it doesn't
+  replace the local serial run when a local failure might be a regression.
 * Integration tests **fail** when Postgres is unreachable. `make e2e-serial` and `make down`
   stop the project's Postgres too, so run `make up` again before pytest.
   `QUANTLAB_ALLOW_SKIP_INTEGRATION=1` skips them explicitly (unit-only runs).
