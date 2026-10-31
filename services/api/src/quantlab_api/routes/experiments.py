@@ -145,6 +145,7 @@ def create_experiment(
         config=cfg_doc,
         input_hash=input_hash(dv.version_hash, key, params, cfg_doc),
         code_version=get_settings().git_sha,
+        # The version input_hash uses; a worker on another engine refuses the run (#152).
         engine_version=ENGINE_VERSION,
         parent_id=parent_id,
         notes=body.notes,

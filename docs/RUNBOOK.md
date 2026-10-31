@@ -97,6 +97,13 @@ M" and must be resubmitted. A resubmission is a new run, and only a reused
 check, workers older than it do not know the stamped `pipeline_version` field, so they
 fail such runs with a config validation error instead. Resubmit those the same way.
 
+Backtests work the same way (#152): an experiment records the `ENGINE_VERSION` its input
+hash was computed with, and a worker on another engine fails it permanently with "this
+backtest was submitted for engine version N, but this worker runs version M". Resubmit
+it, or use Reproduce. A replayed `Idempotency-Key` returns the failed job. Workers older
+than this check do not refuse, so during the deploy that introduces it a run can still
+be computed on a different engine than it is stored under.
+
 ### 429 `too_many_jobs` on submissions
 Queued plus running jobs are capped per workspace (`QUANTLAB_MAX_ACTIVE_JOBS_PER_WORKSPACE`,
 default 50) and per account across all its workspaces. The account cap is

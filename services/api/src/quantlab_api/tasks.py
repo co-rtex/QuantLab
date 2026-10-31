@@ -14,7 +14,7 @@ from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session
 
 from quantlab.analytics.summary import analyze_backtest
-from quantlab.backtest.engine import BacktestConfig, BacktestResult, run_backtest
+from quantlab.backtest.engine import ENGINE_VERSION, BacktestConfig, BacktestResult, run_backtest
 from quantlab.data.identity import (
     display_frame,
     is_legacy,
@@ -555,6 +555,16 @@ def backtest_task(ctx: JobContext) -> Finalizer:
         exp = db.get(Experiment, exp_id)
         if exp is None:
             raise PermanentJobError("experiment not found")
+        # The API stamps the engine version it hashed with (engine_version, part of the
+        # input hash). A worker running another engine refuses, so a stored input hash
+        # always names the engine that computed the result (#152, as #143 for ML). An
+        # unstamped row (no version recorded) still runs.
+        if exp.engine_version and exp.engine_version != ENGINE_VERSION:
+            raise PermanentJobError(
+                f"this backtest was submitted for engine version {exp.engine_version}, but "
+                f"this worker runs version {ENGINE_VERSION}; submit it again so its input "
+                "hash matches the engine that computes it"
+            )
         ctx.heartbeat(0.02, "loading dataset", force=True)
         inputs = load_experiment_inputs(db, exp)
         db.expunge(exp)
