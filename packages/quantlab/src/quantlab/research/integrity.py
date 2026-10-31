@@ -165,6 +165,57 @@ def build_integrity_report(ev: dict[str, Any]) -> dict[str, Any]:
             )
         )
 
+    # 3b. how held delistings were priced (engine meta.delistings; absent before #9)
+    exits = _get(analysis, "meta", "delistings")
+    if isinstance(exits, dict):
+        optimistic = int(exits.get("return_unknown", 0)) + int(exits.get("by_missing_bars", 0))
+        unapplied = int(exits.get("after_window", 0))
+        assumed = int(exits.get("with_fallback_return", 0))
+        priced = int(exits.get("with_return", 0))
+        evidence = {k: int(v) for k, v in exits.items()}
+        if optimistic or unapplied:
+            parts = []
+            if optimistic:
+                parts.append(
+                    f"{optimistic} held delisting(s) exited at the last close because no "
+                    "delisting return was known, which overstates returns for failures"
+                )
+            if unapplied:
+                parts.append(
+                    f"{unapplied} held position(s) delist after the backtest window and stay "
+                    "marked at their last close"
+                )
+            checks.append(
+                Check(
+                    "delisting_exits",
+                    "Delisting returns",
+                    "warning",
+                    "; ".join(parts) + ".",
+                    evidence,
+                )
+            )
+        elif priced or assumed:
+            checks.append(
+                Check(
+                    "delisting_exits",
+                    "Delisting returns",
+                    "verified",
+                    f"{priced} held delisting(s) priced with known delisting returns"
+                    + (f" and {assumed} with the assumed performance return." if assumed else "."),
+                    evidence,
+                )
+            )
+        else:
+            checks.append(
+                Check(
+                    "delisting_exits",
+                    "Delisting returns",
+                    "verified",
+                    "No held position delisted during the backtest.",
+                    evidence,
+                )
+            )
+
     # 4. execution timing
     checks.append(
         Check(

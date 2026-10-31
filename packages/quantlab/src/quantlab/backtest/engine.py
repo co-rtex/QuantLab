@@ -42,7 +42,7 @@ import pandas as pd
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from quantlab.data.adjust import PointInTimeAdjuster, total_returns
-from quantlab.data.identity import normalize_master
+from quantlab.data.identity import PERFORMANCE_REASONS, normalize_master
 from quantlab.data.schema import wide
 from quantlab.portfolio.ledger import Ledger, LedgerError
 from quantlab.strategies.base import MarketView, Strategy
@@ -69,6 +69,10 @@ class BacktestConfig(BaseModel):
     benchmark: str | None = None
     risk_free_rate: float = Field(0.0, ge=-0.05, le=0.25)
     delist_after_missing: int = Field(5, ge=1, le=63)
+    # Return assumed for a performance delisting (bankruptcy, liquidation, noncompliance)
+    # whose delisting return is unknown; None keeps the optimistic last-close exit. Shumway
+    # (1997) estimates about -0.30 for NYSE/AMEX performance delistings.
+    performance_delisting_return: float | None = Field(None, ge=-1.0, le=0.0)
 
     @model_validator(mode="after")
     def _dates(self) -> BacktestConfig:
@@ -188,6 +192,7 @@ def run_backtest(
     # date is public on the day, so acting on the next session uses no future data. The
     # return (final value vs last close) is booked at that point, as is standard.
     delist_at: dict[str, tuple[pd.Timestamp, float]] = {}
+    fallback: set[str] = set()  # delistings priced with performance_delisting_return
     master_unmatched = 0
     if instruments is not None and len(instruments):
         master = normalize_master(instruments).set_index("instrument_id")
@@ -195,10 +200,15 @@ def run_backtest(
         for sym in universe:
             if sym in master.index and pd.notna(master.at[sym, "delisting_date"]):
                 ret = master.at[sym, "delisting_return"]
-                delist_at[sym] = (
-                    pd.Timestamp(master.at[sym, "delisting_date"]),
-                    float(ret) if pd.notna(ret) else math.nan,
-                )
+                value = float(ret) if pd.notna(ret) else math.nan
+                if (
+                    math.isnan(value)
+                    and config.performance_delisting_return is not None
+                    and master.at[sym, "delisting_reason"] in PERFORMANCE_REASONS
+                ):
+                    value = config.performance_delisting_return
+                    fallback.add(sym)
+                delist_at[sym] = (pd.Timestamp(master.at[sym, "delisting_date"]), value)
     if delist_at:
         # A delisting return already includes distributions after the delisting (CRSP
         # DLRET), so actions dated after a security's delisting date are not applied.
@@ -228,7 +238,13 @@ def run_backtest(
         .to_numpy()
     )
     delisted: set[str] = set()
-    delist_counts = {"with_return": 0, "return_unknown": 0, "by_missing_bars": 0}
+    delist_counts = {
+        "with_return": 0,
+        "with_fallback_return": 0,
+        "return_unknown": 0,
+        "by_missing_bars": 0,
+        "after_window": 0,
+    }
     placement = adjuster.placed["placement"].value_counts()
     action_counts = {
         "on_ex_date": int(placement.get("ex_date", 0)),
@@ -410,13 +426,17 @@ def run_backtest(
                 continue
             has_ret = math.isfinite(ret)
             value = last_px[j] * (1 + ret) if has_ret else last_px[j]
-            note = (
-                f"delisting return applied ({ret:+.2%})"
-                if has_ret
-                else "delisting return unknown: liquidated at last close"
-            )
+            if sym in fallback:
+                note = f"delisting return unknown: assumed performance return applied ({ret:+.2%})"
+            elif has_ret:
+                note = f"delisting return applied ({ret:+.2%})"
+            else:
+                note = "delisting return unknown: liquidated at last close"
             ledger.delist(d, sym, max(value, 0.0), note=note)
-            delist_counts["with_return" if has_ret else "return_unknown"] += 1
+            if sym in fallback:
+                delist_counts["with_fallback_return"] += 1
+            else:
+                delist_counts["with_return" if has_ret else "return_unknown"] += 1
             trades.append(
                 {
                     "date": d,
@@ -516,6 +536,11 @@ def run_backtest(
         if on_progress is not None and (step % 25 == 0 or step == n_steps - 1):
             on_progress((step + 1) / n_steps)
 
+    # A held security the master delists on or after the last session never reaches its
+    # delisting inside the window: it stays marked at its last close.
+    for sym, (when, _) in delist_at.items():
+        if when >= dates[-1] and abs(ledger.quantity(sym)) > 1e-12:
+            delist_counts["after_window"] += 1
     ledger.check_invariants()
     eq = pd.DataFrame(records).set_index("date")
     eq["gross_equity"] = eq["equity"] + eq["cum_commission"] + eq["cum_slippage"]

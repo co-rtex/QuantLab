@@ -162,7 +162,20 @@ Per session `k`:
    0), or at its last close when the return is unknown. From its delisting date it is not
    offered to the strategy, and corporate actions dated after it are not applied (the
    delisting return includes post-delisting distributions). A halt before the delisting
-   does not trigger the missing-bars rule for a security the master delists.
+   does not trigger the missing-bars rule for a security the master delists. This is
+   CRSP's convention, and realistic: a halted stock cannot be sold. It does mean the
+   engine's handling during a halt depends on the later delisting, so positions and
+   cash during the halt differ from a run without a master (pinned in
+   `tests/unit/test_delisting_returns.py`). Decisions before the halt begins are
+   identical. A delisting dated on or after the last session of the window is not
+   applied: the position stays marked at its last close, and
+   `meta.delistings.after_window` counts it. `BacktestConfig.performance_delisting_return`
+   (default off) prices a performance delisting (bankruptcy, liquidation, noncompliance)
+   whose return is unknown, for example at Shumway's (1997) -30% instead of the
+   optimistic last close; `meta.delistings.with_fallback_return` counts those. Delisting
+   fills are recorded as sells and count toward turnover, like the missing-bars rule.
+   The integrity report's `delisting_exits` check warns when held delistings exited
+   at the last close without a known return, or delist after the window.
    The delisting date is public on the day, so acting on the next session uses no
    future data; the delisting return (final value relative to the last close, as in
    CRSP's DLRET) is booked at that point, which is standard practice even though the

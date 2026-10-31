@@ -81,7 +81,13 @@ def test_without_a_master_the_last_close_rule_is_unchanged():
     liq = res.trades[res.trades["note"] == "delisting"].iloc[0]
     assert liq["date"] == d[7] and liq["price"] == 5.0  # after 3 missing sessions
     assert res.equity["equity"].iloc[-1] == pytest.approx(750)
-    assert res.meta["delistings"] == {"with_return": 0, "return_unknown": 0, "by_missing_bars": 1}
+    assert res.meta["delistings"] == {
+        "with_return": 0,
+        "with_fallback_return": 0,
+        "return_unknown": 0,
+        "by_missing_bars": 1,
+        "after_window": 0,
+    }
 
 
 def test_master_counts_are_reported():
@@ -89,7 +95,13 @@ def test_master_counts_are_reported():
     res = run_backtest(
         bars, NONE, create_strategy("equal_weight"), cfg, instruments=_master(d, -0.3)
     )
-    assert res.meta["delistings"] == {"with_return": 1, "return_unknown": 0, "by_missing_bars": 0}
+    assert res.meta["delistings"] == {
+        "with_return": 1,
+        "with_fallback_return": 0,
+        "return_unknown": 0,
+        "by_missing_bars": 0,
+        "after_window": 0,
+    }
 
 
 def test_decisions_before_the_delisting_do_not_depend_on_the_master():
@@ -203,7 +215,13 @@ def test_a_halt_before_the_delisting_keeps_the_delisting_return():
     assert res.equity["equity"].iloc[-1] == pytest.approx(500 + 50 * 5.0 * 0.1)
     liq = res.trades[res.trades["note"].fillna("").str.startswith("delisting")].iloc[0]
     assert liq["date"] == d[11]
-    assert res.meta["delistings"] == {"with_return": 1, "return_unknown": 0, "by_missing_bars": 0}
+    assert res.meta["delistings"] == {
+        "with_return": 1,
+        "with_fallback_return": 0,
+        "return_unknown": 0,
+        "by_missing_bars": 0,
+        "after_window": 0,
+    }
 
 
 def test_a_delisted_security_is_not_offered_to_the_strategy():
@@ -292,3 +310,98 @@ def test_ml_label_books_the_return_only_once_it_is_public():
     when = merged["symbol"].map(gone.set_index("instrument_id")["delisting_date"])
     # Every label that includes the return becomes available after the delisting date.
     assert (merged.loc[changed, "label_available_at_r"] > when[changed]).all()
+
+
+# --------------------------------------------------------- follow-ups from #49 (#59)
+def test_a_halt_that_ends_in_delisting_is_held_not_sold():
+    """CRSP convention: a halted security that the master later delists is held until the
+    delisting (a halted stock cannot be sold). The no-master run instead liquidates it at
+    the stale last close after `delist_after_missing` sessions, so positions and cash
+    differ during the halt; decisions before the halt begins are identical."""
+    bars, d, cfg = _case()  # B's last bar is d[4]
+    master = _master(d, -0.9).assign(
+        delisting_date=lambda m: m["delisting_date"].where(m["instrument_id"] != "B", d[10])
+    )
+    held = run_backtest(bars, NONE, create_strategy("equal_weight"), cfg, instruments=master)
+    sold = run_backtest(bars, NONE, create_strategy("equal_weight"), cfg)
+    pos = lambda r, day: r.positions[(r.positions["date"] == day) & (r.positions["symbol"] == "B")]  # noqa: E731
+    assert len(pos(sold, d[7])) == 0  # sold at the stale last close after 3 missing sessions
+    assert pos(held, d[7])["quantity"].iloc[0] == pytest.approx(50)  # still held in the halt
+    assert held.equity["cash"].loc[d[7]] < sold.equity["cash"].loc[d[7]]
+    early = [r.weights_target[r.weights_target["date"] <= d[4]] for r in (held, sold)]
+    pd.testing.assert_frame_equal(early[0].reset_index(drop=True), early[1].reset_index(drop=True))
+
+
+def test_a_delisting_after_the_window_is_counted_not_silent():
+    bars, d, cfg = _case()
+    master = _master(d, -0.5).assign(
+        delisting_date=lambda m: m["delisting_date"].where(
+            m["instrument_id"] != "B", d[-1] + pd.Timedelta(days=30)
+        )
+    )
+    long_halt = cfg.model_copy(update={"delist_after_missing": 63})
+    res = run_backtest(bars, NONE, create_strategy("equal_weight"), long_halt, instruments=master)
+    assert res.meta["delistings"]["after_window"] == 1
+    assert res.equity["equity"].iloc[-1] == pytest.approx(500 + 50 * 5.0)  # frozen, unapplied
+
+
+def test_malformed_delisting_returns_raise():
+    from quantlab.data.identity import IdentityError
+
+    with pytest.raises(IdentityError, match="not a number"):
+        normalize_master(
+            pd.DataFrame(
+                [{"instrument_id": "B", "delisting_date": "2024-01-08", "delisting_return": "-30%"}]
+            )
+        )
+
+
+@pytest.mark.parametrize(
+    ("reason", "proceeds", "count"),
+    [
+        ("bankruptcy", 50 * 5.0 * 0.7, "with_fallback_return"),  # assumed -30%
+        ("merger", 50 * 5.0, "return_unknown"),  # not a performance delisting: unchanged
+    ],
+)
+def test_performance_delisting_fallback(reason, proceeds, count):
+    bars, d, cfg = _case()
+    master = _master(d, np.nan).assign(
+        delisting_reason=lambda m: m["delisting_reason"].where(m["instrument_id"] != "B", reason)
+    )
+    cfg = cfg.model_copy(update={"performance_delisting_return": -0.3})
+    res = run_backtest(bars, NONE, create_strategy("equal_weight"), cfg, instruments=master)
+    assert res.equity["equity"].iloc[-1] == pytest.approx(500 + proceeds)
+    assert res.meta["delistings"][count] == 1
+    if reason == "bankruptcy":
+        note = res.trades[res.trades["note"].fillna("").str.startswith("delisting")].iloc[0]["note"]
+        assert "assumed" in note
+
+
+def test_integrity_report_surfaces_how_delistings_were_priced():
+    from quantlab.research.integrity import build_integrity_report
+
+    def check(delistings):
+        ev = {
+            "experiment": {"config": {"commission_bps": 1, "slippage_bps": 5}},
+            "dataset": {"provenance": {"provider": "csv"}, "quality_status": "pass"},
+            "analysis": {"meta": {"universe": ["A"], "delistings": delistings}},
+        }
+        rep = build_integrity_report(ev)
+        return {c["key"]: c for c in rep["checks"]}.get("delisting_exits")
+
+    base = {
+        "with_return": 0,
+        "with_fallback_return": 0,
+        "return_unknown": 0,
+        "by_missing_bars": 0,
+        "after_window": 0,
+    }
+    assert check({**base, "return_unknown": 2})["status"] == "warning"
+    assert check({**base, "by_missing_bars": 1})["status"] == "warning"
+    assert "after the backtest window" in check({**base, "after_window": 1})["finding"]
+    assert check({**base, "with_return": 3})["status"] == "verified"
+    assert "assumed" in check({**base, "with_fallback_return": 1})["finding"]
+    assert check(base)["status"] == "verified"
+    # Analyses written before delisting counts existed get no such check.
+    ev = {"experiment": {"config": {}}, "dataset": {}, "analysis": {"meta": {"universe": ["A"]}}}
+    assert "delisting_exits" not in {c["key"] for c in build_integrity_report(ev)["checks"]}
