@@ -82,6 +82,8 @@ async function forward(req: NextRequest, ctx: { params: Promise<{ path: string[]
       body,
       // Required by Node's fetch to send a stream body.
       duplex: "half",
+      // A client that disconnects aborts the API request too, instead of leaving it running.
+      signal: req.signal,
       cache: "no-store",
       redirect: "manual",
     } as RequestInit & { duplex: "half" });

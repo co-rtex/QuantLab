@@ -101,7 +101,43 @@ deployment"): the edge, `infra/edge/verify.sh` passing, and a Docker host that p
 client source addresses. Docker Desktop, rootless Docker and docker-proxy replace them with
 a gateway address. The remote probe in `verify.sh` checks this. IPv6 clients are throttled
 per /64. Without the edge, development has no
-per-address login throttling, which is acceptable only on 127.0.0.1. A client can still delay one account's
-login by spending its failure budget (30 per minute). It needs only about three real
-addresses to do so, because each address allows 10 attempts a minute. Addresses can no
-longer be forged. Per-device login credentials would fix this; that is future work.
+per-address login throttling, which is acceptable only on 127.0.0.1.
+**Amendment (2026-10-31, #55): device cookies.** About three real addresses could spend an
+account's failure budget (30 per minute) and hold its owner at 429. A browser that signs in
+successfully now receives a device cookie. A later login that presents a valid one for the
+submitted email is throttled per device (10 failures an hour) instead of by the account
+budget, so the owner's own browsers keep working during such an attack.
+* The cookie selects a throttling budget only; it never authenticates.
+* It is stateless and signed with HMAC-SHA256 under a key derived from the JWT secret by
+  HKDF with its own context label, never the raw JWT key. It binds a hash of the
+  normalized email, the issue time and the account's token version, and holds a random
+  device id. Validation is constant-time; the maximum age is 90 days; logging out
+  everywhere (a token version bump) revokes every device cookie.
+* Attributes: HttpOnly, SameSite=Strict, Path=/api/v1/auth, Secure with the `__Secure-`
+  name prefix over TLS. Not `__Host-`, which requires Path=/.
+* After 10 failures in an hour a device loses its exemption and falls back to the account
+  budget. Without a valid cookie for that email nothing changes.
+There is one device cookie per browser: signing in to account B replaces it, so that
+browser loses its exemption for account A until it signs in to A again.
+Residual: a victim's *new* device can still be held at 429 by a distributed attacker.
+A progressive delay instead of a hard lock was rejected: an attacker can hold the delay at
+its maximum, and slow responses tie up workers.
+
+## ADR-0010 Registration reveals whether an email has an account (accepted risk, for now)
+
+**Context.** `POST /auth/register` answers 409 `email_taken` for an existing address, so it
+tells anyone whether an address has an account. Login (dummy Argon2 hash) and invitations
+(#5) do not. The standard fix is a uniform "check your email" response with email
+verification, and that needs a way to deliver mail.
+**Decision (2026-10-31, #55).** Keep the 409 for now (option B). Revisit with option A,
+uniform registration plus email verification through the `Notifier` interface, once a real
+email adapter exists; the lead takes A to the user as a product decision.
+**Why.** Without a mail adapter, option A has no production delivery path: it needs a
+development-only token outbox, the kind of plaintext store removed from #37. It would also
+change every sign-up flow and test.
+**Bounds of the accepted risk.** Behind the TLS edge, registrations are limited to 10 per
+minute per real client address (IPv6 per /64), and production refuses registrations
+without a known client address (ADR-0008, #39). The bound is per address, not global: an
+attacker with N addresses probes about 10·N addresses a minute, and a single IPv6 /48
+holds 65,536 /64 buckets. Each probe that finds a free address creates an account, which
+is visible in the audit log (`user.register`).

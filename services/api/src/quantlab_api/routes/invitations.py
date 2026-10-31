@@ -7,7 +7,7 @@
 from __future__ import annotations
 
 import uuid
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 from fastapi import APIRouter, Request, Response
 from sqlalchemy import delete, func, or_, select, update
@@ -38,6 +38,9 @@ from quantlab_api.security import DB, CurrentUser, audit, login_limiter, require
 
 owner_router = APIRouter(tags=["invitations"])
 invitee_router = APIRouter(prefix="/invitations", tags=["invitations"])
+
+# How long expired invitations are kept (answering 410) before they are purged.
+EXPIRED_KEPT_FOR = timedelta(days=30)
 
 NOT_FOUND = "This invitation is invalid, has expired, or is addressed to another account"
 
@@ -82,11 +85,13 @@ def create_invitation(
     if inviter is None or inviter.role != Role.owner:
         raise ApiError(403, "forbidden", "Requires owner role")
     # Expired invitations can never be answered; drop them rather than keep them forever.
+    # Only after a grace period, so a recently expired link still answers "expired" (410)
+    # rather than "not found" (#64 review).
     db.execute(
         delete(Invitation).where(
             Invitation.workspace_id == workspace_id,
             Invitation.status == "pending",
-            Invitation.expires_at <= now,
+            Invitation.expires_at <= now - EXPIRED_KEPT_FOR,
         )
     )
     db.execute(
@@ -243,6 +248,8 @@ def _require_inviter_still_owner(
     no longer a member) it is withdrawn. ``locked`` holds the inviter's row, locked, so a
     concurrent demotion or removal finishes first and is seen."""
     inviter = locked.get(i.invited_by) if i.invited_by is not None else None
+    if inviter is None and db.get(Workspace, i.workspace_id) is None:
+        raise ApiError(404, "invitation_not_found", NOT_FOUND)  # deleted with its workspace
     if inviter is None or inviter.role != Role.owner:
         db.execute(
             update(Invitation)
@@ -286,9 +293,16 @@ def _respond(db: Session, i: Invitation, user: User, status: str) -> None:
         .values(status=status, responded_at=now, responded_by=user.id)
     ).rowcount  # type: ignore[attr-defined]
     if not done:
+        inv_id, ws_id = i.id, i.workspace_id  # read before rollback expires the object
         db.rollback()
-        db.refresh(i)
-        _require_pending(i)
+        fresh = db.get(Invitation, inv_id, populate_existing=True)
+        if fresh is None:
+            # The row is gone. With its workspace: deleted with it, so not found. Otherwise
+            # the purge of long-expired invitations removed it: answer as expired, not 500.
+            if db.get(Workspace, ws_id) is None:
+                raise ApiError(404, "invitation_not_found", NOT_FOUND)
+            raise ApiError(410, "invitation_expired", "This invitation has expired")
+        _require_pending(fresh)
         raise ApiError(409, "invitation_used", "This invitation was already answered")
 
 

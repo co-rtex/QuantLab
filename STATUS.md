@@ -1,6 +1,6 @@
 # Status (authoritative handoff)
 
-_Last updated: 2026-10-31 (lead integration cycle 2: 26 PRs merged; main `ba13ddb`)_
+_Last updated: 2026-10-31 (lead integration cycle 2: 32 PRs merged before this update, per `gh pr list --state merged`; main `77f8650`)_
 
 ## Where things stand
 All roadmap phases 0–10 are implemented. An independent audit on 2026-10-30
@@ -82,10 +82,19 @@ leases and migration slots: [docs/COORDINATION.md](docs/COORDINATION.md).
     * report CSP `sandbox`;
     * expired invitations purged.
   * #65 uploads recheck `is_active`/`token_version` after the body is read (#8 C).
+  * #62 jobs keyed by permanent instrument id (#9 part C).
+    * M2 migration `9a4c6e2f1b37`; engine 1.3.0; read-only reconciliation API.
+    * Merged after two lead conditions: ML excluding the benchmark index, and no
+      today's-ticker bias. **#9 complete.**
+  * #69 device cookies against targeted lockout, plus ADR-0010 on registration
+    enumeration (#55).
+  * #70 #8 follow-ups.
+  * #71 (lead) integration tests use the worktree's own Postgres when
+    `QUANTLAB_PG_PORT` isn't exported.
 * Every merge had an independent read-only lead review: no blockers. Should-fix items are
   tracked in #8, #51, #52 and #55 (Agent 2), #39 (gate), and #41, #50 and #54 (Agent 3).
 
-## Last verified (2026-10-31, main `ba13ddb`)
+## Last verified (2026-10-31, main `77f8650`)
 Each merge was verified on a trial merge with current main, with pytest output written to a
 file rather than piped:
 * #28, #32, #36, #29, #30, #31: tree identical to main afterwards; 314 passed;
@@ -110,6 +119,10 @@ file rather than piped:
   failing `a11y.spec` timed out at load 22, then passed alone under the lock in 49 s.
 * Lead rule after two contaminated runs: no full pytest on any slot while holding the
   full-stack lock.
+* #62 (`2047bed`) on main@36525d3, run sequentially: 544 passed; serial E2E 13/13 at load
+  about 6; migration round trip head → `7c3e5a1d9b20` → head clean, `alembic check` no drift.
+* main@925cc1c + #69 + #70 + #71 (byte-identical to main `77f8650`): **559 passed, exit 0**;
+  **serial E2E 13/13** (55 s, load about 7).
 
 CI is green on every merged head. CI doesn't run Playwright (#17).
 
@@ -121,15 +134,10 @@ E2E failures this cycle were resource starvation, not regressions:
 Full-stack runs are now serialized machine-wide (`make e2e-serial`).
 
 ## Next steps (issues carry owners and acceptance criteria)
-1. **Agent 2:**
-   * #55: device cookies, plus documenting the registration 409. ADR approved.
-   * The #8 follow-up (dev-secret race, `os.link` fallback, `req.signal`, 410s).
-   * #8 PR B (`/ready`, after #62).
+1. **Agent 2:** #15 assistant verifier (the hosted eval is blocked on a key); #8 PR B
+   (`/ready`; `main.py` leased).
 2. **Agent 3:**
-   * **#62 (#9 part C): changes requested.**
-     * ML trains on the benchmark index, because `exclude` isn't resolved to ids.
-     * Today's-ticker bias for tickers a security is renamed into.
-   * #59 (delisting follow-ups);
+   * #67 (#59): two integrity-report merge conditions;
    * #66 (part C follow-ups);
    * #63;
    * #9 part C (M2 open; `tasks.py`, `models.py` and `schemas.py` leased; also #12's
@@ -143,8 +151,12 @@ Full-stack runs are now serialized machine-wide (`make e2e-serial`).
    * the rest of #22;
    * #25.
 4. **Unassigned:** #15, #18, #20, #21, #23, the benchmark half of #24.
-5. **User-only:** #39 host verification (Linux Docker Engine plus a second machine);
-   credentials for #11 (vendor), #15 (LLM key), #19 (cloud), #20 (load host).
+5. **User-only:**
+   * #39 host verification (Linux Docker Engine plus a second machine);
+   * credentials for #11 (vendor), #15 (LLM key), #19 (cloud), #20 (load host);
+   * the product decision on email verification for registration (#55 option A);
+   * whether to drop a stale `quantlab_test_<hash>` test database that an agent left on
+     the main checkout's Postgres.
 
 ## Blockers
 No LLM API key, market-data API key or cloud credentials (docs/BLOCKERS.md).

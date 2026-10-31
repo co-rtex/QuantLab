@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-import contextlib
+import fcntl
 import os
 import secrets
 from functools import lru_cache
@@ -20,9 +20,14 @@ def _shared_dev_secret(data_dir: Path) -> SecretStr:
 
     A random per-process key breaks as soon as the API runs more than one worker
     (``uvicorn --workers 4``): a token signed by one worker is rejected by the others, so
-    roughly three requests in four fail. The first process writes the key to a private
-    temporary file and links it into place (``os.link`` fails if the name exists), so no
-    process ever reads a half-written key; the others, and later restarts, read it.
+    roughly three requests in four fail. Processes take an exclusive lock on a separate
+    lock file, so exactly one of them creates (or repairs) the key while the others wait
+    and then read it. The key is written to a private temporary file and renamed into
+    place, so even a reader that ignores the lock never sees half a key.
+
+    The lock needs a filesystem with working ``flock``: some FUSE and SMB mounts lack it
+    (this then fails loudly), and NFS without coherent locking could still let processes
+    write different keys. Keep ``data_dir`` on a local disk or volume in development.
 
     The key lives in ``data_dir`` and so travels with its backups. Delete the file to rotate
     it (everyone is signed out). A file readable by others is refused, not repaired: the key
@@ -30,38 +35,44 @@ def _shared_dev_secret(data_dir: Path) -> SecretStr:
     """
     path = data_dir / DEV_SECRET_FILE
     path.parent.mkdir(parents=True, exist_ok=True)
-    for _ in range(5):
+    lock_fd = os.open(path.with_name(path.name + ".lock"), os.O_RDWR | os.O_CREAT, 0o600)
+    try:
+        fcntl.flock(lock_fd, fcntl.LOCK_EX)
         try:
             mode = path.stat().st_mode
         except FileNotFoundError:
-            _create_dev_secret(path)
-            continue
+            return SecretStr(_create_dev_secret(path))
         if mode & 0o077:
             raise RuntimeError(
                 f"{path} is readable by other users (mode {mode & 0o777:o}), so the signing "
                 "key may be known. Delete it to rotate the key (signs everyone out)."
             )
         value = path.read_text().strip()
-        if value:
-            return SecretStr(value)
-        # Only a crash in the old, non-atomic writer could leave an empty file.
-        path.unlink(missing_ok=True)
-    raise RuntimeError(f"could not create {path}")
+        # Only a crash in the old, non-atomic writer could leave an empty file. Under the
+        # lock, replacing it cannot race another process doing the same (#64 review).
+        return SecretStr(value or _create_dev_secret(path))
+    finally:
+        os.close(lock_fd)  # releases the lock
 
 
-def _create_dev_secret(path: Path) -> None:
+def _create_dev_secret(path: Path) -> str:
+    """Write a new key atomically (temporary file, fsync, rename). Call under the lock.
+
+    A rename, unlike a hard link, works on every filesystem (#64 review: os.link fails
+    with EPERM or ENOTSUP on some mounts).
+    """
+    value = secrets.token_urlsafe(48)
     tmp = path.with_name(f"{path.name}.{os.getpid()}.{secrets.token_hex(4)}.tmp")
     fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
     try:
         with os.fdopen(fd, "w") as f:
-            f.write(secrets.token_urlsafe(48))
+            f.write(value)
             f.flush()
             os.fsync(f.fileno())
-        # Atomic: fails if another process got there first, and then its key is used.
-        with contextlib.suppress(FileExistsError):
-            os.link(tmp, path)
+        os.replace(tmp, path)
     finally:
         tmp.unlink(missing_ok=True)
+    return value
 
 
 class Settings(BaseSettings):
