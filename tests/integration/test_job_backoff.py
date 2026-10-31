@@ -10,7 +10,7 @@ from datetime import timedelta
 
 import fakeredis
 import pytest
-from sqlalchemy import update
+from sqlalchemy import func, select, update
 
 from quantlab_api import jobs as J
 from quantlab_api.db import SessionLocal
@@ -50,12 +50,18 @@ def _set(jid, **values) -> None:
         db.commit()
 
 
+def _db_now():
+    """Deadlines are the database's time (#130), so tests set and compare them in it."""
+    with SessionLocal() as db:
+        return db.scalar(select(func.now()))
+
+
 def test_an_early_delivery_does_not_run_a_retry_and_a_due_one_does(flaky):
     jid = _make_job("t.backoff")
     assert J.execute_job(str(jid)) == "retry"
     job = _row(jid)
     assert job.status == JobStatus.queued
-    assert job.not_before is not None and job.not_before > J.now()
+    assert job.not_before is not None and job.not_before > _db_now()
     scheduled = len(J.get_queue().scheduled_job_registry)
 
     # Delivered before the backoff ends (twice): nothing runs, no attempt is spent...
@@ -67,7 +73,7 @@ def test_an_early_delivery_does_not_run_a_retry_and_a_due_one_does(flaky):
     assert len(J.get_queue().scheduled_job_registry) == scheduled + 1
 
     # Once due, the delivery claims it.
-    _set(jid, not_before=J.now() - timedelta(seconds=1))
+    _set(jid, not_before=func.now() - timedelta(seconds=1))
     assert J.execute_job(str(jid)) == "completed"
     job = _row(jid)
     assert (job.status, job.attempts, job.not_before) == (JobStatus.completed, 2, None)
@@ -75,11 +81,11 @@ def test_an_early_delivery_does_not_run_a_retry_and_a_due_one_does(flaky):
 
 def test_the_reaper_does_not_redeliver_a_retry_before_it_is_due(flaky):
     jid = _make_job("t.backoff")
-    long_ago = J.now() - timedelta(hours=1)
-    _set(jid, created_at=long_ago, heartbeat_at=None, not_before=J.now() + timedelta(minutes=5))
+    long_ago = func.now() - timedelta(hours=1)
+    _set(jid, created_at=long_ago, heartbeat_at=None, not_before=func.now() + timedelta(minutes=5))
     assert J.reap()["redelivered"] == 0
 
-    _set(jid, not_before=J.now() - timedelta(seconds=1))
+    _set(jid, not_before=func.now() - timedelta(seconds=1))
     assert J.reap()["redelivered"] == 1
 
 
@@ -93,7 +99,7 @@ def test_a_delayed_retry_can_still_be_cancelled_and_then_never_runs(flaky):
     assert _row(jid).status == JobStatus.cancelled
     # Its pending deliveries still arrive, before and after the due time: none runs it.
     assert J.execute_job(str(jid)) == "skipped"
-    _set(jid, not_before=J.now() - timedelta(seconds=1))
+    _set(jid, not_before=func.now() - timedelta(seconds=1))
     assert J.execute_job(str(jid)) == "skipped"
     assert _row(jid).status == JobStatus.cancelled
     assert flaky["n"] == 1
@@ -105,7 +111,7 @@ def test_a_job_whose_worker_was_lost_is_due_at_once(flaky):
     jid = _make_job("t.ok")
     claimed = J.claim(jid, "w1")
     assert claimed is not None and claimed.not_before is None
-    _set(jid, lease_expires_at=J.now() - timedelta(seconds=1))  # w1 stopped heartbeating
+    _set(jid, lease_expires_at=func.now() - timedelta(seconds=1))  # w1 stopped heartbeating
     assert J.reap()["requeued"] == 1
     job = _row(jid)
     assert (job.status, job.not_before) == (JobStatus.queued, None)
