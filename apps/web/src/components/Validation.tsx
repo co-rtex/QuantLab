@@ -3,9 +3,10 @@
 import { useState } from "react";
 import { Legend, SERIES } from "@/components/charts";
 import { ErrorNote, JobProgress, Panel, Pending, QueryError, StatusPill } from "@/components/ui";
-import { api, ApiError, newIdempotencyKey, type Job } from "@/lib/api";
+import { api, ApiError, cancelJob, newIdempotencyKey, type Job } from "@/lib/api";
 import { num, pct, signClass } from "@/lib/format";
 import { useApi } from "@/lib/useApi";
+import { useCanEdit } from "@/lib/workspace";
 import { CartesianGrid, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 
 interface Check {
@@ -111,6 +112,7 @@ function OosChart({ dates, equity }: { dates: string[]; equity: number[] }) {
 
 export function ValidationPanel({ experimentId, onComplete }: { experimentId: string; onComplete: (runId: string) => void }) {
   const [started, setStarted] = useState(0);
+  const canEdit = useCanEdit();
   const run = useApi<ValidationRun>(`/experiments/${experimentId}/validation?s=${started}`, {
     poll: (r) => {
       if (r && (r.status === "queued" || r.status === "running")) return 1500;
@@ -158,7 +160,20 @@ export function ValidationPanel({ experimentId, onComplete }: { experimentId: st
           regime breakdown and an empirical look-ahead check. Results feed the integrity report.
         </p>
       )}
-      {active && run.data?.job && <JobProgress job={run.data.job} />}
+      {active && run.data?.job && (
+        <JobProgress
+          job={run.data.job}
+          onCancel={
+            canEdit
+              ? async () => {
+                  setErr(undefined);
+                  await cancelJob(run.data!.job!.id).catch((e) => setErr(e as ApiError));
+                  run.reload();
+                }
+              : undefined
+          }
+        />
+      )}
       {r && (
         <div className="space-y-6">
           <section>
