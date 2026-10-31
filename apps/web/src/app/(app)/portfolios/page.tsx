@@ -4,7 +4,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useState, type FormEvent } from "react";
 import { PageHeader } from "@/components/Shell";
-import { ErrorNote, Panel } from "@/components/ui";
+import { ErrorNote, Panel, QueryError } from "@/components/ui";
 import { api, ApiError, type DatasetVersion, type Instrument, type Page } from "@/lib/api";
 import { dateTime, shortHash } from "@/lib/format";
 import { useApi } from "@/lib/useApi";
@@ -57,6 +57,7 @@ export default function PortfoliosPage() {
       <PageHeader title="Portfolios" lede="Record simulated trades and cash flows in an append-only ledger and value them against a dataset version, including dividends and splits." />
       <div className="grid gap-6 xl:grid-cols-[2fr_1fr]">
         <Panel title="Your portfolios">
+          <QueryError q={list} what="your portfolios" />
           {list.data?.length === 0 ? (
             <p className="text-sm text-ink-2">No portfolios yet. Create one to start recording trades.</p>
           ) : (
@@ -87,6 +88,8 @@ export default function PortfoliosPage() {
           )}
         </Panel>
         <Panel title="New portfolio">
+          <QueryError q={versions} what="dataset versions" />
+          <QueryError q={inst} what="benchmark instruments" />
           <form onSubmit={create} className="space-y-3 text-sm">
             <label className="block">
               <span className="mb-1 block">Name</span>

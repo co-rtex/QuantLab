@@ -3,7 +3,7 @@
 import { useState, type FormEvent } from "react";
 import { SERIES } from "@/components/charts";
 import { PageHeader } from "@/components/Shell";
-import { ErrorNote, Panel, SyntheticTag } from "@/components/ui";
+import { ErrorNote, Panel, QueryError, SyntheticTag } from "@/components/ui";
 import { api, ApiError, type DatasetVersion, type Instrument, type Page } from "@/lib/api";
 import { num, pct, shortHash } from "@/lib/format";
 import { useApi } from "@/lib/useApi";
@@ -87,6 +87,8 @@ export default function OptimizePage() {
       />
       <div className="grid gap-6 xl:grid-cols-[1fr_2.5fr]">
         <Panel title="Inputs">
+          <QueryError q={versions} what="dataset versions" />
+          <QueryError q={inst} what="instruments" />
           <form onSubmit={run} className="space-y-3 text-sm">
             <label className="block">
               <span className="mb-1 block">Dataset version</span>

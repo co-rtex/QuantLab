@@ -1,6 +1,6 @@
 "use client";
 
-import type { ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import type { ApiError, Job } from "@/lib/api";
 import { DASH } from "@/lib/format";
 
@@ -50,16 +50,111 @@ export function Panel({ title, aside, children, className = "" }: { title?: Reac
   );
 }
 
-export function ErrorNote({ error, action }: { error: ApiError | Error | undefined; action?: ReactNode }) {
+/**
+ * An error, announced once. Only the message and ``detail`` are in the live region: the
+ * request id changes with every failed attempt, so inside it a polling panel would be
+ * read out again on each poll for as long as the outage lasts (#83).
+ */
+export function ErrorNote({
+  error,
+  message,
+  detail,
+  action,
+}: {
+  error: ApiError | Error | undefined;
+  message?: string;
+  detail?: ReactNode;
+  action?: ReactNode;
+}) {
   if (!error) return null;
   const rid = (error as ApiError).requestId;
   return (
-    <div role="alert" className="rounded border border-loss/30 bg-loss-soft px-3 py-2 text-sm text-loss">
-      <p>{error.message}</p>
-      {rid && <p className="mt-0.5 text-xs opacity-80">Request {rid}</p>}
+    <div className="rounded border border-loss/30 bg-loss-soft px-3 py-2 text-sm text-loss">
+      <div role="alert">
+        <p>{message ?? error.message}</p>
+        {detail}
+      </div>
+      {rid && <p className="mt-0.5 text-xs">Request {rid}</p>}
       {action}
     </div>
   );
+}
+
+/** The parts of a useApi() result the error components need. */
+export interface Query {
+  data?: unknown;
+  error?: ApiError;
+  reload: () => void;
+}
+
+/**
+ * A failed request, shown where its data would be, with a way to try again (#18). Panels
+ * used to render nothing, or a skeleton forever, when the API answered 5xx. If an earlier
+ * response is still on screen, the note says so instead of hiding the failure.
+ */
+export function QueryError({ q, what = "this data" }: { q: Query; what?: string }) {
+  const box = useRef<HTMLDivElement>(null);
+  // Where focus goes when a retry succeeds and this note (and its button) disappears:
+  // the panel's heading, else the page's (WCAG 2.4.3). Chosen at click time, because a
+  // Pending placeholder is unmounted outright once its data arrives.
+  const recover = useRef<HTMLElement | null>(null);
+  // The failure a retry was started for: a new failure, or none, means it has finished.
+  const [retriedAfter, setRetriedAfter] = useState<ApiError>();
+  const error = q.error;
+  const retrying = error !== undefined && retriedAfter === error;
+  useEffect(() => {
+    if (!error) restoreFocus(recover);
+  }, [error]);
+  useEffect(() => () => restoreFocus(recover), []);
+
+  // A 401 sends the browser to the login page; the note would only flash.
+  if (!error || error.status === 401) return <div ref={box} hidden />;
+  const stale = q.data !== undefined;
+  return (
+    <div ref={box} className="mb-3">
+      <ErrorNote
+        error={error}
+        message={error.status === 0 ? "The server could not be reached." : undefined}
+        detail={<p className="mt-1">{stale ? `Showing the last ${what} that loaded.` : `Could not load ${what}.`}</p>}
+        action={
+          <button
+            type="button"
+            className="btn btn-quiet mt-1 py-0.5"
+            aria-busy={retrying}
+            // Not disabled: that would drop focus to the page while the retry runs.
+            aria-disabled={retrying}
+            onClick={() => {
+              if (retrying) return;
+              recover.current = focusTarget(box.current);
+              setRetriedAfter(error);
+              q.reload();
+            }}
+          >
+            {retrying ? "Retrying…" : "Retry"}
+          </button>
+        }
+      />
+    </div>
+  );
+}
+
+function focusTarget(from: HTMLElement | null): HTMLElement | null {
+  const section = from?.closest("section");
+  const target = section?.querySelector<HTMLElement>("h2") ?? section ?? from?.closest("main")?.querySelector<HTMLElement>("h1") ?? null;
+  if (target && !target.hasAttribute("tabindex")) target.setAttribute("tabindex", "-1");
+  return target;
+}
+
+function restoreFocus(recover: { current: HTMLElement | null }) {
+  const target = recover.current;
+  recover.current = null;
+  // Only if focus was lost with the note; a user who has moved on keeps their place.
+  if (target?.isConnected && (document.activeElement === document.body || document.activeElement === null)) target.focus();
+}
+
+/** The placeholder for data that has not arrived: a skeleton while loading, an error with Retry once it failed. */
+export function Pending({ q, h, what }: { q: Query; h?: string; what?: string }) {
+  return q.error ? <QueryError q={q} what={what} /> : <Skeleton h={h} />;
 }
 
 export function Empty({ title, children }: { title: string; children?: ReactNode }) {

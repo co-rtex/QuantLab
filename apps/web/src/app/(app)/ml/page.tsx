@@ -2,7 +2,7 @@
 
 import { useState, type FormEvent } from "react";
 import { PageHeader } from "@/components/Shell";
-import { ErrorNote, JobProgress, Panel, Skeleton, StatusPill } from "@/components/ui";
+import { ErrorNote, JobProgress, Panel, Pending, QueryError, StatusPill } from "@/components/ui";
 import { api, ApiError, newIdempotencyKey, type DatasetVersion, type Job } from "@/lib/api";
 import { dateTime, num, pct, shortHash } from "@/lib/format";
 import { useApi } from "@/lib/useApi";
@@ -47,9 +47,15 @@ const MODEL_LABEL: Record<string, string> = {
 
 function RunDetail({ id }: { id: string }) {
   const run = useApi<MLRun>(`/ml-runs/${id}`, { poll: (r) => (r && (r.status === "queued" || r.status === "running") ? 1500 : false) });
-  if (!run.data) return <Skeleton />;
+  if (!run.data) return <Pending q={run} what="this ML run" />;
   const r = run.data;
-  if (!r.result) return r.job ? <JobProgress job={r.job} /> : <StatusPill status={r.status} />;
+  if (!r.result)
+    return (
+      <>
+        <QueryError q={run} what="this ML run's status" />
+        {r.job ? <JobProgress job={r.job} /> : <StatusPill status={r.status} />}
+      </>
+    );
   const res = r.result;
   const base = res.summary.find((s) => s.model === "momentum_rule")?.auc ?? null;
   const fi = res.feature_importance.random_forest ?? res.feature_importance.logistic ?? {};
@@ -181,6 +187,7 @@ export default function MLPage() {
       <div className="grid gap-6 xl:grid-cols-[1fr_2.5fr]">
         <div className="space-y-6">
           <Panel title="New ML run">
+            <QueryError q={versions} what="dataset versions" />
             <form onSubmit={submit} className="space-y-3 text-sm">
               <label className="block">
                 <span className="mb-1 block">Name</span>
@@ -222,6 +229,7 @@ export default function MLPage() {
             </form>
           </Panel>
           <Panel title="Runs">
+            <QueryError q={runs} what="ML runs" />
             {runs.data?.length === 0 && <p className="text-sm text-ink-2">No ML runs yet.</p>}
             <ul className="space-y-1 text-sm">
               {runs.data?.map((r) => (
