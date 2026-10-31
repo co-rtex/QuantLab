@@ -293,6 +293,8 @@ SIGNED_FACTS = [
     Fact(
         "F8", "integrity_stress", "Stress window (warning)", "Worst month was -4.1%.", "text", "i"
     ),
+    Fact("F9", "deflated_sharpe", "Deflated Sharpe ratio (probability)", 0.62, "ratio", "p"),
+    Fact("F10", "top_contributor_1", "P&L from AAA", 1234.0, "usd", "c"),
 ]
 
 
@@ -366,4 +368,53 @@ def test_review_74_rejections(text, facts):
     ],
 )
 def test_review_74_legitimate_phrasings(text, facts):
+    assert verify_answer(text, facts)["grounded"], text
+
+
+@pytest.mark.parametrize(
+    ("text", "facts"),
+    [
+        # A rise word states a gain even when a drawdown is named elsewhere in the sentence.
+        ("During the drawdown, equity rose 28.3% [F2].", ISSUE_15_FACTS),
+        ("Despite a drawdown, the strategy was up 28.3% [F2].", ISSUE_15_FACTS),
+        ("Drawdowns aside, the strategy was 28.3% higher [F2].", ISSUE_15_FACTS),
+        ("In the drawdown the portfolio grew 28.3% [F2].", ISSUE_15_FACTS),
+        ("Through the drawdown, the account increased 28.3% [F2].", ISSUE_15_FACTS),
+        # The deflated Sharpe ratio is a probability, not a Sharpe ratio.
+        ("The Sharpe ratio was 62% [F9].", SIGNED_FACTS),
+        ("The Sharpe ratio was 0.62 [F9].", SIGNED_FACTS),
+        ("It came in at 62% [F9].", SIGNED_FACTS),
+        # A spaced minus and accounting parentheses are negative.
+        ("Total return was – 15.2% [F3].", ISSUE_15_FACTS),
+        ("Total return was - 15.2% [F3].", ISSUE_15_FACTS),
+        ("Total return was (15.2%) [F3].", ISSUE_15_FACTS),
+        ("AAA contributed ($1,234) of P&L [F10].", SIGNED_FACTS),
+    ],
+)
+def test_review_74_second_round_rejections(text, facts):
+    assert not verify_answer(text, facts)["grounded"], text
+
+
+@pytest.mark.parametrize(
+    ("text", "facts"),
+    [
+        ("Maximum drawdown increased to 28.3% [F2].", ISSUE_15_FACTS),
+        ("The drawdown has steadily grown to 28.3% [F2].", ISSUE_15_FACTS),
+        ("Losses rose to 28.3% [F2].", ISSUE_15_FACTS),
+        ("The drawdown reached up to 28.3% [F2].", ISSUE_15_FACTS),
+        ("The strategy returned 15.2% [F3], up from nothing.", ISSUE_15_FACTS),
+        ("The deflated Sharpe ratio was 62% [F9].", SIGNED_FACTS),
+        ("The probability of genuine skill was 62% [F9].", SIGNED_FACTS),
+        ("The DSR was 0.62 [F9].", SIGNED_FACTS),
+        ("Deflated Sharpe ratio (probability): 0.62 [F9]", SIGNED_FACTS),
+        ("Total return was – 15.2% [F3].", SIGNED_FACTS),
+        ("Total return was - 15.2% [F3].", SIGNED_FACTS),
+        ("Total return was (15.2%) [F3].", SIGNED_FACTS),
+        # A bullet is not a minus sign, and a parenthesised ratio is not an amount.
+        ("- 15.2% total return [F3]", ISSUE_15_FACTS),
+        ("Sharpe ratio (0.46) [F1].", ISSUE_15_FACTS),
+        ("AAA contributed $1,234 of P&L [F10].", SIGNED_FACTS),
+    ],
+)
+def test_review_74_second_round_legitimate(text, facts):
     assert verify_answer(text, facts)["grounded"], text

@@ -435,8 +435,10 @@ def deterministic_answer(question: str, facts: list[Fact]) -> Answer:
 
 
 _NUM = re.compile(
-    r"(?<![\w.])(-?)(\$?)(-?)(\d[\d,]*(?:\.\d+)?)"
-    r"(\s*%|\s*percentage points?\b|\s*per ?cent\b|\s*pct\b|\s*basis points?\b|\s*bps?\b|x\b|×)?",
+    r"(?<![\w.])(?P<open>\()?(?P<sign>-(?: (?=\$?\d))?)?(?P<cur>\$?)(?P<sign2>-?)"
+    r"(?P<num>\d[\d,]*(?:\.\d+)?)"
+    r"(?P<unit>\s*%|\s*percentage points?\b|\s*per ?cent\b|\s*pct\b|\s*basis points?\b|"
+    r"\s*bps?\b|x\b|×)?(?P<close>\))?",
     re.I,
 )
 _CITE = re.compile(r"\[F\d+\]")
@@ -451,19 +453,25 @@ def _norm(text: str) -> str:
 
 def _unit(m: re.Match[str]) -> str:
     """How a figure in prose is expressed: "%", "bp", "x", "$" or "" (a bare number)."""
-    suffix = (m.group(5) or "").strip().lower()
+    suffix = (m["unit"] or "").strip().lower()
     if suffix in ("x", "×"):
         return "x"
     if suffix.startswith("b"):
         return "bp"
     if suffix:
         return "%"
-    return "$" if m.group(2) else ""
+    return "$" if m["cur"] else ""
 
 
 def _value(m: re.Match[str]) -> float:
-    x = float(m.group(4).replace(",", ""))
-    return -x if m.group(1) or m.group(3) else x
+    """The signed figure. A minus may be followed by one space ("- 15.2%"), unless it is a
+    bullet at the start of a line, and a parenthesised percentage or amount is negative,
+    as in accounts ("(15.2%)", "($1,234)")."""
+    x = float(m["num"].replace(",", ""))
+    sign = m["sign"] or ""
+    bullet = " " in sign and not m.string[: m.start()].strip()
+    accounting = bool(m["open"] and m["close"]) and _unit(m) in ("%", "$", "bp")
+    return -x if (sign and not bullet) or m["sign2"] or accounting else x
 
 
 def _numbers_in(text: str) -> list[tuple[float, str]]:
@@ -542,7 +550,7 @@ _KIND_OF_KEY: list[tuple[str, str]] = [
     ("wf_in_sharpe", "sharpe"),
     ("wf_oos_sharpe", "sharpe"),
     ("sharpe_ci_", "sharpe"),
-    ("deflated_sharpe", "sharpe"),
+    ("deflated_sharpe", "probability"),
     ("beta", "beta"),
     ("alpha", "alpha"),
     ("historical_var", "var"),
@@ -575,6 +583,12 @@ _KIND_WORDS: list[tuple[frozenset[str], re.Pattern[str], str | None]] = [
         None,
     ),
     (frozenset({"volatility"}), re.compile(r"\bvolatility\b|\bvol\b", re.I), None),
+    # Before "sharpe": the deflated Sharpe ratio is a probability, not a Sharpe ratio (#74).
+    (
+        frozenset({"probability"}),
+        re.compile(r"\bdeflated sharpe(?: ratio)?\b|\bDSR\b|\bprobabilit(?:y|ies)\b", re.I),
+        None,
+    ),
     (frozenset({"sharpe"}), re.compile(r"\bsharpe\b", re.I), None),
     (frozenset({"sortino"}), re.compile(r"\bsortino\b", re.I), None),
     (frozenset({"calmar"}), re.compile(r"\bcalmar\b", re.I), None),
@@ -607,6 +621,19 @@ _KIND_WORDS: list[tuple[frozenset[str], re.Pattern[str], str | None]] = [
 _FALL = re.compile(
     r"\b(?:fell|fall(?:s|en)?|declin(?:e|es|ed|ing)|drop(?:s|ped)?|down|shed|sheds|slid|"
     r"sank|tumbled|negative)\b",
+    re.I,
+)
+# Words that state a rise. They state a gain for the figure they modify, before it ("equity
+# rose 28.3%") or right after it ("28.3% higher"), unless their subject is a loss: in "the
+# drawdown grew to 28.3%" the loss deepened (#74).
+_RISE = re.compile(
+    r"\b(?:rose|rise[sn]?|grew|grow(?:s|n)?|increas(?:e|es|ed)|up(?! to\b)|higher|"
+    r"climb(?:s|ed)?|advanc(?:e|es|ed))\b",
+    re.I,
+)
+# Words that may stand between a loss and the rise it is the subject of.
+_AUX = re.compile(
+    r"\s*(?:(?:has|had|have|was|is|then|later|eventually|further|steadily|briefly)\s+)*",
     re.I,
 )
 _LABEL_MARK = re.compile(r"\x00L(\d+)\x00")
@@ -698,7 +725,9 @@ def verify_answer(text: str, facts: list[Fact]) -> dict[str, Any]:
       fell or was lost ("lost", "fell", "negative", "a 15.2% loss"), and a positive value
       otherwise, so it must match the fact's sign. Only drawdowns, VaR, expected shortfall
       and costs may be stated as magnitudes, and only when the sentence says the figure is
-      one ("a 28.3% drawdown", "lost 28.3% peak to trough").
+      one ("a 28.3% drawdown", "lost 28.3% peak to trough"). Even then a rise word that
+      modifies the figure states a gain ("During the drawdown, equity rose 28.3%"), unless
+      the loss is its subject ("the drawdown grew to 28.3%").
     """
     text = _norm(text)
     facts = [
@@ -733,6 +762,16 @@ def verify_answer(text: str, facts: list[Fact]) -> dict[str, Any]:
         body = re.sub(r"\b\d+(?:\.\d+)?%? (?:bootstrap|confidence)", " ", body)  # "95% ..."
         mentions = _mentions(body, cited)
         falls = [m.end() for m in _FALL.finditer(body)]
+        rises = [
+            (r.start(), r.end())
+            for r in _RISE.finditer(body)
+            if not any(
+                w[2] & _MAGNITUDE_KINDS
+                and w[1] <= r.start()
+                and _AUX.fullmatch(body[w[1] : r.start()])
+                for w in mentions
+            )
+        ]
         numbers = list(_NUM.finditer(body))
         assigned = _assign(mentions, [(m.start(), m.end()) for m in numbers])
         prev_end = 0
@@ -748,7 +787,11 @@ def verify_answer(text: str, facts: list[Fact]) -> dict[str, Any]:
             loss = any(prev_end <= e <= m.start() for e in falls) or any(
                 w[4] == "loss" for w in words
             )
-            gain = any(w[4] == "gain" for w in words)
+            gain = (
+                any(w[4] == "gain" for w in words)
+                or any(prev_end <= e <= m.start() for _, e in rises)
+                or any(s >= m.end() and not body[m.end() : s].strip() for s, _ in rises)
+            )
             prev_end = m.end()
             near = _nearest(m.start(), m.end(), mentions)
             bindings: list[Binding | None] = [(w[2], w[3]) for w in own]
@@ -791,6 +834,8 @@ def _supported(
         for v, tol, units, signed, template in _candidates(f):
             if unit not in units or abs(abs(x) - abs(v)) > tol:
                 continue
+            if f.key in _PROBABILITY_KEYS and unit == "%" and "probability" not in named:
+                continue  # "62%" is a probability only where the sentence says so
             if template:
                 return True  # a number from the label template ("VaR (95%)")
             if magnitude:

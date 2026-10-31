@@ -88,9 +88,13 @@ The new rules (`assistant/grounding.py`, `verify_answer`):
   fact is of that kind ("Total return was -4.1%" does not come from that finding).
 * Units: a percentage fact of 0.152 may be written "15.2%", "15.2 percent", "1520 bps" or
   "0.152", not "0.152%", "15.2" or "15.2 bps". A ratio is not a percentage ("Sharpe
-  0.46%" is rejected), except the deflated Sharpe probability. A "$" goes with amounts.
+  0.46%" is rejected). The deflated Sharpe ratio is a probability: it may be a
+  percentage only where the sentence names it ("deflated Sharpe", "DSR", "probability"),
+  and "The Sharpe ratio was 0.62" does not come from it. A "$" goes with amounts.
 * Signs: a figure states a negative value when it has a minus sign (also the Unicode
-  minus or an en dash) or a word says it fell or was lost ("lost", "lose", "fell",
+  minus or an en dash, attached or after one space, but not a bullet at the start of a
+  line), when a percentage or amount is in accounting parentheses ("(15.2%)"), or when a
+  word says it fell or was lost ("lost", "lose", "fell",
   "down", "negative", "underperformed", "a 15.2% loss"). Otherwise it states a positive
   value. Either way it must match the fact's sign: "Total return was 15.2%" is rejected
   for a -15.2% return, and "Alpha was positive at 2.1%" for -2.1% alpha.
@@ -100,21 +104,30 @@ The new rules (`assistant/grounding.py`, `verify_answer`):
   "The drawdown grew to 28.3%" and "Losses peaked at 28.3%" pass; "Equity rose 28.3%",
   "The portfolio grew by 28.3%" and "It came in at 28.3%" do not, even when they cite the
   drawdown. A gain word ("returned", "made", "earned", "delivered", "yielded",
-  "appreciated", "outperformed") never backs a drawdown.
+  "appreciated", "outperformed") never backs a drawdown, and a rise word ("rose", "up",
+  "higher", "grew", "increased") that modifies the figure states a gain even when a
+  drawdown is named elsewhere: "During the drawdown, equity rose 28.3%" and "Drawdowns
+  aside, the strategy was 28.3% higher" are rejected. The exception is a rise whose
+  subject is the loss itself ("The drawdown has grown to 28.3%", "Losses rose to 28.3%").
 
 Review of the first draft of this change (PR #74) found that it accepted "Equity rose
 28.3% [F2]", which the PR #1 verifier rejected: it exempted movement verbs whenever the
 cited fact was a drawdown. The review also found unit confusion, sign flips on signed
 kinds, unparsed Unicode minus signs, and false rejects such as "It lost 28.3% peak to
 trough [F2]". `tests/unit/test_assistant.py` keeps each case from that review as a
-regression (`test_review_74_*`). Each one fails on main's verifier, on the first draft,
+regression (`test_review_74_*`), as does the second round (rise words beside a named
+drawdown, the deflated Sharpe ratio read as a Sharpe ratio, spaced and parenthesised
+negatives). Each one fails on main's verifier, on the first draft,
 or on both. The one exception is "The strategy earned 2.1% of alpha [F4]" for -2.1% alpha,
 which every version rejects; it stays as a guard.
 
 Known limits: the verifier reads words, not grammar. A loss word before a figure states
 a loss even when it describes something else ("After losing streaks, total return was
 15.2%" is a false reject), negation is not understood ("did not lose 15.2%"), and "minus"
-is not read as a sign.
+is not read as a sign. Words bind to the nearest figure by character distance, so a
+sentence that names two kinds near one figure ("The probability that the Sharpe ratio is
+real is 62%") is a false reject. A spaced dash between two figures ("10 - 15%") reads the
+second as negative. These false rejects fall back to the deterministic answer.
 
 Adversarial stand-ins (`LabelBypassProvider` in `assistant/evals.py`) write each bypass
 with real figures from the evidence. Every number they state is some fact's magnitude,
