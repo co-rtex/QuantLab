@@ -26,8 +26,8 @@ Work items are issues labelled `owner:*`, `P0`/`P1`/`P2`, `status:*` and `area:*
 | `services/api/src/quantlab_api/routes/datasets.py` | Agent 3 (since #65; Agent 2's upload work #4, #7, #51, #52 and #8 C is merged) |
 | `apps/web/src/app/api/[...path]/route.ts`, `apps/web/src/proxy.ts`, `infra/edge/**` | Agent 2 |
 | Web pages for login, settings, members, invitations | Agent 2 |
-| `routes/experiments.py` | — (#88 merged) |
-| `routes/ml.py` | Agent 3 for #143 (pipeline version in the input hash) |
+| `routes/experiments.py` | Agent 3 for #152 (engine version stamped at submission) |
+| `routes/ml.py` | — (#148 merged) |
 | `routes/research.py` | Unassigned (lead leases per issue) |
 | `packages/quantlab/src/quantlab/data/**`, `services/api/src/quantlab_api/marketdata.py` | Agent 3 |
 | `packages/quantlab/src/quantlab/{backtest,analytics,research,ml,portfolio,optimize,strategies}/**` | Agent 3 |
@@ -50,7 +50,7 @@ follow-up docs commit. A lease ends when the PR that used it merges or closes.
 | `services/api/src/quantlab_api/schemas.py` | — | (#106 merged) |
 | `services/api/src/quantlab_api/config.py` | — | (#128 merged) |
 | `services/api/src/quantlab_api/jobs.py` | — | (#132 merged) |
-| `services/api/src/quantlab_api/tasks.py` | — | (#97 merged) |
+| `services/api/src/quantlab_api/tasks.py` | Agent 3 | #152 the worker refuses a run stamped for another engine version |
 | `services/api/alembic/env.py` | — | (#37 merged) |
 | `scripts/case_study.py` | — | (Agent 2's invitation fix merged in #37) |
 | `services/api/src/quantlab_api/main.py` | — | (#128 merged) |
