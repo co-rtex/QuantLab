@@ -3,9 +3,11 @@ from __future__ import annotations
 import uuid
 from dataclasses import asdict
 from pathlib import Path
-from typing import Annotated
+from typing import Any
 
-from fastapi import APIRouter, File, Form, Header, Query, Request, UploadFile
+from fastapi import APIRouter, Header, Query, Request
+from fastapi.exceptions import RequestValidationError
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
 from sqlalchemy import func, select
 
 from quantlab.data.synthetic import SyntheticSpec
@@ -27,6 +29,7 @@ from quantlab_api.schemas import (
     SyntheticDatasetIn,
 )
 from quantlab_api.security import DB, CurrentUser, audit, require_workspace
+from quantlab_api.uploads import read_multipart
 
 router = APIRouter(tags=["datasets"])
 
@@ -216,31 +219,43 @@ def bars(
 
 
 MAX_UPLOAD_BYTES = 50 * 2**20
+# Generous byte caps for the text fields; CsvUploadForm enforces the character limits.
+MAX_FIELD_BYTES = 2048
 
 
-async def _save_upload(f: UploadFile, dest: Path) -> int:
-    size = 0
-    with dest.open("wb") as out:
-        while chunk := await f.read(2**20):
-            size += len(chunk)
-            if size > MAX_UPLOAD_BYTES:
-                raise ApiError(413, "upload_too_large", "Uploads are limited to 50 MB")
-            out.write(chunk)
-    return size
+class CsvUploadForm(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    slug: str = Field(pattern=r"^[a-z0-9][a-z0-9_-]{1,62}$")
+    name: str = Field(min_length=1, max_length=120)
+    source: str = Field(min_length=3, max_length=300)
+    license: str = Field(min_length=3, max_length=300)
 
 
-@router.post("/workspaces/{workspace_id}/datasets/csv", response_model=JobOut, status_code=202)
+def _csv_upload_openapi() -> dict[str, Any]:
+    schema = CsvUploadForm.model_json_schema()
+    schema.pop("additionalProperties", None)
+    schema["properties"]["bars"] = {"type": "string", "format": "binary"}
+    schema["properties"]["actions"] = {"type": "string", "format": "binary"}
+    schema["required"].append("bars")
+    content = {"multipart/form-data": {"schema": schema}}
+    return {"requestBody": {"required": True, "content": content}}
+
+
+# The body is read by hand, after authorization: FastAPI parses declared Form/File
+# parameters before it runs any dependency, so declaring them let anonymous clients make
+# the API spool up to 110 MB per request (#4). See quantlab_api/uploads.py.
+@router.post(
+    "/workspaces/{workspace_id}/datasets/csv",
+    response_model=JobOut,
+    status_code=202,
+    openapi_extra=_csv_upload_openapi(),
+)
 async def upload_csv(
     workspace_id: uuid.UUID,
     user: CurrentUser,
     db: DB,
     request: Request,
-    slug: Annotated[str, Form(pattern=r"^[a-z0-9][a-z0-9_-]{1,62}$")],
-    name: Annotated[str, Form(min_length=1, max_length=120)],
-    source: Annotated[str, Form(min_length=3, max_length=300)],
-    license: Annotated[str, Form(min_length=3, max_length=300)],
-    bars: Annotated[UploadFile, File()],
-    actions: Annotated[UploadFile | None, File()] = None,
 ) -> JobOut:
     """Import user-supplied daily bars (columns: symbol,date,open,high,low,close,volume)
     and optional corporate actions (symbol,ex_date,kind,value). The uploader states the
@@ -249,6 +264,9 @@ async def upload_csv(
     import tempfile
 
     require_workspace(db, user, workspace_id, Role.editor)
+    # Return the connection to the pool while the body streams: a slow upload must not
+    # hold one, or a few dozen trickling uploads would exhaust the pool for everyone.
+    db.commit()
     staging_root = get_settings().data_dir / "uploads"
     staging_root.mkdir(parents=True, exist_ok=True)
     staged = Path(tempfile.mkdtemp(prefix="csv-", dir=staging_root))
@@ -256,9 +274,27 @@ async def upload_csv(
     # only an accepted job owns them. Otherwise each rejected retry left up to 100 MB on
     # disk until the reaper's 24-hour sweep.
     try:
-        files = {"bars": await _save_upload(bars, staged / "bars.csv")}
-        if actions is not None and actions.filename:
-            files["actions"] = await _save_upload(actions, staged / "actions.csv")
+        upload = await read_multipart(
+            request,
+            files={
+                "bars": (staged / "bars.csv", MAX_UPLOAD_BYTES),
+                "actions": (staged / "actions.csv", MAX_UPLOAD_BYTES),
+            },
+            fields=dict.fromkeys(CsvUploadForm.model_fields, MAX_FIELD_BYTES),
+        )
+        errors: list[Any] = []
+        try:
+            form = CsvUploadForm.model_validate(upload.fields)
+        except ValidationError as exc:
+            errors = [{**e, "loc": ("body", *e["loc"])} for e in exc.errors()]
+        if "bars" not in upload.files:
+            errors.append({"loc": ("body", "bars"), "msg": "Field required", "type": "missing"})
+        if errors:
+            raise RequestValidationError(errors)
+        # Authorized again: membership may have been revoked while the body streamed.
+        require_workspace(db, user, workspace_id, Role.editor)
+        slug, name, source, license = form.slug, form.name, form.source, form.license
+        files = upload.files
         ds = db.scalar(
             select(Dataset).where(Dataset.workspace_id == workspace_id, Dataset.slug == slug)
         )
