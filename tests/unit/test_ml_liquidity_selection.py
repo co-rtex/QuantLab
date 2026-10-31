@@ -19,6 +19,8 @@ def test_covariates_keep_every_candidate_and_the_cap_drops_thin_names():
     dense = probed["dense, never halted"]
     assert dense["kept_cap"] == dense["candidates"]
     assert probed["40-session halt"]["max_gap_252"] == 40
+    # #142: a zero-volume bar is no bar, so it is never a panel row.
+    assert all(r["rows_on_zero_volume"] == 0 for r in rows.values()), rows
 
 
 def test_the_output_is_labelled_synthetic():
@@ -32,6 +34,7 @@ def test_the_output_is_labelled_synthetic():
                 "kept_covariates": 1,
                 "bars_span_21": 1.0,
                 "max_gap_252": 0.0,
+                "rows_on_zero_volume": 0,
             }
         ]
     )

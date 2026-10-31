@@ -439,20 +439,33 @@ solving.
   panel for the halt's sessions alone. Before version 2, any window containing a halt day
   was NaN for the window's length, which dropped a recently halted security, a selection
   correlated with distress, for up to 252 sessions.
+* **A zero-volume bar is no bar** (#142, pipeline version 3). A vendor may keep printing
+  a stale close with zero volume through a halt, or for a name that rarely trades; nobody
+  could trade at that price. Such bars (volume ≤ 0) are removed before any feature is
+  computed, so they read exactly like sessions without a bar:
+  * they are not decision rows, and no label starts or ends at their close;
+  * windows skip them, so `vol_21` does not average zero returns;
+  * the staleness inputs count them as gaps;
+  * a corporate action dated on one applies on the next bar, as across any gap.
+
+  A bar whose volume is unknown (NaN) still has a close and is kept as a bar everywhere,
+  including the staleness inputs. Only the volume features of the 21 windows containing it
+  are undefined, so those rows are incomplete and left out.
+  `panel.excluded_rows.zero_volume_bars` counts the zero-volume bars of listed names on
+  dates that make the panel. `dates_below_10_with_zero_volume` counts dates skipped for
+  fewer than ten names that would have reached ten counting those bars. It is an upper
+  bound on what the rule cost, because such a bar's features could have been incomplete
+  anyway.
 * **Staleness is described, not excluded.** Trade-time windows can reach far back in
-  calendar time, after a halt or for a thinly traded name. Two model inputs say how far.
-  Both count time since **trades**: a bar with zero volume (a stale close a vendor keeps
-  printing) is a missing trade, so a halt printed as zero-volume bars reads like one with
-  no bars (#142, pipeline version 3). Here s is a bar's position on the session calendar,
-  and trade_n(t) is the session of the n-th most recent trade strictly before bar t:
-  * `bars_span_21 = (s[t] − trade_21(t)) / 21`. When every bar trades, this is the
-    calendar span of `mom_21`'s 21 returns per return: 1 for a bar every session, 2 for
-    every other session.
-  * `log1p_max_gap_252 = log(1 + max_gap_252)`. `max_gap_252` is the largest
-    `s[t] − trade_1(t) − 1` (sessions without a trade before a bar) over the last 252
-    bars, including the gap before bar t−251. The raw count is unbounded, so the model
-    sees its log; the panel keeps the raw value as `max_gap_252`, which is not a model
-    input. Within a zero-volume halt the gap grows bar by bar.
+  calendar time, after a halt or for a thinly traded name. Two model inputs say how far,
+  where s is a bar's position on the session calendar:
+  * `bars_span_21 = (s[t] − s[t−21]) / 21`, the calendar span of `mom_21`'s 21 returns
+    per return: 1 for a bar every session, 2 for every other session.
+  * `log1p_max_gap_252 = log(1 + max_gap_252)`. `max_gap_252` is the largest number of
+    sessions without a bar between consecutive bars over the last 252 returns (bars
+    t−252 … t, so including the gap between t−252 and t−251). The raw count is unbounded,
+    so the model sees its log; the panel keeps the raw value as `max_gap_252`, which is
+    not a model input.
 
   A halt shows as one long gap (a 40-session halt gives `max_gap_252 = 40`). Thin trading
   shows many short ones: every other session gives `bars_span_21 = 2` with
@@ -465,10 +478,13 @@ solving.
   * Market: synthetic, `generate_market` with 30 assets over 2018-01-02 to 2022-12-30,
     seed 11, `split_probability` 0.002.
   * Thinning: random keep with `numpy.random.default_rng(1)`; the halt covers sessions
-    600–639.
+    600–639. A second name with full history has the same halt printed as zero-volume
+    bars repeating its last close.
   * Sampling: every session (`sample_every = 1`).
   * Candidate row: a date the panel samples (at least 10 tradable names) on which the
-    name has a bar, complete features apart from staleness, and a defined label.
+    name has a bar with volume, complete features apart from staleness, and a defined
+    label. The retracted cap is recomputed from every printed bar, as it counted them.
+    In the script's output, no name has a panel row on a zero-volume bar.
 
 
   | name | sessions traded | 2·L cap (retracted) | covariates (pipeline 3) |
@@ -479,16 +495,14 @@ solving.
   | random 45% | 46% | 0% (drops out) | 100% |
   | every other session | 50% | 100% (exactly at the bound) | 100% |
   | 40-session halt | 97% | 98% | 100% |
-  | 40-session halt, zero-volume bars | 80% | 100% (blind to it) | 100% (`max_gap_252` = 40) |
+  | 40-session halt, zero-volume bars | 97% | 100% (blind to it) | 100% (`max_gap_252` = 40) |
   | dense, never halted | 100% | 100% | 100% |
 
   The residual liquidity effect is the warm-up. A name enters once it has 252 bars of its
   own, so at 50% trading it needs about two years of calendar history instead of one.
-* **No trading vs flat volume.** A row whose last 21 bars have zero total volume (a
-  quote that never trades) is excluded. `panel.excluded_rows.untraded_21` counts the rows
-  that would otherwise have been kept, on dates that make the panel.
-  `dates_below_10_after_untraded` counts dates skipped because that removal left fewer
-  than ten names.
+* **Flat volume.** Version 2 excluded a row whose last 21 bars had zero total volume
+  (`untraded_21`). Since zero-volume bars are no bars, no such window remains, and the
+  rule and its counters are gone.
   Constant non-zero volume (21-bar log-volume standard deviation at or below 1e-12)
   deviates from its mean by exactly zero, so `volume_z_21` is 0, not 0/0. Then
   `volume_flat_21 = 1`, which is a **model input**, so a model can tell "no dispersion"

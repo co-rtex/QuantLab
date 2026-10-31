@@ -2,18 +2,20 @@
 
 Reproduces the table in docs/METHODOLOGY.md ("ML features"). **The market is synthetic**
 (``generate_market``, seed 11). Some of its names are thinned to trade on a random share
-of sessions, one trades every other session, and one is halted for 40 sessions. For each
-name the table reports the share of its *candidate* rows each rule keeps. A candidate row
-is a date the panel samples (at least 10 tradable names) on which the name has a bar,
-its own-bar features are complete apart from staleness, and its label is defined.
+of sessions, one trades every other session, one is halted for 40 sessions, and one, with
+full history, has the same halt printed as zero-volume bars repeating its last close. For
+each name the table reports the share of its *candidate* rows each rule keeps. A candidate
+row is a date the panel samples (at least 10 tradable names) on which the name has a bar
+with volume (a zero-volume bar is no bar, #142), its own-bar features are complete apart
+from staleness, and its label is defined.
 
 * **2·L cap (retracted in #125).** A row is excluded when any feature's oldest bar lies
-  more than twice its lookback in sessions back. It is recomputed here from bar session
-  positions.
+  more than twice its lookback in sessions back. It is recomputed here from the session
+  positions of every printed bar, as it counted them, so it cannot see a zero-volume halt.
 * **Covariates (pipeline 3).** Nothing is excluded for staleness; ``bars_span_21`` and
-  ``log1p_max_gap_252`` (model inputs) describe it, counting time since *trades* so a
-  halt printed as zero-volume bars reads like one without bars (#142). This is what
-  ``build_panel`` does.
+  ``log1p_max_gap_252`` (model inputs) describe it. Zero-volume bars are removed first,
+  so a halt printed as zero-volume bars reads exactly like one without bars and none of
+  its bars is a panel row (last column). This is what ``build_panel`` does.
 
 Usage::
 
@@ -69,7 +71,7 @@ def selection_table(
         syms[4]: 0.80,
         syms[5]: "every other session",
         syms[6]: "40-session halt",
-        syms[7]: "40-session halt, zero-volume bars",
+        syms[8]: "40-session halt, zero-volume bars",  # full history, like syms[6]
         syms[10]: "dense, never halted",
     }
     keep = pd.Series(True, index=bars.index)
@@ -106,6 +108,7 @@ def selection_table(
         for lookback in RETRACTED_LOOKBACK.values():
             stale |= (pos - pos.shift(lookback)) > 2 * lookback
         rows = panel[panel["symbol"] == s]
+        zero_dates = set(sb.loc[(sb["symbol"] == s) & (sb["volume"] <= 0), "date"])
         out.append(
             {
                 "name": p if isinstance(p, str) else f"random {p:.0%}",
@@ -116,6 +119,7 @@ def selection_table(
                 "kept_covariates": len(set(rows["date"]) & set(cand)),
                 "bars_span_21": float(rows["bars_span_21"].median()) if len(rows) else None,
                 "max_gap_252": float(rows["max_gap_252"].max()) if len(rows) else None,
+                "rows_on_zero_volume": len(set(rows["date"]) & zero_dates),
             }
         )
     return out
@@ -129,8 +133,9 @@ def markdown(rows: list[dict]) -> str:
         "SYNTHETIC market (quantlab.data.synthetic); not real data.",
         "",
         "| name | sessions traded | candidate rows | kept, 2·L cap (retracted) "
-        "| kept, covariates (pipeline 3) | median bars_span_21 | max max_gap_252 |",
-        "|---|---|---|---|---|---|---|",
+        "| kept, covariates (pipeline 3) | median bars_span_21 | max max_gap_252 "
+        "| panel rows on zero-volume bars |",
+        "|---|---|---|---|---|---|---|---|",
     ]
     for r in rows:
         n = r["candidates"]
@@ -138,7 +143,8 @@ def markdown(rows: list[dict]) -> str:
         gap = "n/a" if r["max_gap_252"] is None else f"{r['max_gap_252']:.0f}"
         lines.append(
             f"| {r['name']} | {r['traded']:.0%} | {n} | {share(r['kept_cap'], n)} "
-            f"| {share(r['kept_covariates'], n)} | {span} | {gap} |"
+            f"| {share(r['kept_covariates'], n)} | {span} | {gap} "
+            f"| {r['rows_on_zero_volume']} |"
         )
     return "\n".join(lines)
 

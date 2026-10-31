@@ -171,8 +171,8 @@ def test_a_long_halt_is_described_by_the_covariates_not_excluded():
     assert row["bars_span_21"].iloc[0] == pytest.approx((21 + 40) / 21)
     dense = panel[panel["symbol"] != "S00"]
     assert (dense["max_gap_252"] == 0).all() and (dense["bars_span_21"] == 1).all()
-    # Nothing is excluded for staleness: only no-trading rows are, and counted.
-    assert set(panel.attrs["excluded"]) == {"untraded_21", "dates_below_10_after_untraded"}
+    # Nothing is excluded for staleness: only zero-volume bars are, and counted.
+    assert set(panel.attrs["excluded"]) == {"zero_volume_bars", "dates_below_10_with_zero_volume"}
 
 
 def test_thin_trading_is_kept_and_told_apart_from_a_halt():
@@ -201,13 +201,14 @@ def test_thin_trading_is_kept_and_told_apart_from_a_halt():
     assert thin_rows["bars_span_21"].median() > 1.5
 
 
-def test_no_trading_is_excluded_and_counted_not_treated_as_flat_volume():
-    panel = build_panel(
-        _bars(halted=None, flat="S03", untraded="S05"), NONE, MLConfig(horizon=5, sample_every=1)
-    )
-    s05 = panel[panel["symbol"] == "S05"]
-    assert (s05["date"] < SESSIONS[200 + 20]).all()  # gone once 21 bars have no volume
-    assert panel.attrs["excluded"]["untraded_21"] > 0
+def test_zero_volume_bars_are_excluded_and_counted_not_treated_as_flat_volume():
+    cfg = MLConfig(horizon=5, sample_every=1)
+    panel = build_panel(_bars(halted=None, flat="S03", untraded="S05"), NONE, cfg)
+    # S05 prints only zero-volume closes from session 200: no bar, so no rows (and no
+    # history to come back with). Before #142 its rows stayed until 21 bars had no volume.
+    assert not (panel["symbol"] == "S05").any()  # every panel date is past session 252
+    sampled = panel["date"].nunique()
+    assert panel.attrs["excluded"]["zero_volume_bars"] == sampled  # one per panel date
     assert (panel.loc[panel["symbol"] == "S03", "volume_flat_21"] == 1.0).all()  # still kept
 
 
@@ -220,8 +221,8 @@ def test_results_report_the_excluded_rows():
         MLConfig(horizon=5, sample_every=1, folds=2, min_train_dates=6, models=("majority",)),
     )
     ex = out["panel"]["excluded_rows"]
-    assert set(ex) == {"untraded_21", "dates_below_10_after_untraded"}
-    assert ex["untraded_21"] > 0
+    assert set(ex) == {"zero_volume_bars", "dates_below_10_with_zero_volume"}
+    assert ex["zero_volume_bars"] > 0
 
 
 # ------------------------------------------- #142: zero-volume bars are missing trades
@@ -247,29 +248,91 @@ def _zero_volume_halt(bars: pd.DataFrame, halt: tuple[int, ...]) -> pd.DataFrame
     return normalize_bars(pd.concat([out, rows], ignore_index=True))
 
 
-def test_a_halt_printed_as_zero_volume_bars_reads_like_a_halt_without_bars():
+def _reopen_lower(bars: pd.DataFrame, after: int, factor: float = 0.7) -> pd.DataFrame:
+    """S00 reopens ``factor`` lower after session ``after`` (prices scaled from then on)."""
+    out = bars.copy()
+    later = (out["symbol"] == "S00") & (out["date"] > SESSIONS[after])
+    for col in ("open", "high", "low", "close"):
+        out.loc[later, col] *= factor
+    return out
+
+
+def test_a_halt_printed_as_zero_volume_bars_is_a_halt_without_bars():
+    # The #147 review: a 40-session halt printed as zero-volume stale closes, reopening 30%
+    # lower. Its zero-volume bars were decision rows that read as fresh (span 1, gap 0),
+    # and labels started at the stale close (fwd_return -0.40 with h = 21).
     halt = _halt(40, at=260)
-    no_bars = _bars(halt=halt)  # S00 has no bars during the halt
-    stale = _zero_volume_halt(no_bars, halt)  # S00 prints its last close, volume 0
+    no_bars = _reopen_lower(_bars(halt=halt), halt[-1])
+    stale = _zero_volume_halt(no_bars, halt)
     f_none, _ = compute_features(no_bars, NONE)
     f_stale, _ = compute_features(stale, NONE)
-    after = [SESSIONS[i] for i in range(halt[-1] + 1, len(SESSIONS))]
-    for name in ("bars_span_21", "max_gap_252", "log1p_max_gap_252"):
-        pd.testing.assert_series_equal(
-            f_none[name].loc[after, "S00"], f_stale[name].loc[after, "S00"], check_names=False
-        )
-    assert f_stale["max_gap_252"].loc[after[0], "S00"] == 40
-    # Before #142 a zero-volume bar was a fresh observation: no gap at all.
-    assert f_stale["bars_span_21"].loc[after[0], "S00"] == pytest.approx((21 + 40) / 21)
+    for name in [*FEATURES, "max_gap_252"]:  # every feature, every name, every session
+        pd.testing.assert_frame_equal(f_none[name], f_stale[name], check_names=False)
+    assert f_stale["max_gap_252"].loc[SESSIONS[halt[-1] + 1], "S00"] == 40
+    assert f_stale["bars_span_21"].loc[SESSIONS[halt[-1] + 1], "S00"] == pytest.approx(61 / 21)
+    cfg = MLConfig(horizon=21, sample_every=1)
+    p_none, p_stale = build_panel(no_bars, NONE, cfg), build_panel(stale, NONE, cfg)
+    pd.testing.assert_frame_equal(p_none, p_stale)  # no row and no label from a stale close
+    halt_dates = {SESSIONS[i] for i in halt}
+    assert not halt_dates & set(p_stale.loc[p_stale["symbol"] == "S00", "date"])
+    # Counted: one zero-volume bar per halt session that made the panel.
+    assert p_stale.attrs["excluded"]["zero_volume_bars"] == len(halt_dates & set(p_stale["date"]))
+    assert p_none.attrs["excluded"]["zero_volume_bars"] == 0
 
 
-def test_the_gap_grows_through_a_zero_volume_halt_and_dense_names_are_unchanged():
+def test_zero_volume_bars_do_not_look_ahead():
     halt = _halt(40, at=260)
-    stale = _zero_volume_halt(_bars(halt=halt), halt)
+    stale = _zero_volume_halt(_reopen_lower(_bars(halt=halt), halt[-1]), halt)
     feats, _ = compute_features(stale, NONE)
-    # On the k-th zero-volume bar, k - 1 sessions have passed without a trade before it.
-    for k in (1, 10, 25):
-        assert feats["max_gap_252"].loc[SESSIONS[halt[0] + k - 1], "S00"] == k - 1
-    dense = [c for c in feats["max_gap_252"].columns if c != "S00"]
-    assert (feats["max_gap_252"][dense].dropna() == 0).all().all()
-    assert (feats["bars_span_21"][dense].dropna() == 1).all().all()
+    for cut in (halt[0] - 1, halt[10], halt[-1], halt[-1] + 1, halt[-1] + 15):
+        t = SESSIONS[cut]
+        part, _ = compute_features(stale[stale["date"] <= t], NONE)
+        for name in FEATURES:
+            pd.testing.assert_frame_equal(
+                feats[name].loc[:t], part[name].loc[:t], check_names=False, rtol=1e-12
+            )
+
+
+def test_a_thin_name_printing_zero_volume_closes_reads_like_one_without_bars():
+    # N4: a name that trades on a random half of the sessions from session 270 and prints
+    # a zero-volume stale close on the others. It never had 21 bars without volume, so
+    # the retracted untraded_21 rule never removed its stale rows.
+    bars = _bars(halted=None)
+    s01 = bars["symbol"] == "S01"
+    late = bars.index[s01 & (bars["date"] >= SESSIONS[270])]
+    idle = late[np.random.default_rng(7).random(len(late)) >= 0.5]
+    no_bars = bars.drop(index=idle)
+    stale = bars.copy()  # a stale quote on the idle sessions: the last traded close, volume 0
+    stale.loc[idle, "close"] = np.nan
+    stale.loc[s01, "close"] = stale.loc[s01, "close"].ffill()
+    stale.loc[idle, ["open", "high", "low"]] = stale.loc[idle, ["close"] * 3].to_numpy()
+    stale.loc[idle, "volume"] = 0.0
+    cfg = MLConfig(horizon=5, sample_every=1)
+    p_none, p_stale = build_panel(no_bars, NONE, cfg), build_panel(stale, NONE, cfg)
+    pd.testing.assert_frame_equal(p_none, p_stale)
+    idle_dates = set(bars.loc[idle, "date"])
+    assert len(idle_dates & set(p_stale["date"])) > 20
+    assert p_stale.attrs["excluded"]["zero_volume_bars"] == len(idle_dates & set(p_stale["date"]))
+
+
+def test_an_unknown_volume_is_still_a_bar():
+    # N3: NaN volume is unknown, not zero. The bar has a close, so it is kept: prices,
+    # returns and the staleness inputs count it as a bar. Only the volume features of the
+    # 21 windows that contain it are undefined, and those rows are incomplete.
+    bars = _bars(halted=None)
+    at = SESSIONS[280]
+    unknown = bars.copy()
+    unknown.loc[(unknown["symbol"] == "S02") & (unknown["date"] == at), "volume"] = np.nan
+    f_known, _ = compute_features(bars, NONE)
+    f_unknown, _ = compute_features(unknown, NONE)
+    for name in [*FEATURES, "max_gap_252"]:
+        if name in ("volume_z_21", "volume_flat_21"):
+            continue
+        pd.testing.assert_frame_equal(f_known[name], f_unknown[name], check_names=False)
+    window = [SESSIONS[i] for i in range(280, 301)]
+    assert f_unknown["volume_z_21"].loc[window, "S02"].isna().all()
+    assert np.isfinite(f_unknown["volume_z_21"].loc[SESSIONS[301], "S02"])
+    panel = build_panel(unknown, NONE, MLConfig(horizon=5, sample_every=1))
+    rows = set(panel.loc[panel["symbol"] == "S02", "date"])
+    assert not rows & set(window) and SESSIONS[279] in rows and SESSIONS[301] in rows
+    assert panel.attrs["excluded"]["zero_volume_bars"] == 0  # unknown is not zero
