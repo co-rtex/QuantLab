@@ -432,16 +432,25 @@ solving.
   of fully adjusted closes; volatility uses total returns; `dist_high_252` measures the
   distance to the 252-bar high; `volume_z_21` is the z-score of log volume.
 * **Windows count the instrument's own bars, not calendar sessions** (#120, pipeline
-  version 2). A 21-bar window ending just after a halt spans the bars before the halt,
+  version 2). They are trade-time measures: `mom_21` is the return over the last 21 bars
+  and `rev_5` over the last 5, however many sessions those took. A 21-bar window ending just after a halt spans the bars before the halt,
   so it covers more calendar sessions. The first bar after a gap carries the return over
   the whole gap. Rows exist only on sessions with a bar, so a halted security leaves the
   panel for the halt's sessions alone. Before version 2, any window containing a halt day
   was NaN for the window's length, which dropped a recently halted security, a selection
   correlated with distress, for up to 252 sessions.
-* **Flat volume:** when the 21-bar log volume has no dispersion (standard deviation at or
-  below 1e-12), the deviation from its mean is exactly zero. So `volume_z_21` is 0,
-  not 0/0, and `volume_flat_21 = 1` records the case. The flag is a panel column, not a
-  model input; results report the count as `panel.volume_flat_rows`.
+* **Staleness bound.** A feature reaching L bars back (`LOOKBACK`) is undefined when its
+  oldest bar lies more than 2·L sessions back (`STALENESS_FACTOR`). After a long halt
+  the row drops until fresh bars refill the window. After a 40-session halt, the 21-bar
+  features bind, and the security returns on its 22nd bar after the halt. A 5-session
+  halt leaves `rev_5` defined (10 sessions for 5 bars); a 6-session halt does not.
+  Results count these rows as `panel.excluded_rows.stale_window`.
+* **No trading vs flat volume.** A row whose last 21 bars have zero total volume (a
+  quote that never trades) is excluded and counted as `panel.excluded_rows.untraded_21`.
+  Constant non-zero volume (21-bar log-volume standard deviation at or below 1e-12)
+  deviates from its mean by exactly zero, so `volume_z_21` is 0, not 0/0, and
+  `volume_flat_21 = 1` records it. The flag is a panel column, not a model input;
+  results report the count as `panel.volume_flat_rows`.
 * `ML_PIPELINE_VERSION` is recorded in every result (`pipeline_version`) and changes
   whenever the same dataset and config could produce a different panel.
 

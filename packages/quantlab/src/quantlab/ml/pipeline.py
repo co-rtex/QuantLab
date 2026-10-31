@@ -65,6 +65,21 @@ PANEL_COLUMNS = [
 ML_PIPELINE_VERSION = 2
 # Below this, a rolling dispersion counts as zero (as in quantlab.analytics).
 _ZERO_DISPERSION = 1e-12
+# How far back, in the instrument's bars, each feature reaches (its oldest bar is t - L).
+LOOKBACK = {
+    "mom_21": 21,
+    "mom_63": 63,
+    "mom_126": 126,
+    "mom_252_21": 252,
+    "rev_5": 5,
+    "vol_21": 21,  # 21 returns, the oldest of which starts at bar t - 21
+    "vol_63": 63,
+    "dist_high_252": 251,
+    "volume_z_21": 20,
+}
+# A window of L bars may span at most this many times L sessions; beyond that, after a
+# long halt, it rests on stale bars and the feature is undefined until fresh bars refill it.
+STALENESS_FACTOR = 2
 ModelName = Literal["majority", "momentum_rule", "logistic", "random_forest", "gradient_boosting"]
 MODELS: tuple[ModelName, ...] = (
     "majority",
@@ -95,23 +110,34 @@ class MLConfig(BaseModel):
 
 
 def _own_bar_features(
-    adj: pd.DataFrame, ret: pd.DataFrame, logv: pd.DataFrame
+    adj: pd.DataFrame,
+    ret: pd.DataFrame,
+    vol: pd.DataFrame,
+    session: pd.DataFrame,
 ) -> dict[str, pd.DataFrame]:
     """Features over rows that are each instrument's consecutive *own* bars.
 
-    Every window and lag is counted in bars, so a value uses its own bar and earlier ones,
-    never a later one, whatever the calendar between them.
+    Every window and lag is counted in bars (trade time), so a value uses its own bar and
+    earlier ones, never a later one. ``session`` holds each bar's position on the session
+    calendar. A feature whose oldest bar lies more than ``STALENESS_FACTOR`` x its lookback
+    sessions back (a long halt in between) is NaN. Two masks are returned beside the
+    features: ``_untraded`` (no volume at all in the last 21 bars) and ``_stale`` (some
+    feature was stale).
     """
 
     def mom(n: int, skip: int = 0) -> pd.DataFrame:
         return adj.shift(skip) / adj.shift(n) - 1
 
+    logv = np.log1p(vol)
     v_mean, v_std = logv.rolling(21).mean(), logv.rolling(21).std()
-    # Flat volume over the window: the deviation from the mean is exactly zero, so the
-    # z-score is 0, not 0/0. The flag keeps the case visible.
-    flat = v_std <= _ZERO_DISPERSION
-    z = ((logv - v_mean) / v_std.where(~flat)).where(~flat, 0.0).where(v_std.notna())
-    return {
+    # No trading at all in the window (a quote that never trades) is not "steady volume":
+    # such rows are excluded and counted. Constant non-zero volume deviates from its mean
+    # by exactly zero, so its z-score is 0, not 0/0, and the flag keeps the case visible.
+    untraded = vol.rolling(21).sum() <= 0
+    flat = (v_std <= _ZERO_DISPERSION) & ~untraded
+    z = ((logv - v_mean) / v_std.where(~flat)).where(~flat, 0.0)
+    z = z.where(v_std.notna() & ~untraded)
+    feats = {
         "mom_21": mom(21),
         "mom_63": mom(63),
         "mom_126": mom(126),
@@ -121,8 +147,16 @@ def _own_bar_features(
         "vol_63": ret.rolling(63).std(),
         "dist_high_252": adj / adj.rolling(252).max() - 1,
         "volume_z_21": z,
-        "volume_flat_21": flat.astype(float).where(v_std.notna()),
     }
+    stale_any = pd.DataFrame(False, index=adj.index, columns=adj.columns)
+    for name, lookback in LOOKBACK.items():
+        stale = (session - session.shift(lookback)) > STALENESS_FACTOR * lookback
+        feats[name] = feats[name].mask(stale)
+        stale_any |= stale
+    feats["volume_flat_21"] = flat.astype(float).where(v_std.notna() & ~untraded)
+    feats["_untraded"] = untraded.astype(float).where(vol.rolling(21).count() == 21)
+    feats["_stale"] = stale_any.astype(float)
+    return feats
 
 
 def compute_features(
@@ -147,8 +181,6 @@ def compute_features(
     adj = close * PointInTimeAdjuster(close, acts).multiplier(None)
     # The first bar after a gap carries the return over the whole gap (total_returns).
     rets = total_returns(bars, acts).reindex(index=close.index, columns=close.columns)
-    logv = np.log1p(vol)
-
     has = close.notna().to_numpy()
     rows = np.cumsum(has, axis=0) - 1  # each bar's position among its instrument's bars
     r_i, c_i = rows[has], np.nonzero(has)[1]
@@ -163,7 +195,12 @@ def compute_features(
         out[has] = frame.to_numpy(dtype=float)[r_i, c_i]
         return pd.DataFrame(out, index=close.index, columns=close.columns)
 
-    own = _own_bar_features(compress(adj), compress(rets), compress(logv))
+    session = pd.DataFrame(
+        np.broadcast_to(np.arange(len(close), dtype=float)[:, None], close.shape),
+        index=close.index,
+        columns=close.columns,
+    )
+    own = _own_bar_features(compress(adj), compress(rets), compress(vol), compress(session))
     return {name: expand(f) for name, f in own.items()}, adj
 
 
@@ -220,12 +257,17 @@ def build_panel(
     dates = close.index[252 :: cfg.sample_every]
     dates = dates[dates <= close.index[-1 - h]] if len(close) > h else dates[:0]
     frames = []
+    excluded = {"untraded_21": 0, "stale_window": 0}
     for d in dates:
         k = close.index.get_loc(d)
         row = pd.DataFrame({name: f.loc[d] for name, f in feats.items()})  # incl. the flag
         row["fwd_return"] = fwd.loc[d]
         row["tradable"] = close.loc[d].notna()
-        row = row[row["tradable"]].drop(columns="tradable").dropna()
+        row = row[row["tradable"]]
+        untraded = row["_untraded"] == 1
+        excluded["untraded_21"] += int(untraded.sum())
+        excluded["stale_window"] += int(((row["_stale"] == 1) & ~untraded).sum())
+        row = row.drop(columns=["tradable", "_untraded", "_stale"]).dropna()
         if len(row) < 10:
             continue
         row["label"] = (row["fwd_return"] > row["fwd_return"].median()).astype(int)
@@ -233,9 +275,13 @@ def build_panel(
         row["label_available_at"] = close.index[k + h]
         frames.append(row.rename_axis("symbol").reset_index())
     if not frames:
-        return pd.DataFrame(columns=PANEL_COLUMNS)
-    panel = pd.concat(frames, ignore_index=True)
-    return panel[PANEL_COLUMNS]
+        empty = pd.DataFrame(columns=PANEL_COLUMNS)
+        empty.attrs["excluded"] = excluded
+        return empty
+    panel = pd.concat(frames, ignore_index=True)[PANEL_COLUMNS]
+    # Rows left out for a stated reason (not warm-up): reported with the results.
+    panel.attrs["excluded"] = excluded
+    return panel
 
 
 def panel_hash(panel: pd.DataFrame) -> str:
@@ -411,6 +457,9 @@ def run_ml_experiment(
         "panel": {
             "rows": len(panel),
             "volume_flat_rows": int(panel["volume_flat_21"].sum()),
+            # Excluded tradable rows: no volume in 21 bars; a window spanning more than
+            # STALENESS_FACTOR x its lookback in sessions (a long halt).
+            "excluded_rows": dict(panel.attrs.get("excluded", {})),
             "dates": int(panel["date"].nunique()),
             "symbols": int(panel["symbol"].nunique()),
             "hash": panel_hash(panel),
