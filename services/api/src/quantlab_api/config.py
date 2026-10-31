@@ -8,6 +8,7 @@ import secrets
 from functools import lru_cache
 from pathlib import Path
 from typing import Literal
+from urllib.parse import urlsplit
 
 from pydantic import Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -73,6 +74,10 @@ def _create_dev_secret(path: Path) -> str:
     finally:
         tmp.unlink(missing_ok=True)
     return value
+
+
+# The published development default in docker-compose.yml; refused in production.
+DEV_REDIS_PASSWORD = "quantlab-dev"  # noqa: S105
 
 
 class Settings(BaseSettings):
@@ -160,20 +165,23 @@ class Settings(BaseSettings):
 
     @model_validator(mode="after")
     def _production_guards(self) -> Settings:
+        """Checks every production process needs (API, worker, reaper, migrations).
+
+        The API's own secrets, the JWT signing key and the metrics token, are checked by
+        :meth:`require_api_secrets` when the API starts. Workers never sign or verify a
+        token, so they are not given the key (#117).
+        """
         if self.environment == "production":
-            if self.jwt_secret is None:
-                raise ValueError("QUANTLAB_JWT_SECRET must be set in production")
-            secret = self.jwt_secret.get_secret_value()
-            if len(secret) < 32:
-                raise ValueError("QUANTLAB_JWT_SECRET must be at least 32 characters")
-            if any(m in secret.lower() for m in ("insecure", "change-me", "changeme", "dev-only")):
-                raise ValueError("QUANTLAB_JWT_SECRET is a placeholder; generate a real secret")
-            if self.metrics_token is None or len(self.metrics_token.get_secret_value()) < 16:
-                raise ValueError(
-                    "QUANTLAB_METRICS_TOKEN (16+ characters) must be set in production"
-                )
             if not self.cookie_secure:
                 raise ValueError("QUANTLAB_COOKIE_SECURE must be true in production")
+            # Redis holds the job queue and the login rate limits: without AUTH, anything
+            # that reaches it can fill the queue or reset the limits (#115).
+            redis_password = urlsplit(self.redis_url).password or ""
+            if len(redis_password) < 16 or redis_password == DEV_REDIS_PASSWORD:
+                raise ValueError(
+                    "QUANTLAB_REDIS_URL must carry a real Redis password (16+ characters) "
+                    "in production: set QUANTLAB_REDIS_PASSWORD"
+                )
             if self.market_data_provider and self.market_data_api_key is None:
                 raise ValueError(
                     "QUANTLAB_MARKET_DATA_API_KEY must be set (non-blank) when "
@@ -181,10 +189,36 @@ class Settings(BaseSettings):
                 )
         return self
 
+    def require_api_secrets(self) -> None:
+        """Refuse to serve the API in production without its own secrets (#117).
+
+        Called first by ``create_app``. The same checks used to run in every process, so
+        workers and the reaper needed the API's signing key, which they never use.
+        """
+        if self.environment != "production":
+            return
+        if self.jwt_secret is None:
+            raise ValueError("QUANTLAB_JWT_SECRET must be set in production")
+        secret = self.jwt_secret.get_secret_value()
+        if len(secret) < 32:
+            raise ValueError("QUANTLAB_JWT_SECRET must be at least 32 characters")
+        if any(m in secret.lower() for m in ("insecure", "change-me", "changeme", "dev-only")):
+            raise ValueError("QUANTLAB_JWT_SECRET is a placeholder; generate a real secret")
+        if self.metrics_token is None or len(self.metrics_token.get_secret_value()) < 16:
+            raise ValueError("QUANTLAB_METRICS_TOKEN (16+ characters) must be set in production")
+
     @property
     def signing_key(self) -> str:
-        """The JWT signing key (a shared development key when none is configured)."""
+        """The JWT signing key (a shared development key when none is configured).
+
+        In production there is no fallback: a process without the key fails closed at its
+        first token operation instead of signing with a development key.
+        """
         if self.jwt_secret is None:
+            if self.environment == "production":
+                raise RuntimeError(
+                    "QUANTLAB_JWT_SECRET is not set: only the API signs tokens (#117)"
+                )
             self.jwt_secret = _shared_dev_secret(self.data_dir)
         return self.jwt_secret.get_secret_value()
 

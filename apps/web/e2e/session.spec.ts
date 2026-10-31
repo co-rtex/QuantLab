@@ -79,4 +79,7 @@ test("a failed backtest shows why", async ({ page }) => {
   await expect(page.getByText("DataError: No bars on or after the start date")).toBeVisible();
   await expect(page.getByRole("button", { name: "Cancel run" })).toHaveCount(0);
   await audit(page, "experiment, failed run");
+  // The page keeps polling through these routes; a callback still in flight when the
+  // test ends fails the run outside any test (as cancel.spec did, #114).
+  await page.unrouteAll({ behavior: "ignoreErrors" });
 });

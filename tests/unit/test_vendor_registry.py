@@ -82,6 +82,7 @@ def test_production_refuses_a_provider_without_a_key():
         "jwt_secret": "x" * 40,
         "metrics_token": "m" * 20,
         "cookie_secure": True,
+        "redis_url": "redis://:" + "r" * 20 + "@redis:6379/0",  # production requires AUTH (#115)
     }
     with pytest.raises(ValidationError, match="MARKET_DATA_API_KEY"):
         Settings(_env_file=None, **prod, market_data_provider="massive", market_data_api_key=" ")
@@ -106,6 +107,7 @@ SECRETS = {
     "metrics_token": "METRICSTOKEN_0123456789",
     "anthropic_api_key": "ANTHROPICKEY_0123456789",
     "market_data_api_key": "MDKEY_abcdef0123456789",
+    "redis_url": "rediss://:REDISPASSWORD_0123456789@redis:6379/0",
 }
 PROD = {
     "environment": "production",
@@ -118,11 +120,8 @@ PROD = {
 @pytest.mark.parametrize(
     "broken",
     [
-        {"jwt_secret": None},  # unset
-        {"jwt_secret": "JWTSHORT_x"},  # too short: the value itself is a secret
-        {"jwt_secret": "insecure-change-me-" + "z" * 30},  # placeholder
-        {"metrics_token": None},
         {"cookie_secure": False},
+        {"redis_url": "rediss://redis:6379/0"},  # no Redis password
         {"market_data_api_key": " "},  # provider without a key
         {"market_data_provider": "polgon"},  # a field error follows the same rule
     ],
@@ -143,3 +142,28 @@ def test_no_secret_appears_in_a_settings_error(broken):
     for secret in secrets:
         if secret.strip():
             assert secret not in text, f"{secret} leaked"
+
+
+@pytest.mark.parametrize(
+    "broken",
+    [
+        {"jwt_secret": None},  # unset
+        {"jwt_secret": "JWTSHORT_x"},  # too short: the value itself is a secret
+        {"jwt_secret": "insecure-change-me-" + "z" * 30},  # placeholder
+        {"metrics_token": None},
+    ],
+)
+def test_no_secret_appears_when_the_api_refuses_its_secrets(broken):
+    """The API-only checks (#117) run at API start and must not echo secrets either."""
+    import traceback
+
+    from quantlab_api.config import Settings
+
+    values = {**PROD, **broken}
+    settings = Settings(_env_file=None, **{k: v for k, v in values.items() if v is not None})
+    with pytest.raises(ValueError) as exc:
+        settings.require_api_secrets()
+    text = str(exc.value) + "".join(traceback.format_exception(exc.value))
+    secrets = [*SECRETS.values(), *(v for v in broken.values() if isinstance(v, str))]
+    for secret in secrets:
+        assert secret not in text, f"{secret} leaked"

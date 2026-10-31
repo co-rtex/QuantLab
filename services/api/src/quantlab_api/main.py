@@ -44,6 +44,7 @@ def _brief(exc: BaseException) -> str:
 
 def create_app() -> FastAPI:
     settings = get_settings()
+    settings.require_api_secrets()  # only the API holds the signing key (#117)
     configure_logging(json=settings.environment != "development")
     app = FastAPI(
         title="QuantLab API",

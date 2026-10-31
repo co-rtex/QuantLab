@@ -1,6 +1,6 @@
 # Status (authoritative handoff)
 
-_Last updated: 2026-10-31 (lead integration cycle 2: 62 PRs merged before this update, per `gh pr list --state merged`; main `f7e399f`)_
+_Last updated: 2026-10-31 (lead integration cycle 2: 90 PRs merged before this update, per `gh pr list --state merged`; main `1bc2da5`)_
 
 ## Where things stand
 All roadmap phases 0–10 are implemented. An independent audit on 2026-10-30
@@ -125,10 +125,45 @@ leases and migration slots: [docs/COORDINATION.md](docs/COORDINATION.md).
   * #104 no stale data across resource changes (#23 slice 2). #105 workspace rename,
     delete and member removal (#23 slice 3a).
   * #106 an authoritative `is_synthetic` on result rows (#102).
+  * #107 cancel jobs. #109 labels from the row field. #111 saved strategies. #112 session E2E.
+    #114 CSV import. **#23 complete.**
+  * #110 benchmark harness: variance, cold mode, load metadata; golden tests moved (#24,
+    no figures published).
+  * #113 AWS Terraform, validated and **never applied** (#19). Redis AUTH uses an ephemeral
+    write-only token. **The Caddyfile is NOT validated.**
+  * #116 (lead) the reaper mounts the data volume; it was sweeping an empty `/data`.
+  * #119 RDS CA bundle (pinned checksum) for `sslmode=verify-full`.
+  * #121 cross-feature point-in-time sweep (#118). It found **#120**: a short halt dropped a
+    security from the ML panel for up to 252 sessions. The fix is #125, in review.
+  * **#122 (P1 security, #115): no pickle in the job queue.** An allowlisted callable only,
+    no callbacks or webhooks, and Redis AUTH.
+  * #124 default start date on short datasets.
+  * #127 pinned tests for the #122 trusted-job registry and scheduler paths (#115 follow-up).
+  * #128 the JWT and metrics secrets are required only by the API process (#117); worker,
+    reaper and migrate start without them. Clears the JWT item from ADR-0012's
+    "Before any apply" list.
+  * #129 a retry is not claimed before its backoff ends (`jobs.not_before`, migration M4
+    `4d2b8e6f0c15`). Early or forged deliveries reschedule once and consume no attempt (#123).
+  * #132 every job lease, heartbeat, backoff, claim, finish and creation time comes from the
+    database clock, so hosts with skewed clocks can neither claim a retry early nor see a
+    live lease as expired (#130). Only the queue-wait metric still uses a host clock.
+  * #135 a route-wide authorization matrix (#133): all 70 routes classified, failing on an
+    unclassified route, mount or websocket; unauthenticated, outsider, below-role,
+    cross-workspace-role, path-swap and body-swap checks, plus an error-body leak check.
+    Ten deliberately broken versions of the authorization checks were each caught. No
+    route failed it.
+  * #136 job tests set deadlines in database time.
+  * #138 dependency audit (#137, `docs/SECURITY_DEPENDENCIES.md`): no known vulnerabilities
+    in any runtime dependency (pip-audit 2.10.1 on PyPI and OSV, npm audit). One dev-only
+    lint advisory accepted. The production JWT secret floor (32) is pinned by a test.
+  * #139 (lead) CI's runtime dependency audits now block; dev tools only warn. No
+    scheduled run (Actions minutes, #17).
+  * #140 runbook refreshed for Redis AUTH, the API-only secrets, retry backoff and
+    database-time job deadlines.
 * Every merge had an independent read-only lead review: no blockers. Should-fix items are
   tracked in #8, #51, #52 and #55 (Agent 2), #39 (gate), and #41, #50 and #54 (Agent 3).
 
-## Last verified (2026-10-31, main `f7e399f`)
+## Last verified (2026-10-31, main `1bc2da5`)
 Each merge was verified on a trial merge with current main, with pytest output written to a
 file rather than piped:
 * #28, #32, #36, #29, #30, #31: tree identical to main afterwards; 314 passed;
@@ -172,6 +207,20 @@ file rather than piped:
   intermittent validation-panel race**, not only contention; it's reassigned to Agent 2.
 * #97: 892 passed, E2E 21/21. #99: E2E 23/23 (plus 5 consecutive full runs by Agent 2).
   #100: E2E 26/26.
+* #122 + #114: an unauthenticated Redis ping gets NOAUTH; **950 passed**, E2E 40/40.
+  #119 + #121: 933 passed plus the intended #120 xfail, E2E 37/37 on the rebuilt image.
+  #124: E2E 41/41 (byte-identical to main `2cafc62`).
+* main@6c69691 + #127 + #128 (byte-identical to main `ead9020`): **960 passed, 1 xfailed**
+  (#120), exit 0; ruff, format, mypy, web lint/typecheck/build clean; **E2E 41/41**.
+* main@ead9020 + #129 (byte-identical to main `db005e4`): **964 passed, 1 xfailed**; fresh-DB
+  round trip head → `b5e1d7c3a924` → head (`jobs.not_before` present, absent, present),
+  `alembic check` no drift; **E2E 41/41**.
+* main@f8830ab + #132 (byte-identical to main `b85e3c0`): **970 passed, 1 xfailed**;
+  `alembic check` no drift; **E2E 41/41**.
+* #136: 970 passed. #135: **1213 passed**, the matrix alone 243/243 in about 9 s, and 269/269
+  for the affected files on the combined tree with #136. #138: 974 passed, and its changed
+  tests pass with DeprecationWarning as an error. These are test- and docs-only, so no E2E.
+* #139: the blocking audits passed locally (exit 0) and in the PR's own CI run.
 * #101 + #103 + #104: 899 passed, E2E 27/27. #105 + #106 (byte-identical to main
   `f7e399f`): **906 passed, E2E 30/30**.
 
@@ -185,22 +234,20 @@ E2E failures this cycle were resource starvation, not regressions:
 Full-stack runs are now serialized machine-wide (`make e2e-serial`).
 
 ## Next steps (issues carry owners and acceptance criteria)
-1. **Agent 2:**
-   * #107 (cancel workflows; two small fixes);
-   * the rest of #23 (saved strategies, CSV import, E2E for failure, session expiry and
-     logout);
-   * switch `useSynthetic` to the row field from #106;
-   * then #19 Terraform (validated, never applied; the edge must preserve client IPs).
-2. **Agent 3:** #24 harness and methodology (no published figures until a quiet window).
+1. **Agent 2:** no unblocked issue; standing by for reviews and findings.
+2. **Agent 3:** #125 (#120 ML own-bar windows). The staleness rule is being revised so it
+   targets genuine halts, not sparsely traded names, with a selection table in METHODOLOGY.
 3. **Lead:** integrate.
 4. **Blocked on the user:**
-   * #39 (a host and a second machine);
+   * #39 (a host, a second machine, and Caddyfile validation, since the caddy download was
+     denied);
    * #17 (Actions minutes);
    * #11 and #12 live (vendor, licence and key);
    * #15 hosted eval (LLM key);
    * #20 (load host);
-   * #55 option A (product decision);
-   * a quiet window for #24 figures.
+   * #55 option A;
+   * a quiet window for #24 figures;
+   * any `terraform apply` (cloud account, cost).
 
 ## Blockers
 No LLM API key, market-data API key or cloud credentials (docs/BLOCKERS.md).

@@ -6,9 +6,26 @@
 |---|---|---|
 | API liveness | `curl localhost:8000/api/v1/health` | `{"status":"ok"}` |
 | API readiness (DB + Redis) | `curl -i localhost:8000/api/v1/ready` | 200, both checks `ok` (503 when degraded) |
-| Workers | `docker compose --profile app ps worker` / `rq info -u $QUANTLAB_REDIS_URL` | workers listening on `quantlab` |
+| Workers | `docker compose --profile app ps worker` / `rq info` as below | workers listening on `quantlab` |
 | Reaper | logs contain `reaper_cycle` lines when it recovers anything | process running |
 | Metrics | `curl -H "Authorization: Bearer $QUANTLAB_METRICS_TOKEN" localhost:8000/metrics` | Prometheus text |
+
+### Inspecting the job queue
+
+The queue holds JSON entries that only `TrustedJob` will run (#115). The `rq` command line
+tools default to pickle and to RQ's base `Job`, so pointed at a Redis someone has tampered
+with they unpickle job meta and results *on your machine*. Always:
+
+```
+export RQ_REDIS_URL="$QUANTLAB_REDIS_URL"       # from the environment, never `-u <url>`:
+                                                # a command line, and its password, shows in `ps`
+export RQ_JOB_CLASS=quantlab_api.jobs.TrustedJob
+rq info -S rq.serializers.JSONSerializer
+rq requeue --all -S rq.serializers.JSONSerializer   # only with both variables set
+```
+
+Never point plain `rq` tools, or rq-dashboard (it reads jobs with the default serializer),
+at this Redis.
 
 ## Observability
 
@@ -25,23 +42,49 @@
 
 ## Incidents
 
+Job timing runs on PostgreSQL's clock, not any host's (#130). That covers leases,
+heartbeats, retry backoffs, the reaper's cutoffs, claims and `created_at`. When reading
+these columns, compare them with `SELECT now()` in the database, not with `date` on a host.
+A worker, reaper or API host with a skewed clock no longer moves any job deadline.
+
 ### Jobs stuck in `queued`
-1. `GET /api/v1/ready`: if Redis is down, submissions are still recorded durably.
-2. Restore Redis; the reaper re-delivers queued jobs older than 2 minutes
-   (`reaper_cycle redelivered=N`). Duplicate deliveries are harmless (atomic claim).
-3. If no reaper is running, run `quantlab-cli reaper --interval 15`, or execute one job
-   synchronously for diagnosis: `quantlab-cli run-job <job-id>`.
+0. **Check it isn't waiting out a retry.** A job whose `message` reads
+   `retrying in Ns after <error>` is in its backoff: 2 s, then 4 s, and so on, never more
+   than 60 s. It isn't stuck. Its `jobs.not_before` column holds when it may run (#123), and
+   no worker claims it before then, however early a delivery arrives.
+1. `GET /api/v1/ready`: if Redis is down, submissions are still recorded durably. Redis
+   requires AUTH (#115). A replacement Redis must use the same `QUANTLAB_REDIS_PASSWORD`
+   (`--requirepass`), or readiness stays 503 with `ready_check_failed component=redis` and
+   an authentication error, and nothing can be enqueued.
+2. Restore Redis. The reaper then re-delivers each queued job (`reaper_cycle
+   redelivered=N`) once all of these hold, in database time:
+   * it was created more than 2 minutes ago;
+   * its last delivery or heartbeat was more than 2 minutes ago;
+   * its backoff, if any, has passed.
+
+   Duplicate deliveries are harmless (atomic claim).
+3. If no reaper is running, run `quantlab-cli reaper --interval 15`. To execute one job
+   synchronously for diagnosis, use `quantlab-cli run-job <job-id>`. It goes through the
+   same claim as a worker, so it prints `skipped` and runs nothing for a job that isn't
+   claimable: one still in its backoff, one cancelled, or one another worker holds a live
+   lease on.
 
 ### Jobs stuck in `running`
-A worker died mid-job. Its lease (default 60 s) expires; the reaper requeues the job (or
-fails it once `max_attempts` is reached, or marks it `timed_out` past `timeout_seconds`).
+A worker died mid-job. Its lease (default 60 s, `QUANTLAB_JOB_LEASE_SECONDS`) expires in
+database time. The reaper then does one of four things:
+* marks the job `cancelled` if a cancel was requested;
+* marks it `timed_out` once it has run past `timeout_seconds`;
+* fails it once `max_attempts` is reached;
+* otherwise requeues it to run at once, with no backoff.
+
 A late heartbeat or commit from the dead worker is fenced out by the attempt counter, so
 no duplicate result can be written.
 
 ### A job keeps failing
 `GET /api/v1/jobs/{id}` → `error.type`, `error.message`, `error.trace` and `retryable`.
-Permanent errors (invalid input, missing dataset) are not retried. Fix the input and
-submit a new experiment; results of failed jobs are never stored.
+Retryable errors are retried with the backoff above until `max_attempts`. Permanent
+errors (invalid input, missing dataset) are not retried. Fix the input and submit a new
+experiment; results of failed jobs are never stored.
 
 ### 429 `too_many_jobs` on submissions
 Queued plus running jobs are capped per workspace (`QUANTLAB_MAX_ACTIVE_JOBS_PER_WORKSPACE`,
@@ -128,15 +171,26 @@ Deleting a workspace removes its files after the database commit (#21,
   secret, or delete the file after a restore to rotate the key (signs everyone out). Dataset
   versions are content-addressed; after a restore, `DatasetStore.verify()` recomputes each
   hash to detect corruption.
-* Redis holds only queue messages and caches. After loss, the reaper re-delivers queued jobs
-  from PostgreSQL; caches refill on demand.
+* Redis holds no durable state: only queue messages (including retries scheduled for later
+  delivery), the login rate-limit counters, and caches. After a loss:
+  * the reaper re-delivers queued jobs from PostgreSQL, a retry once its backoff has passed;
+  * rate limits start again from zero;
+  * caches refill on demand.
+
+  A replacement Redis needs the same password (see "Jobs stuck in `queued`").
 
 ## Configuration checklist for production
 
-`QUANTLAB_ENVIRONMENT=production` refuses to start unless `QUANTLAB_JWT_SECRET` is a real
-secret (≥ 32 characters, no placeholder words), `QUANTLAB_COOKIE_SECURE=true`, and
-`QUANTLAB_METRICS_TOKEN` is set. Terminate TLS at the trusted edge (below). Run migrations
+`QUANTLAB_ENVIRONMENT=production` refuses to start every process (API, worker, reaper,
+migrations) unless `QUANTLAB_COOKIE_SECURE=true` and the Redis URL carries a real password
+(16+ characters, from `QUANTLAB_REDIS_PASSWORD` in compose; #115). The **API** also
+refuses unless `QUANTLAB_JWT_SECRET` is a real secret (≥ 32 characters, no placeholder
+words) and `QUANTLAB_METRICS_TOKEN` has 16+ characters. Workers and the reaper never sign
+tokens and do not need either (#117); without the key a process fails closed instead of
+using a development key. Terminate TLS at the trusted edge (below). Run migrations
 (`alembic -c services/api/alembic.ini upgrade head`) before starting new API versions.
+Keep every clock synchronised (NTP), the database server's above all: every job deadline
+follows it (#130). Hosts' clocks still date tokens and the storage sweep's file times.
 
 In production, login and registration accept only requests that arrive through the web
 tier (a trusted proxy); a direct call to the API, such as
@@ -180,6 +234,11 @@ and ten failed logins would lock everyone out. Step 3 checks this.
    ```
    export QUANTLAB_EDGE_SECRET=$(openssl rand -hex 32)   # store it like the JWT secret
    export QUANTLAB_JWT_SECRET=$(openssl rand -hex 32) QUANTLAB_METRICS_TOKEN=$(openssl rand -hex 24)
+   export QUANTLAB_REDIS_PASSWORD=$(openssl rand -hex 24)   # hex: safe inside the Redis URL
+   ```
+   A password with other characters (`@`, `/`, `:`, `#`, `%` …) must be percent-encoded
+   where it appears in `QUANTLAB_REDIS_URL`, or the URL is read wrongly.
+   ```
    docker compose -f docker-compose.yml -f infra/edge/compose.yml --profile app up -d --build
    ```
    For a public domain also set `QUANTLAB_EDGE_SITE=quantlab.example.com` and
@@ -242,4 +301,4 @@ resources and needs the user's account and approval. What differs from compose:
   time and stored only in the `redis_url` secret. To rotate it, increase
   `redis_auth_token_version` (`infra/terraform/README.md`).
 * **Before any apply:** work through the checklist in `infra/terraform/README.md`: Redis
-  AUTH, the Caddyfile and `verify.sh`, `sslmode=verify-full`, and the JWT secret scope.
+  AUTH, the Caddyfile and `verify.sh`, and `sslmode=verify-full`.

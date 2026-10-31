@@ -32,7 +32,9 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from redis import Redis
-from rq import Queue
+from rq import Queue, get_current_job
+from rq.job import Job as RQJob
+from rq.serializers import JSONSerializer
 from sqlalchemy import func, or_, select, text, update
 from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import Session
@@ -83,6 +85,17 @@ class LeaseLostError(Exception):
     pass
 
 
+def db_now() -> Any:
+    """The database's clock, for every lease, backoff and claim (#130).
+
+    Hosts' clocks differ: a deadline one worker wrote with its clock and another compared
+    with its own let a delayed retry run early, or a lease look expired early (a second
+    worker then ran the job too, until fencing stopped its commit). ``now()`` is the
+    statement's transaction time in PostgreSQL, the same for every row it touches.
+    """
+    return func.now()
+
+
 def now() -> datetime:
     return datetime.now(UTC)
 
@@ -93,6 +106,79 @@ def worker_identity() -> str:
 
 # --------------------------------------------------------------------------- queueing
 _redis: Redis | None = None  # type: ignore[type-arg]
+
+#: The one callable a worker runs from the queue. Everything a job needs is in its
+#: PostgreSQL row (ADR-0002), so the queue entry is only a pointer to it (#115).
+TRUSTED_FUNC = "quantlab_api.jobs.execute_job"
+
+
+class UntrustedJobError(RuntimeError):
+    """A queue entry that is not ``execute_job(<job id>)``: never run."""
+
+
+class TrustedJob(RQJob):
+    """An RQ job that runs nothing but :data:`TRUSTED_FUNC` with one job id (#115).
+
+    RQ's default serializer is pickle, so anyone who could write to Redis could make a
+    worker run arbitrary code while it unpickled a job; the JSON serializer closes that.
+    It does not close the rest: RQ stores the callable *by name* and imports it on the
+    worker, and so it does the success, failure and stopped callbacks, and it delivers
+    any webhooks the entry lists. A JSON entry naming ``os.system``, or failing on purpose
+    with a failure callback, would still run. This class checks the callable and its
+    arguments before RQ resolves anything, never resolves a callback, and never delivers
+    a webhook: the application uses neither.
+    """
+
+    def restore(self, raw_data: Any) -> Any:
+        result = super().restore(raw_data)
+        self.webhooks = []  # never registered by QuantLab: an entry's list is not trusted
+        return result
+
+    @property
+    def func(self) -> Any:
+        self._require_trusted()
+        return super().func
+
+    # Callbacks are imported by name, like the callable: none is ever run.
+    @property
+    def success_callback(self) -> None:
+        return None
+
+    @property
+    def failure_callback(self) -> None:
+        return None
+
+    @property
+    def stopped_callback(self) -> None:
+        return None
+
+    def _require_trusted(self) -> None:
+        args, kwargs = self.args, self.kwargs
+        if (
+            self.func_name != TRUSTED_FUNC
+            or self.instance is not None
+            or kwargs
+            or len(args) != 1
+            or not isinstance(args[0], str)
+            or not _is_uuid(args[0])
+        ):
+            log.error(
+                "untrusted_job_refused", rq_job_id=self.id, func_name=str(self.func_name)[:200]
+            )
+            raise UntrustedJobError(f"refusing to run queue entry {self.id!r}")
+
+
+def _is_uuid(value: str) -> bool:
+    try:
+        uuid.UUID(value)
+    except ValueError:
+        return False
+    return True
+
+
+#: How every queue and worker must talk to Redis: JSON, never pickle, and only trusted
+#: jobs. A worker built without these would unpickle whatever is on the queue.
+RQ_OPTIONS: dict[str, Any] = {"serializer": JSONSerializer, "job_class": TrustedJob}
 
 
 def redis_conn() -> Redis:  # type: ignore[type-arg]
@@ -109,11 +195,14 @@ def set_redis(conn: Redis | None) -> None:  # type: ignore[type-arg]
 
 
 def get_queue() -> Queue:
-    return Queue(get_settings().queue_name, connection=redis_conn())
+    return Queue(get_settings().queue_name, connection=redis_conn(), **RQ_OPTIONS)
 
 
-def enqueue(job: Job, delay_seconds: float = 0.0) -> bool:
-    """Best effort: if Redis is down the job stays queued and the reaper re-delivers it."""
+def enqueue(job: Job, delay_seconds: float = 0.0, delivery_id: str | None = None) -> bool:
+    """Best effort: if Redis is down the job stays queued and the reaper re-delivers it.
+
+    ``delivery_id`` names the queue entry, so enqueueing the same delivery again replaces
+    it rather than adding another."""
     try:
         q = get_queue()
         kwargs: dict[str, Any] = {
@@ -122,6 +211,8 @@ def enqueue(job: Job, delay_seconds: float = 0.0) -> bool:
             "failure_ttl": 86400,
             "description": f"{job.kind}:{job.id}",
         }
+        if delivery_id is not None:
+            kwargs["job_id"] = delivery_id
         if delay_seconds > 0:
             q.enqueue_in(timedelta(seconds=delay_seconds), execute_job, str(job.id), **kwargs)
         else:
@@ -352,7 +443,7 @@ def request_cancel(db: Session, job: Job) -> Job:
             .values(
                 status=JobStatus.cancelled,
                 cancel_requested=True,
-                finished_at=now(),
+                finished_at=db_now(),
                 message="cancelled before start",
             )
         )
@@ -419,8 +510,8 @@ class JobContext:
         self._last_beat = t
         lease = get_settings().job_lease_seconds
         values: dict[str, Any] = {
-            "heartbeat_at": now(),
-            "lease_expires_at": now() + timedelta(seconds=lease),
+            "heartbeat_at": db_now(),
+            "lease_expires_at": db_now() + timedelta(seconds=lease),
         }
         if progress is not None:
             values["progress"] = max(0.0, min(1.0, float(progress)))
@@ -467,7 +558,7 @@ def handler(kind: str) -> Callable[[Handler], Handler]:
 
 def claim(job_id: uuid.UUID, worker_id: str) -> Job | None:
     lease = get_settings().job_lease_seconds
-    t = now()
+    t = db_now()  # the statement's own clock: one host's skew cannot move a deadline
     with SessionLocal() as db:
         row = db.execute(
             update(Job)
@@ -475,13 +566,17 @@ def claim(job_id: uuid.UUID, worker_id: str) -> Job | None:
                 Job.id == job_id,
                 Job.cancel_requested.is_(False),
                 or_(
-                    Job.status == JobStatus.queued,
+                    # A queued retry only once its backoff has passed (#123): an early or
+                    # forged delivery claims nothing, and so consumes no attempt.
+                    (Job.status == JobStatus.queued)
+                    & or_(Job.not_before.is_(None), Job.not_before <= t),
                     (Job.status == JobStatus.running) & (Job.lease_expires_at < t),
                 ),
                 Job.attempts < Job.max_attempts,
             )
             .values(
                 status=JobStatus.running,
+                not_before=None,
                 attempts=Job.attempts + 1,
                 worker_id=worker_id,
                 lease_expires_at=t + timedelta(seconds=lease),
@@ -515,7 +610,7 @@ def _finish(
         job.status = status
         job.message = message[:500]
         job.error = error
-        job.finished_at = now()
+        job.finished_at = db_now()
         job.lease_expires_at = None
         if progress is not None:
             job.progress = progress
@@ -524,12 +619,37 @@ def _finish(
         return True
 
 
+def _redeliver_when_due(job_id: uuid.UUID) -> None:
+    """A delivery that arrived before a queued retry's backoff ends (early, or forged) is
+    put back for when the job is due, so a scheduler running slightly fast cannot strand a
+    retry until the reaper's next pass (#123)."""
+    with SessionLocal() as db:
+        job = db.get(Job, job_id)
+        if job is None or job.status != JobStatus.queued or job.cancel_requested:
+            return
+        t = db.scalar(select(db_now()))
+        if job.not_before is not None and t is not None and job.not_before > t:
+            # One delivery per due time: k early (or forged) deliveries reschedule it once.
+            due = job.not_before
+            # No ":" in it: RQ registries key entries as "<job id>:<execution id>".
+            delivery = f"{job.id}-{round(due.timestamp() * 1_000_000)}"
+            running = get_current_job()
+            if running is not None and running.id == delivery:
+                # This entry is that delivery, arriving early. Under its own name the
+                # reschedule shares the hash of the entry being run: RQ 3.0 still delivers
+                # it when due, but the worker marks it finished in the meantime, so the
+                # queue shows a pending delivery as done. Another name keeps them apart.
+                delivery += "-again"
+            enqueue(job, delay_seconds=(due - t).total_seconds(), delivery_id=delivery)
+
+
 def execute_job(job_id: str, worker_id: str | None = None) -> str:
     """Entry point invoked by RQ (or directly in tests). Returns the outcome label."""
     jid = uuid.UUID(job_id)
     wid = worker_id or worker_identity()
     job = claim(jid, wid)
     if job is None:
+        _redeliver_when_due(jid)
         log.info("job_skip", job_id=job_id, reason="not claimable")
         return "skipped"
     token = attach_carrier(job.trace_context)
@@ -589,7 +709,7 @@ def _run_claimed(job: Job, jid: uuid.UUID, wid: str) -> str:
             locked.status = JobStatus.completed
             locked.progress = 1.0
             locked.message = (summary or {}).get("message", "completed")[:500]
-            locked.finished_at = now()
+            locked.finished_at = db_now()
             locked.lease_expires_at = None
             _mirror_status(db, locked, JobStatus.completed)
             db.commit()
@@ -636,6 +756,7 @@ def _run_claimed(job: Job, jid: uuid.UUID, wid: str) -> str:
                         status=JobStatus.queued,
                         error=err,
                         lease_expires_at=None,
+                        not_before=db_now() + timedelta(seconds=delay),
                         message=f"retrying in {delay:.0f}s after {type(exc).__name__}",
                     )
                 )
@@ -693,7 +814,8 @@ class _Keepalive:
                             Job.status == JobStatus.running,
                         )
                         .values(
-                            lease_expires_at=now() + timedelta(seconds=lease), heartbeat_at=now()
+                            lease_expires_at=db_now() + timedelta(seconds=lease),
+                            heartbeat_at=db_now(),
                         )
                     )
                     db.commit()
@@ -712,9 +834,13 @@ class _Keepalive:
 # --------------------------------------------------------------------------- recovery
 def reap(redeliver_after_seconds: int = 120) -> dict[str, int]:
     """Recover jobs whose worker died and re-deliver queued jobs that were never picked up."""
-    t = now()
     stats = {"requeued": 0, "failed": 0, "timed_out": 0, "redelivered": 0, "uploads_swept": 0}
     with SessionLocal() as db:
+        # The database's time, not this host's (#130): leases and backoffs were written in
+        # it, and a reaper with a fast clock would otherwise requeue live jobs.
+        t = db.scalar(select(db_now()))
+        if t is None:  # not an assert: those are stripped under -O
+            raise RuntimeError("the database returned no time")
         stale = db.scalars(
             select(Job)
             .where(Job.status == JobStatus.running, Job.lease_expires_at < t)
@@ -774,6 +900,7 @@ def reap(redeliver_after_seconds: int = 120) -> dict[str, int]:
                 Job.cancel_requested.is_(False),
                 Job.created_at < cutoff,
                 or_(Job.heartbeat_at.is_(None), Job.heartbeat_at < cutoff),
+                or_(Job.not_before.is_(None), Job.not_before <= t),  # its backoff is over
             )
             .order_by(Job.created_at)
             .limit(500)
