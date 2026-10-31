@@ -250,9 +250,12 @@ def report(
     db.commit()
     body = render_html(ctx) if format == "html" else render_markdown(ctx)
     media = "text/html; charset=utf-8" if format == "html" else "text/markdown; charset=utf-8"
+    # The report is generated HTML that quotes user-supplied names and notes. Even if
+    # escaping failed somewhere, the sandbox (no scripts, a unique origin, so no access to
+    # the app's cookies or storage), no forms and no <base> keep it inert.
     headers = {
         "Content-Security-Policy": "default-src 'none'; style-src 'unsafe-inline'; "
-        "img-src data:; frame-ancestors 'none'"
+        "img-src data:; frame-ancestors 'none'; sandbox; form-action 'none'; base-uri 'none'"
     }
     if download:
         ext = "html" if format == "html" else "md"

@@ -43,6 +43,14 @@ no duplicate result can be written.
 Permanent errors (invalid input, missing dataset) are not retried. Fix the input and
 submit a new experiment; results of failed jobs are never stored.
 
+### 429 `too_many_jobs` on submissions
+Queued plus running jobs are capped per workspace (`QUANTLAB_MAX_ACTIVE_JOBS_PER_WORKSPACE`,
+default 50) and per account across all its workspaces. The account cap is
+min(`QUANTLAB_MAX_ACTIVE_JOBS_PER_USER`, `QUANTLAB_MAX_ACTIVE_JOBS_PER_WORKSPACE`), so
+lowering the workspace cap also lowers every user's account-wide cap; otherwise extra
+workspaces would multiply one account's allowance. A replay of an idempotent request is
+never refused because of the job it created.
+
 ### Elevated 429s on login
 Throttling is per client address and per account (failed attempts only), shared through
 Redis. Behind the TLS edge the client address is the edge's TCP peer, which the edge
@@ -65,7 +73,10 @@ instead.
 
 * PostgreSQL: `docker compose exec postgres pg_dump -U quantlab -Fc quantlab > quantlab.dump`;
   restore with `pg_restore -c -d quantlab quantlab.dump`.
-* Data directory: copy `$QUANTLAB_DATA_DIR` (or snapshot the `appdata` volume). Dataset
+* Data directory: copy `$QUANTLAB_DATA_DIR` (or snapshot the `appdata` volume).
+  Without `QUANTLAB_JWT_SECRET` (development), the signing key is generated into
+  `$QUANTLAB_DATA_DIR/.jwt-dev-secret` and travels with these backups; treat them as
+  secret, or delete the file after a restore to rotate the key (signs everyone out). Dataset
   versions are content-addressed; after a restore, `DatasetStore.verify()` recomputes each
   hash to detect corruption.
 * Redis holds only queue messages and caches. After loss, the reaper re-delivers queued jobs
@@ -77,6 +88,11 @@ instead.
 secret (≥ 32 characters, no placeholder words), `QUANTLAB_COOKIE_SECURE=true`, and
 `QUANTLAB_METRICS_TOKEN` is set. Terminate TLS at the trusted edge (below). Run migrations
 (`alembic -c services/api/alembic.ini upgrade head`) before starting new API versions.
+
+In production, login and registration accept only requests that arrive through the web
+tier (a trusted proxy); a direct call to the API, such as
+`scripts/case_study.py --api http://localhost:8000` on the host, gets 503 `edge_required`
+(ADR-0008, #39). Run such tools against the edge, or against a development stack.
 
 ## Exposing a deployment
 
