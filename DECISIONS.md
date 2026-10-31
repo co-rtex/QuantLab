@@ -117,6 +117,8 @@ budget, so the owner's own browsers keep working during such an attack.
   name prefix over TLS. Not `__Host-`, which requires Path=/.
 * After 10 failures in an hour a device loses its exemption and falls back to the account
   budget. Without a valid cookie for that email nothing changes.
+There is one device cookie per browser: signing in to account B replaces it, so that
+browser loses its exemption for account A until it signs in to A again.
 Residual: a victim's *new* device can still be held at 429 by a distributed attacker.
 A progressive delay instead of a hard lock was rejected: an attacker can hold the delay at
 its maximum, and slow responses tie up workers.
@@ -135,5 +137,7 @@ development-only token outbox, the kind of plaintext store removed from #37. It 
 change every sign-up flow and test.
 **Bounds of the accepted risk.** Behind the TLS edge, registrations are limited to 10 per
 minute per real client address (IPv6 per /64), and production refuses registrations
-without a known client address (ADR-0008, #39). Each probe that finds a free address
-creates an account, which is visible in the audit log (`user.register`).
+without a known client address (ADR-0008, #39). The bound is per address, not global: an
+attacker with N addresses probes about 10·N addresses a minute, and a single IPv6 /48
+holds 65,536 /64 buckets. Each probe that finds a free address creates an account, which
+is visible in the audit log (`user.register`).

@@ -150,6 +150,7 @@ hop's ranges, and use `{client_ip}` instead of `{remote_host}` (see the comments
   and is throttled per device instead (ADR-0008, #55). Only the owner's *new* devices can
   still be held off. IPv6 clients are throttled per /64.
 * Registration answers 409 for an address that already has an account, so it reveals
-  which addresses are registered: at most 10 probes per minute per real client address,
-  and each probe that succeeds creates an audited account (ADR-0010). Email verification
-  will close this once a mail adapter exists.
+  which addresses are registered: 10 probes per minute per real client address, with no
+  global cap, so about 10·N a minute for an attacker with N addresses (an IPv6 /48 holds
+  65,536 /64 buckets). Each probe that succeeds creates an audited account (ADR-0010).
+  Email verification will close this once a mail adapter exists.
