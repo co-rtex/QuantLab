@@ -101,3 +101,36 @@ def test_the_pipeline_version_enters_the_ml_input_hash(client, seeded, monkeypat
     assert old.status_code == 202, old.text
     old_run = client.get(f"/api/v1/ml-runs/{old.json()['id']}", headers=h).json()
     assert old_run["input_hash"] != run["input_hash"]  # same dataset and config, other pipeline
+
+
+def test_a_mixed_version_deploy_fails_the_run_instead_of_mislabelling_it(
+    client, seeded, monkeypatch
+):
+    """#143: the API stamps the version it hashed with; a worker running other code
+    refuses, so a stored input hash never describes a panel that was not computed."""
+    from quantlab.ml import pipeline
+    from quantlab_api.routes import ml as ml_routes
+
+    h, ws = seeded["headers"], seeded["ws"]
+    body = {
+        "name": "mixed deploy",
+        "dataset_version_id": seeded["dv"],
+        # A client cannot choose the stamp: the API overwrites it with its own version.
+        "config": {
+            "folds": 2,
+            "min_train_dates": 6,
+            "sample_every": 10,
+            "models": ["majority"],
+            "pipeline_version": 99,
+        },
+    }
+    r = client.post(f"/api/v1/workspaces/{ws}/ml-runs", headers=h, json=body)
+    assert r.status_code == 202, r.text
+    run = client.get(f"/api/v1/ml-runs/{r.json()['id']}", headers=h).json()
+    assert run["config"]["pipeline_version"] == ml_routes.ML_PIPELINE_VERSION
+    # The worker runs newer code than the API that accepted the run.
+    monkeypatch.setattr(pipeline, "ML_PIPELINE_VERSION", ml_routes.ML_PIPELINE_VERSION + 1)
+    assert run_pending_jobs() == ["failed"]
+    job = client.get(f"/api/v1/ml-runs/{r.json()['id']}", headers=h).json()["job"]
+    assert "submitted for pipeline version" in job["error"]["message"]
+    assert job["error"]["retryable"] is False
