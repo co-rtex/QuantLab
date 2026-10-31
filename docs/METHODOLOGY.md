@@ -16,7 +16,7 @@ the source of truth; tests in `tests/unit` pin each definition to a golden examp
   ex-date. If the ex-date is a non-session day, or a session where the symbol printed no
   bar, the action applies at the symbol's next bar: nothing traded in between, so the
   holders and the price discontinuity are the same. Actions dated before a symbol's first
-  bar or after its last bar are outside its history, are not applied, and fail ingestion.
+  bar or after its last bar are outside its history and are not applied (a warning).
 * **Ordering**: actions placed on one bar are composed in ex-date order into one
   equivalent event per share held before the bar: `S = Π s_i` and `D = Σ (Π_{j<i} s_j) d_i`,
   where a split multiplies the running share count and a dividend pays `d_i` per share held
@@ -36,19 +36,20 @@ the source of truth; tests in `tests/unit` pin each definition to a golden examp
   dataset (`enforce_gates` raises `QualityGateError` with a per-check report). Gates are
   reserved for input that is malformed by construction, so that legitimate market data
   never blocks a dataset. The gates are:
-  * Invalid bars: non-finite, non-positive, negative volume, OHLC inconsistent, or
-    duplicate rows.
+  * Invalid bars: non-finite, non-positive, negative volume, duplicate rows, or OHLC
+    inconsistent by more than half a tick (Reg NMS Rule 612 increments: $0.005 for prices
+    of $1 or more, $0.00005 below). These checks existed before #10 and were reported but
+    not enforced; they now block.
   * Duplicate corporate actions: an identical repeated row, or two splits on one ex-date.
     A same-amount regular and special dividend must be supplied as one row.
-  * Actions for a symbol without bars, or dated before its first bar.
   * Split ratios equal to 1 or outside `[1/10000, 10000]`.
   * A dividend of at least the previous close.
-  * A dividend of at least 10% of the previous close where the price falls by less than
-    half the dividend (for example, cents entered as dollars).
-  * A declared date after the ex, record or pay date, or a pay date before the record
-    date.
-  * A split bar whose gross total return is still about 2x or 1/2x or worse (wrong ratio,
-    wrong ex-date or a phantom split).
+  * A dividend of at least 10% of the previous close, less than half reflected in the
+    price, that the price rose through or that is at least half the price (for example,
+    cents entered as dollars).
+  * A split bar whose gross total return is still 2x or 1/2x or worse (3x or 1/3x for a
+    reverse split, which distressed issuers often do on −30% to −60% days): a wrong ratio,
+    a wrong ex-date or a phantom split.
 
   Pay or record dates *before* the ex-date are allowed: for distributions of 25% or more
   the ex-date is the first business day after the payable date (FINRA Rule 11140(b)).
@@ -56,9 +57,13 @@ the source of truth; tests in `tests/unit` pin each definition to a golden examp
   The following are warnings only:
   * Missing sessions, a bar dated on a non-session day, stale prices.
   * An ex-date without a bar (the action applies at the next bar).
-  * Actions after a symbol's last bar: announced future actions or terminal distributions,
-    which are not applied.
-  * A split bar moving more than 25%.
+  * Actions the engine never applies: for a symbol without bars, or dated before its first
+    or after its last bar. Full-history vendor action files with windowed bars, announced
+    future actions and terminal distributions all look like this.
+  * Impossible action dates (declared after the ex, record or pay date, or paid before the
+    record date): they are provenance only.
+  * A dividend of 2% or more less than half reflected in the price, below the gate.
+  * A split bar moving more than 25%, below the gate.
   * Other moves above 50%.
   * A move within 2.5% of a k-for-1 or 1-for-k split signature (k ≥ 2) on a bar without a
     split.

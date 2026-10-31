@@ -303,26 +303,6 @@ def _gate_cases() -> dict[str, tuple[pd.DataFrame, pd.DataFrame, str]]:
             "split_price_mismatch",
         ),
         "duplicate_action": (bars, _acts([split, split]), "duplicate_corporate_actions"),
-        "orphan_symbol": (
-            bars,
-            _acts([split, {**split, "symbol": "ZZZ"}]),
-            "orphan_corporate_actions",
-        ),
-        "before_first_bar": (
-            bars,
-            _acts(
-                [
-                    split,
-                    {
-                        **split,
-                        "ex_date": d[0] - pd.Timedelta(days=30),
-                        "kind": "dividend",
-                        "value": 1.0,
-                    },
-                ]
-            ),
-            "corporate_actions_before_history",
-        ),
         "noop_split": (
             bars,
             _acts([split, {**split, "ex_date": d[2], "value": 1.0}]),
@@ -338,15 +318,21 @@ def _gate_cases() -> dict[str, tuple[pd.DataFrame, pd.DataFrame, str]]:
             _acts([split, {**split, "ex_date": d[2], "kind": "dividend", "value": 150.0}]),
             "dividend_exceeds_price",
         ),
-        "declared_after_ex": (
-            bars,
-            _acts([{**split, "declared_date": d[7]}]),
-            "corporate_action_date_order",
-        ),
-        "paid_before_record": (
-            bars,
-            _acts([{**split, "record_date": d[6], "pay_date": d[5]}]),
-            "corporate_action_date_order",
+        # 1-for-10 recorded where the prices show 1-for-40: the reverse-split bar loses
+        # three quarters of its value, beyond the 1/3x reverse-split limit.
+        "reverse_ratio_wrong": (
+            make_bars({"R": [0.5, 0.52, 0.5, 5.0, 5.1]}),
+            _acts(
+                [
+                    {
+                        "symbol": "R",
+                        "ex_date": make_bars({"R": [1.0] * 4})["date"].iloc[3],
+                        "kind": "split",
+                        "value": 0.025,
+                    }
+                ]
+            ),
+            "split_price_mismatch",
         ),
         "duplicate_bar": (
             normalize_bars(pd.concat([bars, bars.iloc[[3]]])),
@@ -365,7 +351,7 @@ def test_each_malformed_input_class_blocks_ingestion(case):
         enforce_gates(report)
     msg = str(exc.value)
     assert check in msg  # readable: names the check, its count and a sample row
-    assert "A" in msg or "ZZZ" in msg
+    assert "e.g. {" in msg and "symbol" in msg  # with a sample row
 
 
 def test_genuine_large_move_is_a_warning_not_a_gate():
@@ -418,6 +404,37 @@ def _warn_cases() -> dict[str, tuple[pd.DataFrame, pd.DataFrame, str]]:
         ),
         # 3-for-1 recorded for a 2-for-1 split: +51%, worth a look but not certain.
         "ratio_off_by_half": (bars, _acts([{**split, "value": 3.0}]), "split_bar_large_move"),
+        # Actions the engine never applies, and provenance-only dates, only warn.
+        "orphan_symbol": (
+            bars,
+            _acts([split, {**split, "symbol": "ZZZ"}]),
+            "orphan_corporate_actions",
+        ),
+        "before_first_bar": (
+            bars,
+            _acts(
+                [
+                    split,
+                    {
+                        **split,
+                        "ex_date": d[0] - pd.Timedelta(days=30),
+                        "kind": "dividend",
+                        "value": 1.0,
+                    },
+                ]
+            ),
+            "corporate_actions_before_history",
+        ),
+        "declared_after_ex": (
+            bars,
+            _acts([{**split, "declared_date": d[7]}]),
+            "corporate_action_date_order",
+        ),
+        "paid_before_record": (
+            bars,
+            _acts([{**split, "record_date": d[6], "pay_date": d[5]}]),
+            "corporate_action_date_order",
+        ),
         # An announced action, or a terminal distribution after the last trade.
         "after_last_bar": (
             bars,
@@ -584,3 +601,74 @@ def test_legacy_version_hash_is_unchanged_with_action_dates_and_identity(tmp_pat
     assert content_hash(bars, dated) != LEGACY_GOLDEN
     history = normalize_history(legacy.assign(instrument_id=legacy["instrument_id"].radd("ID")))
     assert content_hash(bars, actions, history) != LEGACY_GOLDEN
+
+
+# ---------------------------------------------- lead review of #27: false positives
+def _blocking(bars: pd.DataFrame, acts: pd.DataFrame) -> list[str]:
+    return [c.name for c in assess_quality(bars, acts).blocking]
+
+
+def test_full_history_actions_file_with_windowed_bars_is_accepted():
+    # A yfinance-style actions file going back years, with bars only for 2024.
+    bars = make_bars({"A": [100.0, 101.0, 102.0, 101.5]}, start="2024-01-02")
+    acts = _acts([{"symbol": "A", "ex_date": "2020-08-31", "kind": "split", "value": 4.0}])
+    report = assess_quality(bars, acts)
+    assert {c.name: c.status for c in report.checks}["corporate_actions_before_history"] == "warn"
+    enforce_gates(report)
+
+
+def test_actions_file_covering_extra_symbols_is_accepted():
+    bars = make_bars({"A": [100.0, 101.0, 102.0]})
+    acts = _acts([{"symbol": "OTHER", "ex_date": "2024-01-03", "kind": "dividend", "value": 1}])
+    assert _blocking(bars, acts) == []
+
+
+@pytest.mark.parametrize(
+    ("price", "excess", "blocks"),
+    [
+        (10.0, 1e-7, False),  # float noise
+        (10.0, 0.004, False),  # rounding within half a cent
+        (10.0, 0.02, True),  # two cents above the high: inconsistent
+        (0.5, 0.00004, False),  # sub-dollar: within half of the $0.0001 tick
+        (0.5, 0.001, True),
+    ],
+)
+def test_ohlc_consistency_uses_a_half_tick_tolerance(price, excess, blocks):
+    bars = make_bars({"A": [price] * 3})
+    bars.loc[1, "close"] = bars.loc[1, "high"] + excess
+    assert ("ohlc_inconsistent" in _blocking(bars, _acts([]))) is blocks
+
+
+@pytest.mark.parametrize(
+    ("closes", "dividend", "check"),
+    [
+        # 12% special dividend on a +7% day: ex price 88 x 1.07 = 94.16.
+        ([100.0, 100.0, 94.16, 94.0], 12.0, "dividend_not_reflected"),
+        # 15% dividend across a gap that also gained 10%: 85 x 1.10 = 93.5.
+        ([100.0, 100.0, None, 93.5, 93.0], 15.0, "dividend_not_reflected"),
+        # Cents entered as dollars in the 2-10% band: $5 on $100 with no price drop.
+        ([100.0, 100.0, 100.5, 100.0], 5.0, "dividend_not_reflected"),
+    ],
+)
+def test_plausible_dividend_mismatches_warn_without_blocking(closes, dividend, check):
+    bars = make_bars({"A": closes, "B": [10.0 + 0.1 * k for k in range(len(closes))]})
+    d = _sessions(bars)
+    ex = d[3] if None in closes else d[2]
+    acts = _acts([{"symbol": "A", "ex_date": ex, "kind": "dividend", "value": dividend}])
+    report = assess_quality(bars, acts)
+    assert {c.name: c.status for c in report.checks}[check] == "warn"
+    assert report.blocking == []
+
+
+def test_reverse_split_on_a_distress_selloff_is_accepted():
+    # 1-for-10 on a -50% day: raw 0.50 -> 2.50, total return 0.1 x 2.5 / 0.5 - 1 = -50%.
+    bars = make_bars({"R": [0.5, 0.52, 0.5, 2.5, 2.45]})
+    d = _sessions(bars)
+    acts = _acts([{"symbol": "R", "ex_date": d[3], "kind": "split", "value": 0.1}])
+    report = assess_quality(bars, acts)
+    assert {c.name: c.status for c in report.checks}["split_bar_large_move"] == "warn"
+    assert report.blocking == []
+    # The same move on a *forward* split (2x down) still blocks: a ratio error.
+    fwd = make_bars({"F": [100.0, 101.0, 100.0, 25.0, 25.2]})
+    f_acts = _acts([{"symbol": "F", "ex_date": d[3], "kind": "split", "value": 2.0}])
+    assert "split_price_mismatch" in _blocking(fwd, f_acts)

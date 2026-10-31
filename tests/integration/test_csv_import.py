@@ -99,23 +99,28 @@ def test_rejected_uploads_do_not_leave_staged_files(client, monkeypatch):
 
 
 def test_malformed_corporate_actions_block_ingestion_with_a_report(client):
-    """Ingestion gates (#10): a 4-for-1 split recorded for xyz, whose prices show 2-for-1,
-    and an action for a symbol with no bars. Nothing is registered and the job error
-    names each failing gate."""
+    """Ingestion gates (#10): xyz's 2-for-1 split recorded as 4-for-1, plus a duplicated
+    row of a dividend. Nothing is registered and the job error names each failing gate.
+    An action for a symbol without bars only warns (the engine never applies it)."""
     from quantlab_api.config import get_settings
 
     h = register(client, "gate@example.com")
     ws = workspace_id(client, h)
     uploads = get_settings().data_dir / "uploads"
     before = set(uploads.iterdir()) if uploads.exists() else set()
-    bad = "symbol,ex_date,kind,value\nxyz,2024-01-04,split,4\nnobars,2024-01-03,dividend,0.5\n"
+    bad = (
+        "symbol,ex_date,kind,value\nxyz,2024-01-04,split,4\n"
+        "abc,2024-01-03,dividend,0.05\nabc,2024-01-03,dividend,0.05\n"
+        "nobars,2024-01-03,dividend,0.5\n"
+    )
     r = _upload(client, h, ws, actions=bad, slug="gated")
     assert r.status_code == 202, r.text
     assert run_pending_jobs() == ["failed"]
     job = client.get(f"/api/v1/workspaces/{ws}/jobs", headers=h).json()["items"][0]
     message = job["error"]["message"]
     assert "ingestion gate" in message
-    assert "split_price_mismatch" in message and "orphan_corporate_actions" in message
+    assert "split_price_mismatch" in message and "duplicate_corporate_actions" in message
+    assert "orphan_corporate_actions" not in message
     versions = client.get(f"/api/v1/workspaces/{ws}/dataset-versions", headers=h).json()
     assert versions == []
     assert set(uploads.iterdir()) == before  # the staged upload was released
