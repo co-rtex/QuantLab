@@ -1,0 +1,52 @@
+# QuantLab edge behind an AWS network load balancer (#19, ADR-0012). It is the same edge
+# as infra/edge/Caddyfile (ADR-0008) with two differences. TLS is terminated by the NLB
+# (ACM certificate), so Caddy serves plain HTTP on :8080 inside the VPC. And the client's
+# address arrives in a PROXY protocol v2 header from the NLB rather than as the TCP peer.
+#
+# The proxy_protocol listener wrapper replaces the connection's remote address with the
+# one in the PROXY header, but only for connections from QUANTLAB_EDGE_PROXY_CIDRS (the
+# NLB's subnets). It refuses connections from anywhere else, so no other host can claim
+# an address. {remote_host} below is therefore the real client, and it overwrites
+# X-Forwarded-For exactly as in compose.
+#
+# NOT VALIDATED: this file has not been checked by `caddy adapt` (README.md, "Validation").
+{
+	admin off
+	# Never autosave the running config: it contains the edge secret (#39).
+	persist_config off
+	auto_https off
+	servers :8080 {
+		listener_wrappers {
+			proxy_protocol {
+				timeout 5s
+				allow {$QUANTLAB_EDGE_PROXY_CIDRS}
+				fallback_policy reject
+			}
+		}
+		timeouts {
+			read_header 10s
+			read_body 5m
+			idle 2m
+		}
+	}
+}
+
+:8080 {
+	# Largest API body: 110 MiB, as in limits.py and route.ts.
+	request_body {
+		max_size 110MiB
+	}
+
+	header {
+		Strict-Transport-Security "max-age=31536000"
+		-Server
+	}
+
+	reverse_proxy {$QUANTLAB_EDGE_UPSTREAM} {
+		# The client address is the PROXY-stated peer, whatever the client claims.
+		header_up X-Forwarded-For {remote_host}
+		header_up -Forwarded
+		header_up -X-Real-IP
+		header_up X-QuantLab-Edge {$QUANTLAB_EDGE_SECRET}
+	}
+}
