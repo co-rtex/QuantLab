@@ -12,7 +12,7 @@ from pydantic import ValidationError
 from sqlalchemy import func, select
 
 from quantlab.backtest.engine import ENGINE_VERSION, BacktestConfig
-from quantlab_api import artifacts
+from quantlab_api import artifacts, provenance
 from quantlab_api.config import get_settings
 from quantlab_api.errors import ApiError
 from quantlab_api.jobs import (
@@ -69,8 +69,11 @@ def load_experiment(
     return exp
 
 
-def to_out(exp: Experiment, result: ExperimentResult | None) -> ExperimentOut:
-    out = ExperimentOut.model_validate(exp)
+def to_out(
+    exp: Experiment, result: ExperimentResult | None, is_synthetic: bool | None
+) -> ExperimentOut:
+    """The response row. ``is_synthetic`` comes from the dataset version (``provenance``)."""
+    out = ExperimentOut.model_validate(exp).model_copy(update={"is_synthetic": is_synthetic})
     if result is not None:
         out = out.model_copy(update={"summary": result.summary, "fingerprint": result.fingerprint})
     return out
@@ -177,7 +180,9 @@ def create_experiment(
                 "Idempotency-Key was already used with a different request",
             )
         return ExperimentSubmitted(
-            experiment=to_out(prev, _result(db, prev.id)),
+            experiment=to_out(
+                prev, _result(db, prev.id), provenance.is_synthetic(db, prev.dataset_version_id)
+            ),
             job=JobOut.model_validate(prior),
             created=False,
         )
@@ -204,7 +209,9 @@ def create_experiment(
         request_id=getattr(request.state, "request_id", None) if request else None,
     )
     return ExperimentSubmitted(
-        experiment=to_out(exp, None), job=JobOut.model_validate(job), created=created
+        experiment=to_out(exp, None, provenance.is_synthetic(db, exp.dataset_version_id)),
+        job=JobOut.model_validate(job),
+        created=created,
     )
 
 
@@ -250,13 +257,15 @@ def list_experiments(
         .limit(limit)
         .offset(offset)
     ).all()
-    return Page(items=[to_out(e, r) for e, r in rows], total=total, limit=limit, offset=offset)
+    flags = provenance.synthetic_flags(db, (e.dataset_version_id for e, _ in rows))
+    items = [to_out(e, r, flags[e.dataset_version_id]) for e, r in rows]
+    return Page(items=items, total=total, limit=limit, offset=offset)
 
 
 @router.get("/experiments/{experiment_id}", response_model=ExperimentOut)
 def get_experiment(experiment_id: uuid.UUID, user: CurrentUser, db: DB) -> ExperimentOut:
     exp = load_experiment(db, user, experiment_id)
-    return to_out(exp, _result(db, exp.id))
+    return to_out(exp, _result(db, exp.id), provenance.is_synthetic(db, exp.dataset_version_id))
 
 
 @router.get("/experiments/{experiment_id}/job", response_model=JobOut)

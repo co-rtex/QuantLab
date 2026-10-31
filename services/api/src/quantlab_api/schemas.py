@@ -238,6 +238,8 @@ class ExperimentOut(ORM):
     created_at: datetime
     summary: dict[str, Any] | None = None
     fingerprint: str | None = None
+    # Additive (#102): from the referenced dataset version; None when it is missing.
+    is_synthetic: bool | None = None
 
 
 class ExperimentSubmitted(BaseModel):
