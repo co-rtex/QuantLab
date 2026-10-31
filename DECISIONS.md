@@ -141,3 +141,20 @@ without a known client address (ADR-0008, #39). The bound is per address, not gl
 attacker with N addresses probes about 10·N addresses a minute, and a single IPv6 /48
 holds 65,536 /64 buckets. Each probe that finds a free address creates an account, which
 is visible in the audit log (`user.register`).
+
+## ADR-0011 Jobs are deleted only by deleting their workspace
+
+**Context.** Migration `4f1c2a9e7b10` (audit, #1) gave every foreign key to `jobs.id` an
+`ON DELETE` rule so that workspaces with results could be deleted. `research_runs` and
+`ml_runs` use `SET NULL`; `experiment_results.job_id` uses `CASCADE` and is not nullable.
+Deleting a backtest's job row on its own would therefore delete that experiment's results
+while the experiment itself survives, silently.
+**Decision (2026-10-31, #25).** A job row is never deleted on its own. The only way jobs
+leave the database is the cascade from deleting their workspace, which removes the
+experiments and results with them. `tests/unit/test_job_deletion_invariant.py` fails if
+any application code issues a delete against `jobs`.
+**Why not `SET NULL` now.** It needs a nullable `experiment_results.job_id` and a
+migration, while nothing deletes jobs today; the guard test makes the invariant explicit
+at no cost. **Any future job-retention or cleanup feature must first migrate
+`experiment_results.job_id` to nullable with `ON DELETE SET NULL`** (through a migration
+slot, docs/COORDINATION.md), then relax the guard test in the same change.

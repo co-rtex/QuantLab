@@ -237,7 +237,26 @@ Per session `k`:
    0), or at its last close when the return is unknown. From its delisting date it is not
    offered to the strategy, and corporate actions dated after it are not applied (the
    delisting return includes post-delisting distributions). A halt before the delisting
-   does not trigger the missing-bars rule for a security the master delists.
+   does not trigger the missing-bars rule for a security the master delists. This is
+   CRSP's convention, and realistic: a halted stock cannot be sold. It does mean the
+   engine's handling during a halt depends on the later delisting, so positions and
+   cash during the halt differ from a run without a master (pinned in
+   `tests/unit/test_delisting_returns.py`). Decisions before the halt begins are
+   identical. The same holds for any data gap in a security the master delists later,
+   not only a gap that runs into the delisting: the missing-bars rule never sells it. A
+   delisting dated on or after the last session of the window is not applied, and the
+   position keeps its last mark. If the security traded on the last session, that mark
+   is a real close (a study ending before its data does); this is counted as
+   `meta.delistings.after_window_current` and is not a concern. If it did not, the mark
+   is stale; this is counted as `after_window` and warned about. `BacktestConfig.performance_delisting_return`
+   (default off) prices a performance delisting (bankruptcy, liquidation, noncompliance)
+   whose return is unknown, for example at Shumway's (1997) -30% instead of the
+   optimistic last close; `meta.delistings.with_fallback_return` counts those. Delisting
+   fills are recorded as sells and count toward turnover, like the missing-bars rule.
+   The integrity report's `delisting_exits` check warns when held delistings exited at
+   the last close without a known return, were priced with the assumed fallback (it names
+   the assumed return), or sit at a stale mark after the window. It is "not assessed" for
+   a dataset without an instrument master.
    The delisting date is public on the day, so acting on the next session uses no
    future data; the delisting return (final value relative to the last close, as in
    CRSP's DLRET) is booked at that point, which is standard practice even though the
@@ -305,7 +324,8 @@ data after a decision date leaves that decision unchanged (no look-ahead).
 | Gross ("before costs") | equity plus cumulative commissions and slippage paid; an approximation that ignores compounding of the saved costs |
 
 Undefined statistics (zero variance, fewer than two observations, no drawdown, no losing
-trades) are reported as `null` with a reason, never as `0`. "Zero variance" means a
+trades) are reported as `null` with a reason, never as `0`. This includes beta, whose
+benchmark dispersion uses the same per-period rule. "Zero variance" means a
 per-period standard deviation at or below `1e-12`, so floating-point residue is never
 annualized into a statistic: an exact index tracker has tracking error `0` and an
 undefined information ratio. When there are fewer than two observations or the initial
@@ -331,7 +351,9 @@ Prado). The statistic is the per-period Sharpe of excess returns,
 `mean(r - rf_p) / std(r - rf_p)`, which is the annualized Sharpe divided by `sqrt(252)`.
 `PSR(SR*) = Φ((SR - SR*) sqrt(n - 1) / sqrt(1 - γ3 SR + (γ4 - 1)/4 SR²))`, where γ3 and
 γ4 are the sample skewness and (non-excess) kurtosis. The DSR is the PSR against
-`SR* = E[max SR]` of the N grid trials under the null. Every trial Sharpe *and* the
+`SR* = E[max SR]` of the N grid trials under the null. N counts every configuration
+tried, including those whose Sharpe is undefined (no dispersion), so N is not
+understated; the variance comes from the defined Sharpes. Every trial Sharpe *and* the
 selected strategy's PSR/DSR use the same inputs: each run's invested window (as above)
 and the configured risk-free rate. Before #14 the selected strategy used its full window,
 including warm-up cash, with no risk-free rate, which overstated both probabilities.
@@ -341,7 +363,10 @@ records `observations` and `selected_sharpe_per_period`, so the inputs can be au
 Regime analysis classifies each day using trailing benchmark volatility and trend, with
 volatility cut points taken from expanding quantiles, so no day's regime depends on later
 data. Bootstrap Sharpe intervals use the same risk-free convention as the reported
-Sharpe.
+Sharpe and, like it, the whole requested window (warm-up cash included). They describe
+the account as experienced. The deflated Sharpe instead uses the invested window,
+because it assesses parameter *selection* (see below), so the two can differ for
+strategies with long look-backs.
 
 ## Risk (`quantlab.analytics.risk`)
 

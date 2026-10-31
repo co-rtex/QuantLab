@@ -20,8 +20,10 @@ The API key is added to every request, including ``next_url`` pages, and is repl
 
 from __future__ import annotations
 
+import http.client
 import json
 import random
+import ssl
 import time
 import urllib.error
 import urllib.parse
@@ -32,6 +34,7 @@ from typing import Any
 
 from quantlab.data.providers import (
     PermanentProviderError,
+    ProviderError,
     RetryPolicy,
     TokenBucket,
     TransientProviderError,
@@ -54,6 +57,8 @@ class HttpResponse:
 
 
 Transport = Callable[[str, float], HttpResponse]
+# Larger than any documented page (aggregates: 50,000 bars), small enough to be safe.
+MAX_RESPONSE_BYTES = 64 * 2**20
 
 
 class _RefuseRedirects(urllib.request.HTTPRedirectHandler):
@@ -73,18 +78,48 @@ _OPENER = urllib.request.build_opener(_RefuseRedirects)
 def urllib_transport(url: str, timeout: float) -> HttpResponse:
     """Plain HTTPS GET with the standard library, never following redirects.
 
-    Network errors become transient errors.
+    Network errors become transient errors, except those no retry can fix (an invalid
+    URL, a certificate that fails verification), which are permanent. Errors are raised
+    outside the ``except`` block with the URL removed from their text, so neither the
+    message nor the chained ``__context__`` carries the API key.
     """
     if not url.startswith("https://"):
         raise PermanentProviderError("vendor URLs must use https")
     req = urllib.request.Request(url, headers={"Accept": "application/json"})  # noqa: S310
+    failure: tuple[type[ProviderError], str] | None = None
     try:
         with _OPENER.open(req, timeout=timeout) as resp:  # https only, no redirects
-            return HttpResponse(resp.status, dict(resp.headers), resp.read())
+            return HttpResponse(resp.status, dict(resp.headers), _read(resp))
     except urllib.error.HTTPError as exc:
-        return HttpResponse(exc.code, dict(exc.headers or {}), exc.read() or b"")
-    except (urllib.error.URLError, TimeoutError, ConnectionError) as exc:
-        raise TransientProviderError(f"network error: {exc}") from exc
+        try:
+            body = _read(exc)
+        except (OSError, http.client.HTTPException, TransientProviderError):
+            body = b""
+        return HttpResponse(exc.code, dict(exc.headers or {}), body)
+    except (OSError, http.client.HTTPException) as exc:
+        reason = getattr(exc, "reason", exc)  # URLError wraps the underlying error
+        kind: type[ProviderError] = (
+            PermanentProviderError
+            if isinstance(exc, http.client.InvalidURL)
+            or isinstance(reason, ssl.SSLCertVerificationError)
+            else TransientProviderError
+        )
+        text = f"{type(reason).__name__}: {reason}"
+        failure = (kind, text.replace(url, "<url>").replace(url.split("?", 1)[-1], "<query>"))
+    assert failure is not None
+    raise failure[0](f"network error: {failure[1]}")
+
+
+def _read(resp: Any) -> bytes:
+    """The response body, refusing anything larger than ``MAX_RESPONSE_BYTES``."""
+    body: bytes = resp.read(MAX_RESPONSE_BYTES + 1)
+    if len(body) > MAX_RESPONSE_BYTES:
+        raise PermanentProviderError(f"response larger than {MAX_RESPONSE_BYTES} bytes")
+    # read(n) on http.client returns a short body at early EOF instead of raising
+    # IncompleteRead; unread Content-Length means the body was truncated.
+    if (getattr(resp, "length", None) or 0) > 0:
+        raise TransientProviderError("response body truncated before Content-Length")
+    return body
 
 
 @dataclass
@@ -109,7 +144,14 @@ class JsonApi:
         self._rng = random.Random(self.seed)  # noqa: S311 - backoff jitter, not crypto
 
     def _redact(self, text: str) -> str:
-        return text.replace(self.api_key, "***")
+        # The key also appears URL-encoded in request URLs (e.g. "+" as "%2B").
+        for form in {
+            self.api_key,
+            urllib.parse.quote(self.api_key, safe=""),
+            urllib.parse.quote_plus(self.api_key),
+        }:
+            text = text.replace(form, "***")
+        return text
 
     def _url(self, path_or_url: str, params: Mapping[str, Any] | None = None) -> str:
         url = path_or_url if "://" in path_or_url else self.base_url.rstrip("/") + path_or_url
