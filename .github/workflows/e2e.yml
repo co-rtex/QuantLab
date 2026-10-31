@@ -7,7 +7,10 @@ name: E2E
 #   * pull requests only, and only when code the suite exercises changes (paths below);
 #   * draft pull requests are skipped; marking one ready for review runs it;
 #   * a newer push to the same pull request cancels the run in progress;
-#   * one job, one Playwright worker, a hard timeout;
+#   * one job, one Playwright worker, a hard timeout (the test step has its own, so a hang
+#     fails and still collects logs instead of being cancelled);
+#   * a test that only passes on retry fails the job (--fail-on-flaky-tests): flakiness is
+#     a finding, not noise (#16 was a real race);
 #   * artifacts only on failure, kept 7 days.
 # It can also be started by hand (workflow_dispatch). Nothing runs on a schedule.
 
@@ -21,6 +24,8 @@ on:
       - "docker-compose.yml"
       - "pyproject.toml"
       - "uv.lock"
+      - ".python-version"
+      - ".dockerignore"
       - ".github/workflows/e2e.yml"
   workflow_dispatch:
 
@@ -40,7 +45,9 @@ jobs:
       # As `make e2e-serial`: two API processes and one worker per spec file.
       QUANTLAB_API_WORKERS: "2"
       E2E_WORKERS: "1"
-      QUANTLAB_GIT_SHA: ${{ github.sha }}
+      # The PR head, not the synthetic merge commit (github.sha on pull_request).
+      QUANTLAB_GIT_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+      PLAYWRIGHT_HTML_OPEN: never
     steps:
       - uses: actions/checkout@v4
 
@@ -87,7 +94,10 @@ jobs:
 
       - name: Playwright
         working-directory: apps/web
-        run: npx playwright test --workers="$E2E_WORKERS" --reporter=list,github,html
+        timeout-minutes: 20
+        run: >-
+          npx playwright test --workers="$E2E_WORKERS" --reporter=list,github,html
+          --fail-on-flaky-tests
 
       - name: Collect stack logs
         if: failure()
