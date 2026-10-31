@@ -13,6 +13,7 @@ from quantlab.backtest.engine import BacktestConfig, run_backtest
 from quantlab.research.stats import bootstrap_ci, deflated_sharpe, regime_analysis
 from quantlab.research.validation import (
     cost_sensitivity,
+    invested_equity,
     leakage_check,
     sensitivity,
     walk_forward,
@@ -64,7 +65,13 @@ def run_validation_suite(
         bars, actions, strategy_key, params, config, on_progress=stage(2)
     )
     trials = out["sensitivity"].pop("trial_sharpes_per_period")
-    out["deflated"] = deflated_sharpe(r, trials)
+    # Deflate the selected run on the returns that produced its trial Sharpe: the invested
+    # window and the same rf as every other trial.
+    out["deflated"] = deflated_sharpe(
+        simple_returns(invested_equity(base.equity)),
+        trials,
+        risk_free_rate=config.risk_free_rate,
+    )
     out["cost"] = cost_sensitivity(
         bars, actions, strategy_key, params, config, on_progress=stage(3)
     )
