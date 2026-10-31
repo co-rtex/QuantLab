@@ -304,6 +304,64 @@ def build_integrity_report(ev: dict[str, Any]) -> dict[str, Any]:
             )
         checks.append(Check("zero_volume", "Zero-volume bars", zv_status, zv_finding, evidence))
 
+    # 3d. the engine the validation ran on (#155). The suite re-runs backtests on the
+    # worker's current engine, so an experiment from an older engine is validated under
+    # different rules (#149's zero-volume fills, say). Labelled, not refused: the suite is
+    # internally consistent, and refusing would leave older experiments unvalidatable.
+    if val:
+        ran, computed = val.get("engine_version"), exp.get("engine_version")
+        comparable = None if ran is None or not computed else ran == computed
+        engines = {
+            "validation_engine_version": ran,
+            "experiment_engine_version": computed,
+            "comparable_engine": comparable,
+        }
+        if comparable is None:
+            if ran is None and not computed:
+                missing = "Neither the validation run nor the experiment records an engine"
+            elif ran is None:
+                missing = (
+                    "The validation run does not record the engine it ran on (a run from "
+                    "before #155; request validation again to record it)"
+                )
+            else:
+                missing = (
+                    f"The experiment does not record the engine that computed it, so the "
+                    f"validation's engine ({ran}) has nothing to be compared with"
+                )
+            checks.append(
+                Check(
+                    "validation_engine",
+                    "Validation engine",
+                    "unassessed",
+                    missing + "; the two cannot be compared under identical engine rules.",
+                    engines,
+                )
+            )
+        elif not comparable:
+            checks.append(
+                Check(
+                    "validation_engine",
+                    "Validation engine",
+                    "warning",
+                    f"The validation ran on engine {ran}; the experiment was computed on "
+                    f"engine {computed}. These results are not directly comparable under "
+                    f"identical engine rules. Reproduce the experiment on engine {ran} and "
+                    "validate the reproduction for a like-for-like comparison.",
+                    engines,
+                )
+            )
+        else:
+            checks.append(
+                Check(
+                    "validation_engine",
+                    "Validation engine",
+                    "verified",
+                    f"The validation and the experiment both ran on engine {ran}.",
+                    engines,
+                )
+            )
+
     # 4. execution timing
     checks.append(
         Check(

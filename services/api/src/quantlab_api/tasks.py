@@ -649,6 +649,7 @@ def validation_task(ctx: JobContext) -> Finalizer:
         ctx.heartbeat(0.01, "loading dataset", force=True)
         inputs = load_experiment_inputs(db, exp)
         key, params = exp.strategy_key, dict(exp.strategy_params)
+        experiment_engine = exp.engine_version
 
     def progress(f: float, msg: str) -> None:
         ctx.heartbeat(0.02 + 0.95 * f, msg)
@@ -663,6 +664,16 @@ def validation_task(ctx: JobContext) -> Finalizer:
         seed=int(ctx.payload.get("seed", 0)),
         instruments=inputs.master,
     )
+    # The suite re-runs backtests on this worker's engine, which can be newer than the one
+    # that computed the experiment. Both are recorded so a mismatch is labelled, not
+    # hidden behind the experiment's version (#155).
+    result = {
+        **result,
+        "engine_version": ENGINE_VERSION,
+        "experiment_engine_version": experiment_engine,
+        # Same engine rules as the experiment; None when the experiment records none.
+        "comparable_engine": experiment_engine == ENGINE_VERSION if experiment_engine else None,
+    }
 
     def finalize(db: Session) -> dict[str, Any]:
         row = db.get(ResearchRun, run_id)
