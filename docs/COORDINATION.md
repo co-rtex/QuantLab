@@ -48,7 +48,7 @@ follow-up docs commit. A lease ends when the PR that used it merges or closes.
 | `services/api/src/quantlab_api/models.py` | — | (#129 merged) |
 | `services/api/src/quantlab_api/schemas.py` | — | (#106 merged) |
 | `services/api/src/quantlab_api/config.py` | — | (#128 merged) |
-| `services/api/src/quantlab_api/jobs.py` | Agent 2 | #130 database time for leases, `not_before` and claims |
+| `services/api/src/quantlab_api/jobs.py` | — | (#132 merged) |
 | `services/api/src/quantlab_api/tasks.py` | — | (#97 merged) |
 | `services/api/alembic/env.py` | — | (#37 merged) |
 | `scripts/case_study.py` | — | (Agent 2's invitation fix merged in #37) |

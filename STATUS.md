@@ -1,6 +1,6 @@
 # Status (authoritative handoff)
 
-_Last updated: 2026-10-31 (lead integration cycle 2: 82 PRs merged before this update, per `gh pr list --state merged`; main `db005e4`)_
+_Last updated: 2026-10-31 (lead integration cycle 2: 84 PRs merged before this update, per `gh pr list --state merged`; main `b85e3c0`)_
 
 ## Where things stand
 All roadmap phases 0–10 are implemented. An independent audit on 2026-10-30
@@ -144,10 +144,13 @@ leases and migration slots: [docs/COORDINATION.md](docs/COORDINATION.md).
     "Before any apply" list.
   * #129 a retry is not claimed before its backoff ends (`jobs.not_before`, migration M4
     `4d2b8e6f0c15`). Early or forged deliveries reschedule once and consume no attempt (#123).
+  * #132 every job lease, heartbeat, backoff, claim, finish and creation time comes from the
+    database clock, so hosts with skewed clocks can neither claim a retry early nor see a
+    live lease as expired (#130). Only the queue-wait metric still uses a host clock.
 * Every merge had an independent read-only lead review: no blockers. Should-fix items are
   tracked in #8, #51, #52 and #55 (Agent 2), #39 (gate), and #41, #50 and #54 (Agent 3).
 
-## Last verified (2026-10-31, main `db005e4`)
+## Last verified (2026-10-31, main `b85e3c0`)
 Each merge was verified on a trial merge with current main, with pytest output written to a
 file rather than piped:
 * #28, #32, #36, #29, #30, #31: tree identical to main afterwards; 314 passed;
@@ -199,6 +202,8 @@ file rather than piped:
 * main@ead9020 + #129 (byte-identical to main `db005e4`): **964 passed, 1 xfailed**; fresh-DB
   round trip head → `b5e1d7c3a924` → head (`jobs.not_before` present, absent, present),
   `alembic check` no drift; **E2E 41/41**.
+* main@f8830ab + #132 (byte-identical to main `b85e3c0`): **970 passed, 1 xfailed**;
+  `alembic check` no drift; **E2E 41/41**.
 * #101 + #103 + #104: 899 passed, E2E 27/27. #105 + #106 (byte-identical to main
   `f7e399f`): **906 passed, E2E 30/30**.
 
@@ -212,8 +217,8 @@ E2E failures this cycle were resource starvation, not regressions:
 Full-stack runs are now serialized machine-wide (`make e2e-serial`).
 
 ## Next steps (issues carry owners and acceptance criteria)
-1. **Agent 2:** #130 (database time for leases, `not_before` and claims; until it merges,
-   hosts with skewed clocks can claim a retry early or see a live lease as expired).
+1. **Agent 2:** #133 (route-wide authorization matrix: outsider, viewer and unauthenticated
+   access on every route; fails when a route is added unclassified).
 2. **Agent 3:** #125 (#120 ML own-bar windows). The staleness rule is being revised so it
    targets genuine halts, not sparsely traded names, with a selection table in METHODOLOGY.
 3. **Lead:** integrate.
