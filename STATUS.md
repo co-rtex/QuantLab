@@ -130,7 +130,9 @@ leases and migration slots: [docs/COORDINATION.md](docs/COORDINATION.md).
   * #110 benchmark harness: variance, cold mode, load metadata; golden tests moved (#24,
     no figures published).
   * #113 AWS Terraform, validated and **never applied** (#19). Redis AUTH uses an ephemeral
-    write-only token. **The Caddyfile is NOT validated.**
+    write-only token. Its Caddyfile was validated **locally** on 2026-10-31 (adapt,
+    validate and PROXY behaviour on Caddy 2.10.2, `infra/terraform/edge/check-proxy-protocol.sh`),
+    but not behind a real NLB, so #39 stays open.
   * #116 (lead) the reaper mounts the data volume; it was sweeping an empty `/data`.
   * #119 RDS CA bundle (pinned checksum) for `sslmode=verify-full`.
   * #121 cross-feature point-in-time sweep (#118). It found **#120**: a short halt dropped a
@@ -281,16 +283,16 @@ Full-stack runs are now serialized machine-wide (`make e2e-serial`).
      and PR (#139).
    * #17 Playwright in CI is **approved, with Actions usage controlled**. The lead is
      building it.
-   * Local Caddyfile validation is **approved**, using an existing Caddy binary or an
-     approved container-image pull. It does **not** clear the #39 gate.
+   * Local Caddyfile validation is **approved** and **done** (#158, the pinned local
+     `caddy:2.10.2-alpine` image). It does **not** clear the #39 gate.
    * A quiet benchmark window for #24 is **approved**, coordinated with both workers.
      Only measured figures are published.
    * Then an independent release-candidate assessment and a classified list of release
      blockers, not new feature work.
    * Paid market-data services and hosted LLM usage stay blocked.
 5. **Blocked on the user:**
-   * #39 (a host, a second machine, and Caddyfile validation, since the caddy download was
-     denied);
+   * #39 (a host that preserves client addresses, a second machine, and a real NLB; the
+     Caddyfiles pass local checks only, #158);
    * #11 and #12 live (vendor, licence and key);
    * #15 hosted eval (LLM key);
    * #20 (load host);
