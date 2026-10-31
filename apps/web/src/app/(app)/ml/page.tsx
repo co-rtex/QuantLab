@@ -33,6 +33,7 @@ interface MLRun {
   result?: {
     problem: string;
     // Results stored before #125 have no pipeline_version, volume_flat_rows or excluded_rows.
+    // The keys of excluded_rows depend on the pipeline version (EXCLUSION_LABEL).
     pipeline_version?: number | null;
     panel: {
       rows: number;
@@ -41,7 +42,7 @@ interface MLRun {
       hash: string;
       positive_rate: number;
       volume_flat_rows?: number | null;
-      excluded_rows?: { untraded_21?: number | null; dates_below_10_after_untraded?: number | null } | null;
+      excluded_rows?: Record<string, number | null> | null;
     };
     splits: { fold: number; train_dates: number; test_start: string; test_end: string }[];
     summary: ModelRow[];
@@ -63,12 +64,38 @@ function recorded(v: number | null | undefined): string {
   return typeof v === "number" && Number.isFinite(v) ? v.toLocaleString("en-US") : "not recorded";
 }
 
+/** Each excluded_rows key with its own label and explanation: the same words mean different
+ *  counts in different pipeline versions, so the help follows the key, not the position. */
+const EXCLUSION_LABEL: Record<string, [string, string]> = {
+  // v2 (#125)
+  untraded_21: ["Rows excluded: no trading", "Zero volume over its last 21 bars (its own trading days); counted only on dates that make the panel."],
+  dates_below_10_after_untraded: ["Dates skipped: too few names", "Fewer than 10 names left on the date once untraded rows were removed."],
+  // v3 (#142)
+  zero_volume_bars: ["Zero-volume bars", "Dropped as no trade; features, labels and windows skip them."],
+  dates_below_10_with_zero_volume: [
+    "Dates skipped: too few names",
+    "Fewer than 10 names on that date once zero-volume bars were dropped (a longer warm-up from dropped bars is not counted).",
+  ],
+};
+
+function exclusionItems(ex: unknown): [string, string, string | null][] {
+  // Absent (before #125) is "not recorded"; a present map shows exactly the keys it has.
+  if (ex === null || typeof ex !== "object") return [["Rows excluded", "not recorded", "Results from before pipeline v2 did not record exclusions."]];
+  const keys = Object.keys(ex);
+  // Known keys in table order, then any key this page does not know, under its raw name.
+  const ordered = [...Object.keys(EXCLUSION_LABEL).filter((k) => keys.includes(k)), ...keys.filter((k) => !(k in EXCLUSION_LABEL))];
+  if (ordered.length === 0) return [["Rows excluded", "none", "This result lists no exclusion counts."]];
+  return ordered.map((k) => {
+    const v = (ex as Record<string, unknown>)[k];
+    const [label, why] = EXCLUSION_LABEL[k] ?? [k, null];
+    return [label, recorded(typeof v === "number" ? v : null), why];
+  });
+}
+
 function PanelInputs({ res }: { res: NonNullable<MLRun["result"]> }) {
-  const ex = res.panel.excluded_rows;
-  const items: [string, string, string][] = [
+  const items: [string, string, string | null][] = [
     ["Pipeline version", res.pipeline_version == null ? "not recorded" : `v${res.pipeline_version}`, "How the panel was built; it changes whenever the same data and config could give a different panel."],
-    ["Rows excluded: no trading", recorded(ex?.untraded_21), "Zero volume over its last 21 bars (its own trading days); counted only on dates that make the panel."],
-    ["Dates skipped: too few names", recorded(ex?.dates_below_10_after_untraded), "Fewer than 10 names left on the date once untraded rows were removed."],
+    ...exclusionItems(res.panel.excluded_rows),
     ["Rows with flat volume", recorded(res.panel.volume_flat_rows), "Kept: constant non-zero volume over its last 21 bars, flagged to the models as an input."],
   ];
   return (
@@ -77,11 +104,11 @@ function PanelInputs({ res }: { res: NonNullable<MLRun["result"]> }) {
         Panel construction
       </h3>
       <dl className="grid grid-cols-1 gap-x-8 gap-y-3 rounded border border-rule bg-surface px-4 py-3 text-sm sm:grid-cols-2 xl:grid-cols-4">
-        {items.map(([k, v, why]) => (
-          <div key={k}>
+        {items.map(([k, v, why], i) => (
+          <div key={i}>
             <dt className="text-xs text-ink-2">{k}</dt>
             <dd className={v === "not recorded" ? "text-ink-2" : "num font-medium"}>{v}</dd>
-            <dd className="text-xs text-ink-2">{why}</dd>
+            {why && <dd className="text-xs text-ink-2">{why}</dd>}
           </div>
         ))}
       </dl>
