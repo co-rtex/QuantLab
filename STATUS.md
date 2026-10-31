@@ -1,6 +1,6 @@
 # Status (authoritative handoff)
 
-_Last updated: 2026-10-31 (lead integration cycle 2 complete: 12 PRs merged; main `2e7d3e7`)_
+_Last updated: 2026-10-31 (lead integration cycle 2: 18 PRs merged; main `72b934b`)_
 
 ## Where things stand
 All roadmap phases 0–10 are implemented. An independent audit on 2026-10-30
@@ -55,10 +55,22 @@ leases and migration slots: [docs/COORDINATION.md](docs/COORDINATION.md).
     Merged after four gate false positives were fixed.
   * #44 (lead) integration tests fail instead of silently skipping when Postgres is
     unreachable.
-* Every merge had an independent read-only lead review: no blockers. Should-fix items are
-  tracked in #8 and #43 (Agent 2), #39 (gate) and #41 (Agent 3).
+  * #45 security-gate code for #39:
+    * production fails closed on an untrusted peer;
+    * exact-match remote probe;
+    * Caddy `persist_config off`;
+    * every page gated.
 
-## Last verified (2026-10-31, main `2e7d3e7`)
+    **#39 stays open** for host verification.
+  * #47 idempotency fingerprint (#43).
+  * #48 CSV upload durability (#7).
+  * #34 reconciliation report (library; #12 API exposure pending).
+  * #33 Massive adapter as a **fixture-only contract**. #50 must be fixed before live
+    wiring.
+* Every merge had an independent read-only lead review: no blockers. Should-fix items are
+  tracked in #8, #51, #52 and #55 (Agent 2), #39 (gate), and #41, #50 and #54 (Agent 3).
+
+## Last verified (2026-10-31, main `72b934b`)
 Each merge was verified on a trial merge with current main, with pytest output written to a
 file rather than piped:
 * #28, #32, #36, #29, #30, #31: tree identical to main afterwards; 314 passed;
@@ -69,6 +81,11 @@ file rather than piped:
   13/13 via `make e2e-serial` at load 13–20.
 * main (with #37) + #27 + #44: **418 passed, exit 0**, ruff, format and mypy clean;
   **Playwright 13/13**.
+* main + #45 + #47: 431 passed. The E2E `workflow.spec` timeouts were bisected and then checked
+  with an interleaved A/B (main 26 s and 48 s; +#45 40 s and 44 s): no regression. The
+  cause is #16's 90 s budget (fix: #53).
+* main + #47 + #48 + #34 + #33 (`06ad9ca`, byte-identical to main `72b934b`): **486
+  passed, exit 0**; **Playwright 13/13**.
 
 CI is green on every merged head. CI doesn't run Playwright (#17).
 
@@ -80,25 +97,23 @@ E2E failures this cycle were resource starvation, not regressions:
 Full-stack runs are now serialized machine-wide (`make e2e-serial`).
 
 ## Next steps (issues carry owners and acceptance criteria)
-1. **Agent 2:** #39 security-gate code (in progress) → #7 (`tasks.py` lease) → #43
-   idempotency fingerprint (`jobs.py` lease) → #8 nits, plus the `test_trusted_edge`
-   registration-window flake.
+1. **Agent 2:** #51 (ambiguous-commit race), #52 (synthetic-route idempotency), the #8 batch,
+   then #55 (lockout from a few addresses, register enumeration).
 2. **Agent 3:**
-   * merge main into #33 for review;
-   * #34 to its review bar (NaN values, history-less identity, ex-date tolerance, recorded
-     inputs);
-   * #9 part B (delisting returns), then part C (M2 open; `models.py`/`schemas.py` leased;
-     `tasks.py` after #7);
-   * #41 follow-ups;
-   * #24 market-data benchmarks (quiet window only).
+   * #49 (#9 part B, delisting returns);
+   * #9 part C (M2 open; `tasks.py`, `models.py` and `schemas.py` leased; also #12's
+     report API);
+   * #50 (P0, Massive adapter fixes; the same-day dividend collapse also affects existing
+     ingestion);
+   * #54, #41, #24.
 3. **Lead:**
-   * integrate #33, #34, #39, #7 and #43;
-   * #17 E2E in CI (Actions minutes on a private repo: confirm with the user);
-   * #16 (close after 5 clean serial runs; 4 so far);
+   * merge #53 (#16);
+   * #17 E2E in CI (private-repo Actions minutes: confirm with the user);
    * the rest of #22;
    * #25.
-4. **Unassigned:** #15, #18, #20, #21, #23, the benchmark half of #24. **Later:** #19
-   Terraform, after #39.
+4. **Unassigned:** #15, #18, #20, #21, #23, the benchmark half of #24.
+5. **User-only:** #39 host verification (Linux Docker Engine plus a second machine);
+   credentials for #11 (vendor), #15 (LLM key), #19 (cloud), #20 (load host).
 
 ## Blockers
 No LLM API key, market-data API key or cloud credentials (docs/BLOCKERS.md).

@@ -23,7 +23,7 @@ Work items are issues labelled `owner:*`, `P0`/`P1`/`P2`, `status:*` and `area:*
 |---|---|
 | `services/api/src/quantlab_api/security.py`, `limits.py`, `uploads.py`, `invitations.py`, `routes/auth.py`, `routes/invitations.py` | Agent 2 |
 | `services/api/src/quantlab_api/routes/workspaces.py` (members, invitations) | Agent 2 |
-| `services/api/src/quantlab_api/routes/datasets.py` | **Agent 2 until #7 merges** (#4 merged), then Agent 3 |
+| `services/api/src/quantlab_api/routes/datasets.py` | **Agent 2 through #51 and #52** (#4, #7 merged), then Agent 3 |
 | `apps/web/src/app/api/[...path]/route.ts`, `apps/web/src/proxy.ts`, `infra/edge/**` | Agent 2 |
 | Web pages for login, settings, members, invitations | Agent 2 |
 | `routes/experiments.py`, `routes/ml.py`, `routes/research.py` (idempotency only, #6) | Agent 2 while #6 is open |
@@ -43,10 +43,10 @@ follow-up docs commit. A lease ends when the PR that used it merges or closes.
 | Shared file | Current holder | For |
 |---|---|---|
 | `services/api/src/quantlab_api/models.py` | Agent 3 | #9 part C (M2) |
-| `services/api/src/quantlab_api/schemas.py` | Agent 3 | #9 part C (M2) |
+| `services/api/src/quantlab_api/schemas.py` | Agent 3 | #9 part C (M2), #12 report API, and removal of the dead `MemberIn` |
 | `services/api/src/quantlab_api/config.py` | — | |
-| `services/api/src/quantlab_api/jobs.py` | Agent 2 | #43 idempotency fingerprint (#6 merged as #40) |
-| `services/api/src/quantlab_api/tasks.py` | Agent 2 | #7 CSV retry / ambiguous-commit cleanup (#27 merged). **Queue:** Agent 3 (#9 part C) after #7 merges |
+| `services/api/src/quantlab_api/jobs.py` | — | (#40, #47 merged) |
+| `services/api/src/quantlab_api/tasks.py` | Agent 3 | #9 part C (#27, #48 merged) |
 | `services/api/alembic/env.py` | — | (#37 merged) |
 | `scripts/case_study.py` | — | (Agent 2's invitation fix merged in #37) |
 | `services/api/src/quantlab_api/main.py` | — | |
