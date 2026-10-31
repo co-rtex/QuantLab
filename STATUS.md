@@ -1,6 +1,6 @@
 # Status (authoritative handoff)
 
-_Last updated: 2026-10-31 (lead integration cycle 2: 45 PRs merged before this update, per `gh pr list --state merged`; main `52508ed`)_
+_Last updated: 2026-10-31 (lead integration cycle 2: 53 PRs merged before this update, per `gh pr list --state merged`; main `379abd5`)_
 
 ## Where things stand
 All roadmap phases 0–10 are implemented. An independent audit on 2026-10-30
@@ -108,10 +108,17 @@ leases and migration slots: [docs/COORDINATION.md](docs/COORDINATION.md).
   * #84 the invitation timing test uses paired samples (#80).
   * #83 API errors surfaced with Retry, accessible (#18).
   * #87 catalog row per (ticker, instrument), migration M3 (#66).
+  * #88 reproduction names differing inputs, and the integrity check assesses only
+    same-input re-runs (#63).
+  * #90 reconciliation tail-step false alarm (#86). #93 comments.
+  * #92 the #18 follow-up (catalog keys, dedupe, focus). #89 `/invite` auth errors (#85).
+  * #95 vendor-neutral provider plumbing, **inert by default** (#11).
+    `hide_input_in_errors` also closed a pre-existing secret echo in settings errors.
+  * #94 verifier false rejects (#79), after four review rounds.
 * Every merge had an independent read-only lead review: no blockers. Should-fix items are
   tracked in #8, #51, #52 and #55 (Agent 2), #39 (gate), and #41, #50 and #54 (Agent 3).
 
-## Last verified (2026-10-31, main `52508ed`)
+## Last verified (2026-10-31, main `379abd5`)
 Each merge was verified on a trial merge with current main, with pytest output written to a
 file rather than piped:
 * #28, #32, #36, #29, #30, #31: tree identical to main afterwards; 314 passed;
@@ -149,6 +156,10 @@ file rather than piped:
 * main + #83: web clean, E2E 17/17 (4 new error specs).
 * main + #87 (byte-identical to main `52508ed`): **743 passed**. Fresh-DB migration round
   trip with `NULLS NOT DISTINCT` verified in `pg_constraint`; no drift; **E2E 17/17**.
+* #88 + #90: 754 passed, E2E 17/17. #89 + #92: E2E 21/21. #95: 778 passed, E2E 21/21.
+* #94: 871 passed. Serial E2E 20/21: `workflow.spec` failed at the validation regime panel
+  at **load about 3**, then passed 3/3 alone (an A/B including main). **#16 is a real
+  intermittent validation-panel race**, not only contention; it's reassigned to Agent 2.
 
 CI is green on every merged head. CI doesn't run Playwright (#17).
 
@@ -160,22 +171,17 @@ E2E failures this cycle were resource starvation, not regressions:
 Full-stack runs are now serialized machine-wide (`make e2e-serial`).
 
 ## Next steps (issues carry owners and acceptance criteria)
-1. **Agent 2:**
-   * the #18 follow-up: catalog row key, deduplicated default-universe tickers, focus
-     targets, `input_differences`;
-   * #85 (`/invite` auth failure);
-   * #79 (verifier false rejects; the "label (value)" regression first).
+1. **Agent 2:** #16 (the validation-panel race: reproduce, fix, spec), then #23 (frontend
+   completeness).
 2. **Agent 3:**
-   * #88 (#63; merge main + wording fix);
-   * #90 (#86; merge main);
-   * the #66 comment follow-up;
-   * #11 vendor-neutral plumbing, disabled by default (`config.py`/`tasks.py` leased).
+   * #97 (#21 storage lifecycle: quarantine, refusal, an hourly sweep; one small fix left);
+   * #96 (per-workspace report storage; gated before any report-writing route).
 3. **Lead:**
-   * integrate the above;
-   * #16 and #17 need the user's OK on Actions minutes;
-   * #21 (storage lifecycle) is unscheduled;
+   * integrate;
+   * #17 needs the user's OK on Actions minutes;
    * #19 waits on #39.
-4. **Unassigned:** #20 (needs a load host), #23, the benchmark half of #24.
+4. **Unassigned:** #20 (needs a load host), the benchmark half of #24 (needs a quiet
+   machine).
 
 ## Blockers
 No LLM API key, market-data API key or cloud credentials (docs/BLOCKERS.md).

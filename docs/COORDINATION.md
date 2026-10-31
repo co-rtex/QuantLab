@@ -26,7 +26,7 @@ Work items are issues labelled `owner:*`, `P0`/`P1`/`P2`, `status:*` and `area:*
 | `services/api/src/quantlab_api/routes/datasets.py` | Agent 3 (since #65; Agent 2's upload work #4, #7, #51, #52 and #8 C is merged) |
 | `apps/web/src/app/api/[...path]/route.ts`, `apps/web/src/proxy.ts`, `infra/edge/**` | Agent 2 |
 | Web pages for login, settings, members, invitations | Agent 2 |
-| `routes/experiments.py` | Agent 3 for #63 (reproduction engine-version naming, `instrument_id` trade filter) |
+| `routes/experiments.py` | — (#88 merged) |
 | `routes/ml.py`, `routes/research.py` | Unassigned (lead leases per issue) |
 | `packages/quantlab/src/quantlab/data/**`, `services/api/src/quantlab_api/marketdata.py` | Agent 3 |
 | `packages/quantlab/src/quantlab/{backtest,analytics,research,ml,portfolio,optimize,strategies}/**` | Agent 3 |
@@ -47,9 +47,9 @@ follow-up docs commit. A lease ends when the PR that used it merges or closes.
 |---|---|---|
 | `services/api/src/quantlab_api/models.py` | — | (#87 merged) |
 | `services/api/src/quantlab_api/schemas.py` | — | (#62 merged) |
-| `services/api/src/quantlab_api/config.py` | Agent 3 | #11 provider and key settings (`SecretStr`) |
-| `services/api/src/quantlab_api/jobs.py` | — | (#40, #47 merged) |
-| `services/api/src/quantlab_api/tasks.py` | Agent 3 | #11 vendor-neutral provider plumbing (disabled by default) |
+| `services/api/src/quantlab_api/config.py` | Agent 3 | #21 storage-sweep settings (#11 merged) |
+| `services/api/src/quantlab_api/jobs.py` | Agent 3 | #21 `sweep_uploads` plus a `sweep_orphans` call in `reap()` |
+| `services/api/src/quantlab_api/tasks.py` | Agent 3 | #21 advisory lock in `register_version` (#11 merged) |
 | `services/api/alembic/env.py` | — | (#37 merged) |
 | `scripts/case_study.py` | — | (Agent 2's invitation fix merged in #37) |
 | `services/api/src/quantlab_api/main.py` | — | (#75 merged) |
