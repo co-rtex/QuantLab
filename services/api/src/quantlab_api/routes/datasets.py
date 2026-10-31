@@ -322,7 +322,11 @@ async def upload_csv(
             errors.append({"loc": ("body", "bars"), "msg": "Field required", "type": "missing"})
         if errors:
             raise RequestValidationError(errors)
-        # Authorized again: membership may have been revoked while the body streamed.
+        # Authorized again: while the body streamed, the account may have been deactivated,
+        # its sessions revoked (logout everywhere), or its membership removed.
+        db.refresh(user)
+        if not user.is_active or user.token_version != request.state.token_version:
+            raise ApiError(401, "invalid_token", "Invalid credentials")
         require_workspace(db, user, workspace_id, Role.editor)
         slug, name, source, license = form.slug, form.name, form.source, form.license
         files = upload.files
