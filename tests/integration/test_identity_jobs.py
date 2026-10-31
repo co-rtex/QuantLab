@@ -229,7 +229,7 @@ def _store_report(dv_id: str, name: str) -> None:
     dv = store.open(ds.slug, row.version_hash)
     primary = Source.from_version(store, dv, "primary", is_synthetic=True)
     report = reconcile(primary, Source("csv copy", primary.bars, primary.actions, None, True))
-    store.write_report(dv, name, report.to_dict())
+    store.write_report(dv, name, report.to_dict(), owner=str(row.id))
 
 
 def test_reconciliation_reports_are_read_only_and_workspace_scoped(client, seeded):
@@ -309,7 +309,9 @@ def test_a_malformed_stored_report_does_not_hide_the_valid_ones(client, seeded):
         row = db.get(DatasetVersion, uuid.UUID(dv))
         ds = db.get(Dataset, row.dataset_id)
     store = DatasetStore(get_settings().datasets_dir)
-    store.write_report(store.open(ds.slug, row.version_hash), "reconciliation-bad", {"status": "x"})
+    store.write_report(
+        store.open(ds.slug, row.version_hash), "reconciliation-bad", {"status": "x"}, owner=dv
+    )
     base = f"/api/v1/workspaces/{ws}/dataset-versions/{dv}/reconciliations"
     listed = client.get(base, headers=owner)
     assert listed.status_code == 200
@@ -332,7 +334,7 @@ def test_a_corrupt_report_file_is_skipped_in_the_list_and_500_on_get(client, see
         ds = db.get(Dataset, row.dataset_id)
     store = DatasetStore(get_settings().datasets_dir)
     version = store.open(ds.slug, row.version_hash)
-    folder = store.write_report(version, "reconciliation-tmp", {}).parent
+    folder = store.write_report(version, "reconciliation-tmp", {}, owner=dv).parent
     (folder / "reconciliation-tmp.json").unlink()
     (folder / "reconciliation-corrupt.json").write_text('{"status": "pa')  # truncated
     (folder / "reconciliation-list.json").write_text("[1, 2]")  # JSON, not an object

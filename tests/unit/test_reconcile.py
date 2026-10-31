@@ -28,6 +28,9 @@ def mkt():
     )
 
 
+OWNER = "test-owner"  # reports are kept per holder of a version (#96)
+
+
 def _primary(m) -> Source:
     return Source("primary", m.bars, m.actions, m.symbol_history, is_synthetic=True)
 
@@ -227,13 +230,13 @@ def test_report_is_attached_beside_the_immutable_version(mkt, tmp_path):
     )
     before = sorted(p.name for p in dv.path.iterdir())
     report = reconcile(_primary(mkt), _secondary(mkt)).to_dict()
-    store.write_report(dv, "reconciliation-csv", report)
+    store.write_report(dv, "reconciliation-csv", report, owner=OWNER)
     assert sorted(p.name for p in dv.path.iterdir()) == before  # version untouched
     assert store.verify(dv)
-    assert store.load_reports(dv)["reconciliation-csv"]["status"] == "pass"
+    assert store.load_reports(dv, owner=OWNER)["reconciliation-csv"]["status"] == "pass"
     assert [v.version for v in store.versions("demo")] == [dv.version]
     with pytest.raises(ValueError):
-        store.write_report(dv, "../escape", report)
+        store.write_report(dv, "../escape", report, owner=OWNER)
 
 
 # ------------------------------------------------- lead review of #34: required fixes
@@ -329,17 +332,17 @@ def test_report_records_its_inputs_and_is_never_silently_overwritten(mkt, tmp_pa
     )
     assert rep["inputs"]["secondary"]["provider"]["provider"] == "synthetic copy"
     assert rep["created_at"].endswith("+00:00")
-    store.write_report(dv, "reconciliation-vendor-b", rep)
+    store.write_report(dv, "reconciliation-vendor-b", rep, owner=OWNER)
     with pytest.raises(FileExistsError):
-        store.write_report(dv, "reconciliation-vendor-b", rep)
-    store.write_report(dv, "reconciliation-vendor-b", {**rep, "status": "warn"}, replace=True)
-    assert store.load_reports(dv)["reconciliation-vendor-b"]["status"] == "warn"
+        store.write_report(dv, "reconciliation-vendor-b", rep, owner=OWNER)
+    store.write_report(
+        dv, "reconciliation-vendor-b", {**rep, "status": "warn"}, replace=True, owner=OWNER
+    )
+    assert store.load_reports(dv, owner=OWNER)["reconciliation-vendor-b"]["status"] == "warn"
     with pytest.raises(TypeError):  # non-JSON payloads raise instead of being stringified
-        store.write_report(dv, "bad", {"when": pd.Timestamp("2024-01-02")})
+        store.write_report(dv, "bad", {"when": pd.Timestamp("2024-01-02")}, owner=OWNER)
     leftovers = [
-        x
-        for x in (tmp_path / "demo" / "_reports" / dv.version).iterdir()
-        if x.name.startswith(".tmp-")
+        x for x in store.reports_dir(OWNER, dv.version).iterdir() if x.name.startswith(".tmp-")
     ]
     assert leftovers == []
 
@@ -479,13 +482,13 @@ def test_report_writes_cannot_race_into_an_overwrite(mkt, tmp_path, monkeypatch)
 
     store = DatasetStore(tmp_path)
     dv = store.write("demo", mkt.bars, mkt.actions, mkt.provenance)
-    store.write_report(dv, "reconciliation-a", {"status": "pass"})
+    store.write_report(dv, "reconciliation-a", {"status": "pass"}, owner=OWNER)
     # A second writer that passed the existence check just before the first one wrote.
     monkeypatch.setattr(Path, "exists", lambda self: False)
     with pytest.raises(FileExistsError):
-        store.write_report(dv, "reconciliation-a", {"status": "fail"})
+        store.write_report(dv, "reconciliation-a", {"status": "fail"}, owner=OWNER)
     monkeypatch.undo()
-    assert store.load_reports(dv)["reconciliation-a"]["status"] == "pass"
+    assert store.load_reports(dv, owner=OWNER)["reconciliation-a"]["status"] == "pass"
 
 
 def test_a_stored_version_with_a_master_matches_its_data(mkt, tmp_path):
@@ -640,11 +643,11 @@ def test_reports_are_written_on_a_filesystem_without_hard_links(mkt, tmp_path, m
         raise OSError(errno.EPERM, "Operation not permitted")
 
     monkeypatch.setattr(os, "link", no_link)
-    store.write_report(dv, "reconciliation-x", {"status": "pass"})
-    assert store.load_reports(dv)["reconciliation-x"] == {"status": "pass"}
+    store.write_report(dv, "reconciliation-x", {"status": "pass"}, owner=OWNER)
+    assert store.load_reports(dv, owner=OWNER)["reconciliation-x"] == {"status": "pass"}
     with pytest.raises(FileExistsError):
-        store.write_report(dv, "reconciliation-x", {"status": "fail"})
-    assert store.load_reports(dv)["reconciliation-x"] == {"status": "pass"}
+        store.write_report(dv, "reconciliation-x", {"status": "fail"}, owner=OWNER)
+    assert store.load_reports(dv, owner=OWNER)["reconciliation-x"] == {"status": "pass"}
     leftovers = [x for x in dv.path.parent.parent.rglob(".tmp-*")]
     assert leftovers == []
 
@@ -833,9 +836,9 @@ def test_a_failed_write_without_hard_links_leaves_no_partial_report(mkt, tmp_pat
     monkeypatch.setattr(os, "link", no_link)
     monkeypatch.setattr(store_mod, "open", full_open, raising=False)
     with pytest.raises(OSError, match="No space"):
-        store.write_report(dv, "reconciliation-x", {"status": "pass"})
+        store.write_report(dv, "reconciliation-x", {"status": "pass"}, owner=OWNER)
     monkeypatch.setattr(store_mod, "open", real_open, raising=False)
-    assert "reconciliation-x" not in store.load_reports(dv)  # no partial file left
-    store.write_report(dv, "reconciliation-x", {"status": "pass"})  # the rerun works
-    assert store.load_reports(dv)["reconciliation-x"] == {"status": "pass"}
+    assert "reconciliation-x" not in store.load_reports(dv, owner=OWNER)  # no partial file left
+    store.write_report(dv, "reconciliation-x", {"status": "pass"}, owner=OWNER)  # rerun works
+    assert store.load_reports(dv, owner=OWNER)["reconciliation-x"] == {"status": "pass"}
     assert not list(dv.path.parent.parent.rglob(".tmp-*"))

@@ -234,9 +234,14 @@ the source of truth; tests in `tests/unit` pin each definition to a golden examp
   * A vendor that maps a reused ticker to the *old* security shows up as price and volume
     mismatches, not as an `identity_mismatch`, because there is no history to compare.
   * A vendor that files a security's whole history under its current ticker needs a
-    symbol history of its own to be compared before a rename. It is
-  stored beside the immutable version (`<slug>/_reports/<version>/<name>.json`) and is
-  never overwritten unless `replace=True`. Real cross-vendor reconciliation is unverified
+    symbol history of its own to be compared before a rename.
+
+  A report is stored per holder of the version, not beside the shared content directory:
+  `.reports/<owner>/<version>/<name>.json`, where the API's owner is the version *row*
+  id (#96). Two workspaces holding identical content share one version directory but
+  never see each other's reports. Files left at the pre-#96 location
+  (`<slug>/_reports/<version>/`) are not served. A report is never overwritten unless
+  `replace=True`. Real cross-vendor reconciliation is unverified
   until a licensed second source exists (#11).
 * **Dataset versions** are content-addressed (SHA-256 of a canonical serialization) and
   immutable.
