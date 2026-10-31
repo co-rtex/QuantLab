@@ -31,8 +31,9 @@ async function audit(page: Page, name: string) {
   expect(summary, `${name}\n${summary.join("\n")}`).toEqual([]);
 }
 
+/** The whole note: its live region (message and sentence) plus the request id and Retry. */
 function errorNote(page: Page, text: string) {
-  return page.getByRole("alert").filter({ hasText: text });
+  return page.getByRole("alert").filter({ hasText: text }).locator("..");
 }
 
 test("a failed workspace load is shown with Retry instead of an empty app", async ({ page }) => {
@@ -48,6 +49,8 @@ test("a failed workspace load is shown with Retry instead of an empty app", asyn
   await note.getByRole("button", { name: "Retry" }).click();
   await expect(note).toHaveCount(0);
   await expect(page.getByText("This workspace has no market data yet")).toBeVisible();
+  // The Retry button is gone; focus goes to the page heading, not to the document body.
+  await expect(page.locator("main h1")).toBeFocused();
 });
 
 test("list panels show the failure and recover on Retry", async ({ page }) => {
@@ -66,15 +69,41 @@ test("list panels show the failure and recover on Retry", async ({ page }) => {
   await note.getByRole("button", { name: "Retry" }).click();
   await expect(note).toHaveCount(0);
   await expect(page.getByText("Nothing to compare yet.")).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Completed experiments" })).toBeFocused();
 
   await page.route("**/api/v1/workspaces/*/ml-runs*", fail());
   await page.goto("/ml");
   await expect(errorNote(page, "Could not load ML runs.")).toBeVisible();
   await audit(page, "ml, runs failed");
 
-  await page.route("**/api/v1/workspaces/*/experiments?*", fail(502));
+});
+
+test("a polling panel announces an outage once, not on every failed poll", async ({ page }) => {
+  await register(page, "poll");
+  // Like the API: every failed response carries a new request id.
+  let n = 0;
+  await page.route("**/api/v1/workspaces/*/experiments?*", (route) =>
+    route.fulfill({
+      status: 502,
+      contentType: "application/json",
+      body: JSON.stringify({ error: { code: "bad_gateway", message: "Bad gateway", request_id: `req-poll-${++n}` } }),
+    }),
+  );
   await page.goto("/experiments");
-  await expect(errorNote(page, "Could not load experiments.")).toBeVisible();
+  const note = errorNote(page, "Could not load experiments.");
+  await expect(note).toContainText("Request req-poll-");
+  const first = await note.getByText(/^Request req-poll-/).textContent();
+  // Count every change inside the live region from here on.
+  await page.getByRole("alert").filter({ hasText: "Could not load experiments." }).evaluate((el) => {
+    const w = window as unknown as { liveChanges: number };
+    w.liveChanges = 0;
+    new MutationObserver((records) => (w.liveChanges += records.length)).observe(el, { subtree: true, childList: true, characterData: true, attributes: true });
+  });
+  // The list polls with backoff; wait for a later failure with a new request id.
+  await expect.poll(async () => note.getByText(/^Request req-poll-/).textContent(), { timeout: 30_000 }).not.toBe(first);
+  expect(await page.evaluate(() => (window as unknown as { liveChanges: number }).liveChanges)).toBe(0);
+  await expect(page.getByRole("alert").filter({ hasText: "Could not load experiments." })).not.toContainText("req-poll-");
+  await audit(page, "experiments, polling failed");
 });
 
 test("a failed analysis on a finished experiment is shown, not left as a skeleton", async ({ page }) => {
@@ -107,5 +136,6 @@ test("a failed analysis on a finished experiment is shown, not left as a skeleto
   await page.unroute("**/api/v1/experiments/*/analysis");
   await analysis.getByRole("button", { name: "Retry" }).click();
   await expect(analysis).toHaveCount(0);
+  await expect(page.getByRole("heading", { name: "Performance" })).toBeFocused();
   await expect(page.getByRole("heading", { name: "Largest drawdowns" })).toBeVisible();
 });
