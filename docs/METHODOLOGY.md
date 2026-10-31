@@ -427,6 +427,24 @@ objective; risk parity uses Spinu's convex formulation. Every result is validate
 sums to 1, within bounds) or an error is raised; infeasible bounds are rejected before
 solving.
 
+## ML features (`quantlab.ml.pipeline`)
+* Features at `t` use only bars dated on or before `t`. Momentum and reversal are ratios
+  of fully adjusted closes; volatility uses total returns; `dist_high_252` measures the
+  distance to the 252-bar high; `volume_z_21` is the z-score of log volume.
+* **Windows count the instrument's own bars, not calendar sessions** (#120, pipeline
+  version 2). A 21-bar window ending just after a halt spans the bars before the halt,
+  so it covers more calendar sessions. The first bar after a gap carries the return over
+  the whole gap. Rows exist only on sessions with a bar, so a halted security leaves the
+  panel for the halt's sessions alone. Before version 2, any window containing a halt day
+  was NaN for the window's length, which dropped a recently halted security, a selection
+  correlated with distress, for up to 252 sessions.
+* **Flat volume:** when the 21-bar log volume has no dispersion (standard deviation at or
+  below 1e-12), the deviation from its mean is exactly zero. So `volume_z_21` is 0,
+  not 0/0, and `volume_flat_21 = 1` records the case. The flag is a panel column, not a
+  model input; results report the count as `panel.volume_flat_rows`.
+* `ML_PIPELINE_VERSION` is recorded in every result (`pipeline_version`) and changes
+  whenever the same dataset and config could produce a different panel.
+
 ## Known limitations
 
 * No survivorship-free real data source is configured; the synthetic generator includes

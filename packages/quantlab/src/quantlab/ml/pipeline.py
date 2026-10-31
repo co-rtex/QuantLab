@@ -7,7 +7,9 @@ better than simple baselines.
 
 Timestamp integrity:
 
-* features at ``t`` use only bars dated ``<= t`` (verified by a truncation test),
+* features at ``t`` use only bars dated ``<= t`` (verified by a truncation test). Windows
+  count the instrument's own observed bars, so a halt shortens nothing and voids nothing:
+  a 21-bar window just spans more calendar sessions across it (#120),
 * the label at ``t`` uses closes from ``t`` to ``t + horizon``; it becomes known at
   ``t + horizon``,
 * cross-validation is chronological; training rows whose label window overlaps the test
@@ -47,6 +49,22 @@ FEATURES = [
     "dist_high_252",
     "volume_z_21",
 ]
+PANEL_COLUMNS = [
+    "date",
+    "symbol",
+    *FEATURES,
+    "volume_flat_21",
+    "fwd_return",
+    "label",
+    "label_available_at",
+]
+# Bumped whenever the panel a given dataset and config produce can change, so that an
+# old run reproduced on new code shows a named difference instead of a silent one.
+#   1: rolling windows over calendar sessions
+#   2: windows over each instrument's own bars; flat volume gives volume_z_21 = 0 (#120)
+ML_PIPELINE_VERSION = 2
+# Below this, a rolling dispersion counts as zero (as in quantlab.analytics).
+_ZERO_DISPERSION = 1e-12
 ModelName = Literal["majority", "momentum_rule", "logistic", "random_forest", "gradient_boosting"]
 MODELS: tuple[ModelName, ...] = (
     "majority",
@@ -76,6 +94,37 @@ class MLConfig(BaseModel):
         return v
 
 
+def _own_bar_features(
+    adj: pd.DataFrame, ret: pd.DataFrame, logv: pd.DataFrame
+) -> dict[str, pd.DataFrame]:
+    """Features over rows that are each instrument's consecutive *own* bars.
+
+    Every window and lag is counted in bars, so a value uses its own bar and earlier ones,
+    never a later one, whatever the calendar between them.
+    """
+
+    def mom(n: int, skip: int = 0) -> pd.DataFrame:
+        return adj.shift(skip) / adj.shift(n) - 1
+
+    v_mean, v_std = logv.rolling(21).mean(), logv.rolling(21).std()
+    # Flat volume over the window: the deviation from the mean is exactly zero, so the
+    # z-score is 0, not 0/0. The flag keeps the case visible.
+    flat = v_std <= _ZERO_DISPERSION
+    z = ((logv - v_mean) / v_std.where(~flat)).where(~flat, 0.0).where(v_std.notna())
+    return {
+        "mom_21": mom(21),
+        "mom_63": mom(63),
+        "mom_126": mom(126),
+        "mom_252_21": mom(252, 21),
+        "rev_5": mom(5),
+        "vol_21": ret.rolling(21).std(),
+        "vol_63": ret.rolling(63).std(),
+        "dist_high_252": adj / adj.rolling(252).max() - 1,
+        "volume_z_21": z,
+        "volume_flat_21": flat.astype(float).where(v_std.notna()),
+    }
+
+
 def compute_features(
     bars: pd.DataFrame, actions: pd.DataFrame, exclude: tuple[str, ...] = ("SYNIDX",)
 ) -> tuple[dict[str, pd.DataFrame], pd.DataFrame]:
@@ -83,30 +132,39 @@ def compute_features(
 
     Fully adjusted levels are safe here because only *ratios* of prices dated on or before
     ``t`` are used: corporate actions after ``t`` scale both sides equally and cancel.
+
+    Features are computed over each instrument's own bars and placed back on the session
+    calendar, NaN where it has no bar. A halt therefore removes a security only for the
+    sessions it has no bar on (#120). Before, any window that contained a halt day was NaN
+    for the window's length (up to 252 sessions). For speed, each column's bars are moved
+    to consecutive rows (a "compressed" matrix), the usual vectorized windows run once, and
+    the values are scattered back.
     """
     bars = bars[~bars["symbol"].isin(exclude)]
     close = wide(bars, "close")
     vol = wide(bars, "volume").reindex(index=close.index, columns=close.columns)
     acts = actions[actions["symbol"].isin(close.columns)]
     adj = close * PointInTimeAdjuster(close, acts).multiplier(None)
+    # The first bar after a gap carries the return over the whole gap (total_returns).
     rets = total_returns(bars, acts).reindex(index=close.index, columns=close.columns)
-
-    def mom(n: int, skip: int = 0) -> pd.DataFrame:
-        return adj.shift(skip) / adj.shift(n) - 1
-
     logv = np.log1p(vol)
-    feats = {
-        "mom_21": mom(21),
-        "mom_63": mom(63),
-        "mom_126": mom(126),
-        "mom_252_21": mom(252, 21),
-        "rev_5": mom(5),
-        "vol_21": rets.rolling(21).std(),
-        "vol_63": rets.rolling(63).std(),
-        "dist_high_252": adj / adj.rolling(252).max() - 1,
-        "volume_z_21": (logv - logv.rolling(21).mean()) / logv.rolling(21).std(),
-    }
-    return feats, adj
+
+    has = close.notna().to_numpy()
+    rows = np.cumsum(has, axis=0) - 1  # each bar's position among its instrument's bars
+    r_i, c_i = rows[has], np.nonzero(has)[1]
+
+    def compress(frame: pd.DataFrame) -> pd.DataFrame:
+        out = np.full(frame.shape, np.nan)
+        out[r_i, c_i] = frame.to_numpy(dtype=float)[has]
+        return pd.DataFrame(out, columns=frame.columns)
+
+    def expand(frame: pd.DataFrame) -> pd.DataFrame:
+        out = np.full(frame.shape, np.nan)
+        out[has] = frame.to_numpy(dtype=float)[r_i, c_i]
+        return pd.DataFrame(out, index=close.index, columns=close.columns)
+
+    own = _own_bar_features(compress(adj), compress(rets), compress(logv))
+    return {name: expand(f) for name, f in own.items()}, adj
 
 
 def build_panel(
@@ -116,7 +174,9 @@ def build_panel(
     *,
     instruments: pd.DataFrame | None = None,
 ) -> pd.DataFrame:
-    """Long panel (date, symbol, features..., fwd_return, label, label_available_at).
+    """Long panel (date, symbol, features..., volume_flat_21, fwd_return, label,
+    label_available_at). ``volume_flat_21`` (1.0 where the 21-bar volume had no dispersion
+    and ``volume_z_21`` was set to 0) is reported, not used as a model input.
 
     ``instruments`` is an instrument master keyed like ``bars["symbol"]``; its delisting
     returns are applied to labels whose horizon reaches the first session after the
@@ -162,7 +222,7 @@ def build_panel(
     frames = []
     for d in dates:
         k = close.index.get_loc(d)
-        row = pd.DataFrame({name: f.loc[d] for name, f in feats.items()})
+        row = pd.DataFrame({name: f.loc[d] for name, f in feats.items()})  # incl. the flag
         row["fwd_return"] = fwd.loc[d]
         row["tradable"] = close.loc[d].notna()
         row = row[row["tradable"]].drop(columns="tradable").dropna()
@@ -173,11 +233,9 @@ def build_panel(
         row["label_available_at"] = close.index[k + h]
         frames.append(row.rename_axis("symbol").reset_index())
     if not frames:
-        return pd.DataFrame(
-            columns=["date", "symbol", *FEATURES, "fwd_return", "label", "label_available_at"]
-        )
+        return pd.DataFrame(columns=PANEL_COLUMNS)
     panel = pd.concat(frames, ignore_index=True)
-    return panel[["date", "symbol", *FEATURES, "fwd_return", "label", "label_available_at"]]
+    return panel[PANEL_COLUMNS]
 
 
 def panel_hash(panel: pd.DataFrame) -> str:
@@ -348,9 +406,11 @@ def run_ml_experiment(
     return {
         "problem": f"P(next {cfg.horizon}-session total return beats the cross-sectional median)",
         "config": cfg.model_dump(mode="json"),
+        "pipeline_version": ML_PIPELINE_VERSION,
         "features": FEATURES,
         "panel": {
             "rows": len(panel),
+            "volume_flat_rows": int(panel["volume_flat_21"].sum()),
             "dates": int(panel["date"].nunique()),
             "symbols": int(panel["symbol"].nunique()),
             "hash": panel_hash(panel),
