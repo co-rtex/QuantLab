@@ -18,6 +18,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 import shutil
 import tempfile
 from dataclasses import dataclass
@@ -39,6 +40,8 @@ from quantlab.data.schema import normalize_actions, normalize_bars
 
 FORMAT_VERSION = 1
 ROW_GROUP_ROWS = 50_000
+REPORTS_DIR = "_reports"
+REPORT_NAME = re.compile(r"[a-z0-9][a-z0-9_-]{0,63}")
 
 
 def content_hash(
@@ -191,6 +194,28 @@ class DatasetStore:
         if symbols:
             df = df[df["symbol"].isin([s.upper() for s in symbols])]
         return normalize_actions(df)
+
+    def _reports_dir(self, dv: DatasetVersion) -> Path:
+        # Beside the version, never inside it: a version directory is immutable.
+        return self._dir(dv.slug, dv.version).parent / REPORTS_DIR / dv.version
+
+    def write_report(self, dv: DatasetVersion, name: str, payload: dict[str, Any]) -> Path:
+        """Attach a JSON report (e.g. a reconciliation) to a version; replaces same name."""
+        if not REPORT_NAME.fullmatch(name):
+            raise ValueError(f"invalid report name {name!r}")
+        target = self._reports_dir(dv)
+        target.mkdir(parents=True, exist_ok=True)
+        fd, tmp = tempfile.mkstemp(prefix=".tmp-", dir=target)
+        with os.fdopen(fd, "w") as fh:
+            json.dump(payload, fh, indent=2, default=str)
+        os.replace(tmp, target / f"{name}.json")  # atomic
+        return target / f"{name}.json"
+
+    def load_reports(self, dv: DatasetVersion) -> dict[str, dict[str, Any]]:
+        d = self._reports_dir(dv)
+        if not d.exists():
+            return {}
+        return {p.stem: json.loads(p.read_text()) for p in sorted(d.glob("*.json"))}
 
     def load_symbol_history(self, dv: DatasetVersion) -> pd.DataFrame:
         """The version's symbol history, or the legacy identity map when it has none."""
