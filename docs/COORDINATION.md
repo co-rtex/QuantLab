@@ -45,10 +45,10 @@ follow-up docs commit. A lease ends when the PR that used it merges or closes.
 
 | Shared file | Current holder | For |
 |---|---|---|
-| `services/api/src/quantlab_api/models.py` | Agent 2 | #123 `jobs.not_before` (migration M4) |
+| `services/api/src/quantlab_api/models.py` | — | (#129 merged) |
 | `services/api/src/quantlab_api/schemas.py` | — | (#106 merged) |
 | `services/api/src/quantlab_api/config.py` | — | (#128 merged) |
-| `services/api/src/quantlab_api/jobs.py` | Agent 2 | #123 retry not-before in `claim()` (PR #129); then #130 database time |
+| `services/api/src/quantlab_api/jobs.py` | Agent 2 | #130 database time for leases, `not_before` and claims |
 | `services/api/src/quantlab_api/tasks.py` | — | (#97 merged) |
 | `services/api/alembic/env.py` | — | (#37 merged) |
 | `scripts/case_study.py` | — | (Agent 2's invitation fix merged in #37) |
@@ -71,7 +71,7 @@ Alembic revisions form one linear chain, so only one migration may be in flight 
 | M1 | Agent 2 | #5 invitations, revision `7c3e5a1d9b20` → `4f1c2a9e7b10` | **merged** (#37, `9e76ff3`) |
 | M2 | Agent 3 | #9 part C, revision `9a4c6e2f1b37` → `7c3e5a1d9b20` | **merged** (#62, `925cc1c`) |
 | M3 | Agent 3 | #66 revision `b5e1d7c3a924` → `9a4c6e2f1b37`: instruments key `(dataset_version_id, symbol, instrument_id)` `NULLS NOT DISTINCT` | **merged** (#87, `52508ed`) |
-| M4 | Agent 2 | #123 revision `4d2b8e6f0c15` → `b5e1d7c3a924`: nullable `jobs.not_before` | in review (#129) |
+| M4 | Agent 2 | #123 revision `4d2b8e6f0c15` → `b5e1d7c3a924`: nullable `jobs.not_before` | **merged** (#129, `db005e4`) |
 
 Rules: request the slot on the issue before running `alembic revision`; set `down_revision`
 to the current head on `main` at the time; include a working `downgrade`; the migration
