@@ -61,11 +61,11 @@ Owners, file ownership and migration slots: [docs/COORDINATION.md](docs/COORDINA
 | P1 | #17 Playwright E2E in CI | Lead | #16 |
 | P1 | #15 Assistant: ✅ verifier (#74); hosted eval blocked on key; false rejects #79 | Agent 2 | key |
 | P1 | ✅ #18 Frontend error surfacing (#83) | Agent 2 | — |
-| P1 | #19 Terraform, validated and never applied | Lead | #3 |
+| P1 | ✅ #19 Terraform, validated and never applied (#113); the Caddyfile is not validated | Agent 3 | — |
 | P1 | #20 External load test (needs a separate host) | Unassigned | — |
 | P1 | ✅ #21 Storage lifecycle on workspace deletion (#97) | Agent 3 | — |
 | P2 | ✅ #8 Security hardening (#38, #64, #65, #70, #75) | Agent 2 | — |
 | P2 | ✅ #22 Per-worktree isolation hardening (#44, #71, #81) | Lead | — |
-| P2 | #23 Frontend completeness and synthetic labels | Unassigned | — |
+| P2 | ✅ #23 Frontend completeness and synthetic labels (#100–#114) | Agent 2 | — |
 | P2 | #24 Benchmark methodology, golden tests | Unassigned | — |
 | P2 | ✅ #25 Job-deletion semantics: ADR-0011 plus a guard test (#78) | Lead | — |
