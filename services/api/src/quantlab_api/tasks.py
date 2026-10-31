@@ -162,6 +162,9 @@ def register_version(
                 symbol=str(sym),
                 name=str(info["name"]) if info is not None else str(sym),
                 sector=str(info["sector"]) if info is not None else None,
+                # Without metadata (e.g. a reused ticker's earlier holder known only by
+                # ticker) this is the catalog's default, "equity", as for every such row.
+                # A distinct "unknown" would change the ML and factor filters (#87 review).
                 asset_class=str(info["asset_class"]) if info is not None else "equity",
                 first_date=st["min"].date(),
                 last_date=st["max"].date(),
