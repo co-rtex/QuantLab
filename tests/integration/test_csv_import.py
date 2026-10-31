@@ -96,3 +96,29 @@ def test_rejected_uploads_do_not_leave_staged_files(client, monkeypatch):
     codes = [_upload(client, h, ws, slug=f"cap-{i}").status_code for i in range(4)]
     assert codes == [202, 429, 429, 429]
     assert len(set(uploads.iterdir()) - before) == 1  # only the accepted job's files remain
+
+
+def test_malformed_corporate_actions_block_ingestion_with_a_report(client):
+    """Ingestion gates (#10): a 4-for-1 split recorded for xyz, whose prices show 2-for-1,
+    and an action for a symbol with no bars. Nothing is registered and the job error
+    names each failing gate."""
+    from quantlab_api.config import get_settings
+
+    h = register(client, "gate@example.com")
+    ws = workspace_id(client, h)
+    uploads = get_settings().data_dir / "uploads"
+    before = set(uploads.iterdir()) if uploads.exists() else set()
+    bad = "symbol,ex_date,kind,value\nxyz,2024-01-04,split,4\nnobars,2024-01-03,dividend,0.5\n"
+    r = _upload(client, h, ws, actions=bad, slug="gated")
+    assert r.status_code == 202, r.text
+    assert run_pending_jobs() == ["failed"]
+    job = client.get(f"/api/v1/workspaces/{ws}/jobs", headers=h).json()["items"][0]
+    message = job["error"]["message"]
+    assert "ingestion gate" in message
+    assert "split_price_mismatch" in message and "orphan_corporate_actions" in message
+    versions = client.get(f"/api/v1/workspaces/{ws}/dataset-versions", headers=h).json()
+    assert versions == []
+    assert set(uploads.iterdir()) == before  # the staged upload was released
+    # The same data with the correct ratio is accepted.
+    ok = _upload(client, h, ws, slug="gated")
+    assert ok.status_code == 202 and run_pending_jobs() == ["completed"]
