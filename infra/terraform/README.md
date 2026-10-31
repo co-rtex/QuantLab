@@ -40,8 +40,9 @@ CI does not run these yet; that waits on the user's approval of Actions minutes 
       app (redis-py) cannot generate IAM tokens yet.
 - [ ] **Edge.** `edge/check-proxy-protocol.sh` passes locally (adapt, validate, PROXY
       v1 and v2 behaviour on Caddy 2.10.2). Still to do: build the edge image, then
-      run `infra/edge/verify.sh` against the public name through a real NLB (#39). It must show each client's own
-      address, and a forged `X-Forwarded-For` must have no effect.
+      run `infra/edge/verify.sh` against the public name through a real NLB (#39). It
+      must show each client's own address, and a forged `X-Forwarded-For` must have no
+      effect.
 - [ ] **PostgreSQL TLS verification.** `database_url` must use `sslmode=verify-full`
       with the RDS CA bundle, which the api image already includes (pinned by checksum
       in services/api/Dockerfile). `sslmode=require` would encrypt without checking the
