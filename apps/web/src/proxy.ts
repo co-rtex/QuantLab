@@ -2,7 +2,8 @@ import { NextResponse, type NextRequest } from "next/server";
 
 import { edgeRequiredResponse, fromEdge } from "@/lib/edge";
 
-const PUBLIC = ["/login", "/register"];
+// /invite handles signed-out visitors itself: it must keep the token from the URL fragment.
+const PUBLIC = ["/login", "/register", "/invite"];
 
 export function proxy(request: NextRequest) {
   // Behind the TLS edge, pages too are served only through it (the API proxy checks itself,

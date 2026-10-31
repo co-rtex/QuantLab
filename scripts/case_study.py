@@ -156,11 +156,14 @@ def main() -> None:
     # 15. a second researcher reproduces the experiment from its saved metadata
     b = Client(args.api)
     b.register(f"researcher-b-{tag}@example.com", "Researcher B")
-    a.post(
-        f"/workspaces/{ws}/members",
+    # Membership by invitation (#5): A invites B, who accepts with the one-time link.
+    invite = a.post(
+        f"/workspaces/{ws}/invitations",
         {"email": f"researcher-b-{tag}@example.com", "role": "editor"},
         key=False,
     )
+    token = invite["accept_path"].split("#token=", 1)[1]
+    b.post("/auth/invitations/accept", {"token": token}, key=False)
     rep = b.post(f"/experiments/{exp_id}/reproduce")
     b.wait_job(rep["job"]["id"])
     repro = a.get(f"/experiments/{exp_id}/reproducibility")

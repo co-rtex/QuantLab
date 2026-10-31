@@ -3,7 +3,7 @@ from __future__ import annotations
 from alembic import context
 from sqlalchemy import create_engine, pool
 
-from quantlab_api import models  # noqa: F401 - register tables
+from quantlab_api import invitations, models  # noqa: F401 - register tables
 from quantlab_api.config import get_settings
 from quantlab_api.db import Base
 

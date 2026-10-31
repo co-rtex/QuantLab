@@ -130,6 +130,23 @@ def register(client, email: str = "alice@example.com", password: str = "Correct-
     return {"Authorization": f"Bearer {token}"}
 
 
+def accept_token(response) -> str:  # type: ignore[no-untyped-def]
+    """The token in a created invitation's accept link (shown once, to the owner)."""
+    return str(response.json()["accept_path"].split("#token=", 1)[1])
+
+
+def join_workspace(client, owner, ws, invitee, email, role="viewer"):  # type: ignore[no-untyped-def]
+    """Invite ``email`` and accept as ``invitee``: the only way to add a member (#5)."""
+    r = client.post(
+        f"/api/v1/workspaces/{ws}/invitations", headers=owner, json={"email": email, "role": role}
+    )
+    assert r.status_code == 201, r.text
+    token = accept_token(r)
+    r = client.post("/api/v1/auth/invitations/accept", headers=invitee, json={"token": token})
+    assert r.status_code == 200, r.text
+    return r.json()
+
+
 def workspace_id(client, headers) -> str:  # type: ignore[no-untyped-def]
     r = client.get("/api/v1/workspaces", headers=headers)
     assert r.status_code == 200
