@@ -86,6 +86,17 @@ Retryable errors are retried with the backoff above until `max_attempts`. Perman
 errors (invalid input, missing dataset) are not retried. Fix the input and submit a new
 experiment; results of failed jobs are never stored.
 
+### ML runs fail with "submitted for pipeline version N"
+Deploy the API and the workers together, at the same release. The API stamps its
+`ML_PIPELINE_VERSION` into each ML run's config and input hash. A worker running a
+different version refuses the run permanently (#143), instead of storing a result whose
+hash describes another panel. ML runs in flight across a pipeline-version change therefore
+fail with "this ML run was submitted for pipeline version N, but this worker runs version
+M" and must be resubmitted. A resubmission is a new run, and only a reused
+`Idempotency-Key` replays the old one. One-time caveat: during the first deploy of this
+check, workers older than it do not know the stamped `pipeline_version` field, so they
+fail such runs with a config validation error instead. Resubmit those the same way.
+
 ### 429 `too_many_jobs` on submissions
 Queued plus running jobs are capped per workspace (`QUANTLAB_MAX_ACTIVE_JOBS_PER_WORKSPACE`,
 default 50) and per account across all its workspaces. The account cap is
