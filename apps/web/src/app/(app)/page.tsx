@@ -16,7 +16,7 @@ export default function Overview() {
   const jobs = useApi<Page<Job>>(ws ? `/workspaces/${ws}/jobs?limit=5` : null, { poll: 3000 });
   const versions = useApi<DatasetVersion[]>(ws ? `/workspaces/${ws}/dataset-versions` : null);
   const noData = versions.data && versions.data.length === 0;
-  const synthetic = useSynthetic();
+  const synthetic = useSynthetic(exps.data?.items);
 
   return (
     <>
@@ -69,7 +69,7 @@ export default function Overview() {
                         <Link href={`/experiments/${e.id}`} className="font-medium text-cobalt hover:underline">
                           {e.name}
                         </Link>
-                        <SyntheticLabel inline status={synthetic(e.dataset_version_id)} />
+                        <SyntheticLabel inline status={synthetic(e)} />
                       </td>
                       <td className="text-ink-2">{strategyLabel(e.strategy_key)}</td>
                       <td>

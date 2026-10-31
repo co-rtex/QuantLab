@@ -23,6 +23,7 @@ interface MLRun {
   id: string;
   name: string;
   dataset_version_id: string;
+  is_synthetic?: boolean | null;
   status: Job["status"];
   created_at: string;
   config: Record<string, unknown>;
@@ -169,8 +170,8 @@ export default function MLPage() {
   const ws = workspace?.id;
   const versions = useApi<DatasetVersion[]>(ws ? `/workspaces/${ws}/dataset-versions` : null);
   const [nonce, setNonce] = useState(0);
-  const synthetic = useSynthetic();
   const runs = useApi<MLRun[]>(ws ? `/workspaces/${ws}/ml-runs?n=${nonce}` : null, { poll: 4000 });
+  const synthetic = useSynthetic(runs.data);
   const [selected, setSelected] = useState<string | null>(null);
   const [err, setErr] = useState<ApiError>();
   const [busy, setBusy] = useState(false);
@@ -259,7 +260,7 @@ export default function MLPage() {
                     <span>
                       <span className="block">
                         {r.name}
-                        <SyntheticLabel inline status={synthetic(r.dataset_version_id)} />
+                        <SyntheticLabel inline status={synthetic(r)} />
                       </span>
                       <span className="block text-xs text-ink-2">{dateTime(r.created_at)}</span>
                     </span>
@@ -272,7 +273,7 @@ export default function MLPage() {
         </div>
         <Panel
           title="Results"
-          aside={<SyntheticLabel status={synthetic(runs.data?.find((r) => r.id === (selected ?? runs.data?.[0]?.id))?.dataset_version_id)} />}
+          aside={<SyntheticLabel status={synthetic(runs.data?.find((r) => r.id === (selected ?? runs.data?.[0]?.id)))} />}
         >
           {selected ?? runs.data?.[0]?.id ? <RunDetail id={(selected ?? runs.data?.[0]?.id) as string} /> : <p className="text-sm text-ink-2">Train a model to see out-of-sample results here.</p>}
         </Panel>

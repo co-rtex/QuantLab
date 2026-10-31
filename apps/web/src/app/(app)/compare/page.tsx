@@ -39,9 +39,9 @@ export default function ComparePage() {
   const [result, setResult] = useState<Compared[]>();
   const [err, setErr] = useState<ApiError>();
   const [busy, setBusy] = useState(false);
-  const synthetic = useSynthetic();
-  const versionOf = new Map(done.data?.items.map((e) => [e.id, e.dataset_version_id]));
-  const isSynthetic = (id: string) => synthetic(versionOf.get(id));
+  const synthetic = useSynthetic(done.data?.items);
+  const rowOf = new Map(done.data?.items.map((e) => [e.id, e]));
+  const isSynthetic = (id: string) => synthetic(rowOf.get(id));
 
   function toggle(id: string) {
     setSelected((s) => (s.includes(id) ? s.filter((x) => x !== id) : s.length >= 6 ? s : [...s, id]));
@@ -87,7 +87,7 @@ export default function ComparePage() {
                     <span>
                       <span className="block">
                         {e.name}
-                        <SyntheticLabel inline status={synthetic(e.dataset_version_id)} />
+                        <SyntheticLabel inline status={synthetic(e)} />
                       </span>
                       <span className="block text-xs text-ink-2">{strategyLabel(e.strategy_key)}</span>
                     </span>
