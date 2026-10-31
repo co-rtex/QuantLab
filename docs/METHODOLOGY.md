@@ -191,7 +191,10 @@ the source of truth; tests in `tests/unit` pin each definition to a golden examp
     So does one whose steps inside the window are explained but whose last level is a
     constant other than 1 that no action in the primary explains (adjusted through a
     later split the primary lacks, or a tail scaled by some other cause): the window
-    cannot tell those apart, and it is never called an adjusted series.
+    cannot tell those apart, and it is never called an adjusted series. Such a row lists
+    every level in `ratios`, so it can show two or more. A genuine vendor that also
+    adjusted for a *dividend* after the window lands here too: that factor needs raw
+    closes around the ex-date, which the window does not have.
 
     For both ratio classes only bars on the ratio level are explained: a bar off it by
     more than the close tolerance (a bad print inside an adjusted series) is still a

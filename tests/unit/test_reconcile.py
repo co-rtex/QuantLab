@@ -808,6 +808,8 @@ def test_a_failed_write_without_hard_links_leaves_no_partial_report(mkt, tmp_pat
         raise OSError(errno.EPERM, "Operation not permitted")
 
     class Full:
+        """Accepts the write and fails at close, as a buffered write to a full disk does."""
+
         def __init__(self, fh):
             self.fh = fh
 
@@ -816,10 +818,11 @@ def test_a_failed_write_without_hard_links_leaves_no_partial_report(mkt, tmp_pat
 
         def __exit__(self, *exc):
             self.fh.close()
+            raise OSError(errno.ENOSPC, "No space left on device")
 
         def write(self, text):
-            self.fh.write(text[:10])
-            raise OSError(errno.ENOSPC, "No space left on device")
+            self.fh.write(text[:10])  # part of it reaches the disk
+            self.fh.flush()
 
     real_open = builtins.open
 
