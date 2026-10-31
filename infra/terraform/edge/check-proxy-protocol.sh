@@ -9,11 +9,12 @@
 # 2. Behaviour of this directory's Caddyfile (PROXY protocol behind an NLB): an edge, an
 #    upstream that echoes the headers it receives, and clients at chosen addresses on an
 #    internal network. Each client sends a spoofed X-Forwarded-For, Forwarded and
-#    X-Real-IP; the PROXY header, when sent, states 203.0.113.7.
-#      A  allowed source, PROXY header     -> 200, X-Forwarded-For = 203.0.113.7
-#      B  allowed source, no PROXY header  -> 200, X-Forwarded-For = its own address
-#      C  other source,   PROXY header     -> 400 (the header is rejected)
-#      D  other source,   no PROXY header  -> 200, X-Forwarded-For = its own address
+#    X-Real-IP; the PROXY header, when sent, states 203.0.113.7. v2 (binary) is what the
+#    NLB sends (ADR-0012); v1 (text) is checked too.
+#      A, A2  allowed source, PROXY v1 / v2  -> 200, X-Forwarded-For = 203.0.113.7
+#      B      allowed source, no PROXY header -> 200, X-Forwarded-For = its own address
+#      C, C2  other source,   PROXY v1 / v2  -> 400 (the header is rejected)
+#      D      other source,   no PROXY header -> 200, X-Forwarded-For = its own address
 #    In every 200, Forwarded and X-Real-IP are removed and X-QuantLab-Edge is set.
 #
 # Uses only the pinned image below (`--pull never`): pull it first if it is missing.
@@ -80,18 +81,31 @@ docker run -d --rm --pull never --name ql-edge --network "$NET" --ip "$SUBNET.10
   -e QUANTLAB_EDGE_PROXY_CIDRS="$SUBNET.20/32" \
   -v "$REPO/infra/terraform/edge/Caddyfile":/etc/caddy/Caddyfile:ro "$IMG" \
   caddy run --config /etc/caddy/Caddyfile --adapter caddyfile >/dev/null
-sleep 3
+# Wait until the edge answers (a fixed sleep flakes on a loaded machine).
+ready=0
+for _ in $(seq 1 40); do
+  if docker run --rm --pull never --network "$NET" --ip "$SUBNET.20" "$IMG" \
+    sh -c "wget -q -O /dev/null http://$SUBNET.10:8080/" >/dev/null 2>&1; then
+    ready=1; break
+  fi
+  sleep 0.5
+done
+[ "$ready" = 1 ] || { echo "FAIL  the edge did not become ready"; exit 1; }
 
 HTTP='GET / HTTP/1.1\r\nHost: x\r\nX-Forwarded-For: 6.6.6.6\r\nForwarded: for=6.6.6.6\r\nX-Real-IP: 6.6.6.6\r\nConnection: close\r\n\r\n'
-PROXY="PROXY TCP4 203.0.113.7 $SUBNET.10 40000 8080\\r\\n"
+PROXY_V1="PROXY TCP4 203.0.113.7 $SUBNET.10 40000 8080\\r\\n"
+# PROXY v2, as the NLB sends it: signature, 0x21 (v2, PROXY), 0x11 (TCP over IPv4), length
+# 12, then 203.0.113.7 -> 172.31.250.10, ports 40000 -> 8080. Octal, for busybox printf.
+PROXY_V2='\015\012\015\012\000\015\012\121\125\111\124\012\041\021\000\014\313\000\161\007\254\037\372\012\234\100\037\220'
 
-probe() { # case, source address, send a PROXY header (yes/no), expected status, expected XFF
+probe() { # case, source address, PROXY header (v1/v2/no), expected status, expected XFF
   local payload=$HTTP out status body
-  [ "$3" = yes ] && payload=$PROXY$HTTP
+  [ "$3" = v1 ] && payload=$PROXY_V1$HTTP
+  [ "$3" = v2 ] && payload=$PROXY_V2$HTTP
   # Keep the connection open after the request: a half-closed client makes Caddy cancel
   # the proxied request.
   out=$(docker run --rm --pull never --network "$NET" --ip "$2" "$IMG" \
-    sh -c "(printf '$payload'; sleep 2) | nc -w 5 $SUBNET.10 8080" 2>&1 | tr -d '\r')
+    sh -c "(printf '$payload'; sleep 2) | nc -w 5 $SUBNET.10 8080" 2>&1 | tr -d '\r' || true)
   status=$(printf '%s\n' "$out" | head -1 | cut -d' ' -f2)
   body=$(printf '%s\n' "$out" | tail -1)
   local want="xff=[$5] edge=[$PH] fwd=[] xri=[]"
@@ -103,9 +117,11 @@ probe() { # case, source address, send a PROXY header (yes/no), expected status,
   fi
 }
 
-probe A "$SUBNET.20" yes 200 203.0.113.7
+probe A "$SUBNET.20" v1 200 203.0.113.7
+probe A2 "$SUBNET.20" v2 200 203.0.113.7
 probe B "$SUBNET.20" no 200 "$SUBNET.20"
-probe C "$SUBNET.30" yes 400 ""
+probe C "$SUBNET.30" v1 400 ""
+probe C2 "$SUBNET.30" v2 400 ""
 probe D "$SUBNET.30" no 200 "$SUBNET.30"
 
 if [ "$fail" -eq 0 ]; then

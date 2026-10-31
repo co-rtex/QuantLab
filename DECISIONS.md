@@ -216,8 +216,8 @@ TLS edge that keeps ADR-0008's guarantee: only a trusted hop states the client a
 * The validation that was done: `terraform validate`, `tflint` and `checkov` (recorded in the
   README). The AWS Caddyfile (`infra/terraform/edge/Caddyfile`) was checked locally on
   2026-10-31 with Caddy 2.10.2 (`edge/check-proxy-protocol.sh`): adapt and validate pass,
-  and on an internal Docker network an allowed PROXY source sets the client address, a
-  PROXY header from any other source is rejected, and spoofed forwarding headers never
+  and on an internal Docker network an allowed PROXY source (v1, and v2 as the NLB sends
+  it) sets the client address, a PROXY header from any other source is rejected, and spoofed forwarding headers never
   reach the upstream. **This does not clear #39.** The PROXY header from a real NLB, and
   `infra/edge/verify.sh` against the public name from a second machine, are still
   required before the edge image is used.

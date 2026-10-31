@@ -23,7 +23,7 @@ paid resources, so it needs the user's approval and account (#19, ADR-0012).
 | hashicorp/aws provider | 6.71.0 (`.terraform.lock.hcl` hashes for linux/darwin × amd64/arm64) | |
 | TFLint | 0.65.0, aws ruleset 0.50.0 | no issues (`preset = "all"`) |
 | Checkov | 3.4.0 (via `uvx`) | 388 passed, 0 failed, 25 skipped. Each skip has an inline `#checkov:skip` reason (checkov not recognizing `auth_token_wo`, operator-rotated app secrets, the KMS key policy's `*`, security groups attached via `for_each`, exports-bucket replication/access logs/events, AZ pinning) |
-| Caddy | 2.10.2 (`caddy:2.10.2-alpine`, the image `infra/edge/compose.yml` pins; already present locally, nothing pulled) | `edge/check-proxy-protocol.sh` (2026-10-31): `caddy adapt` and `caddy validate` pass for `edge/Caddyfile` and `infra/edge/Caddyfile`. On an internal Docker network, a PROXY header from an allowed source sets the client address, a PROXY header from any other source is rejected (400), a spoofed `X-Forwarded-For`/`Forwarded`/`X-Real-IP` never reaches the upstream, and the edge secret is set. With `fallback_policy ignore` the script fails, as it should. **Local only: not behind a real NLB, and it does not clear #39.** |
+| Caddy | 2.10.2 (`caddy:2.10.2-alpine`, the image `infra/edge/compose.yml` pins; already present locally, nothing pulled) | `edge/check-proxy-protocol.sh` (2026-10-31): `caddy adapt` and `caddy validate` pass for `edge/Caddyfile` and `infra/edge/Caddyfile`. On an internal Docker network, a PROXY header (v1, and v2 as the NLB sends it) from an allowed source sets the client address, a PROXY header from any other source is rejected (400), a spoofed `X-Forwarded-For`/`Forwarded`/`X-Real-IP` never reaches the upstream, and the edge secret is set. With `fallback_policy ignore` the script fails, as it should. **Local only: not behind a real NLB, and it does not clear #39.** |
 
 ```sh
 terraform -chdir=infra/terraform init -backend=false
@@ -38,9 +38,9 @@ CI does not run these yet; that waits on the user's approval of Actions minutes 
       `AuthTokenEnabled` and that the `redis_url` secret holds a `rediss://:<token>@…`
       URL. ElastiCache RBAC with IAM authentication would avoid the shared token, but the
       app (redis-py) cannot generate IAM tokens yet.
-- [ ] **Edge.** `edge/check-proxy-protocol.sh` passes locally (adapt, validate and PROXY
-      behaviour on Caddy 2.10.2). Still to do: build the edge image, then run
-      `infra/edge/verify.sh` against the public name through a real NLB (#39). It must show each client's own
+- [ ] **Edge.** `edge/check-proxy-protocol.sh` passes locally (adapt, validate, PROXY
+      v1 and v2 behaviour on Caddy 2.10.2). Still to do: build the edge image, then
+      run `infra/edge/verify.sh` against the public name through a real NLB (#39). It must show each client's own
       address, and a forged `X-Forwarded-For` must have no effect.
 - [ ] **PostgreSQL TLS verification.** `database_url` must use `sslmode=verify-full`
       with the RDS CA bundle, which the api image already includes (pinned by checksum
