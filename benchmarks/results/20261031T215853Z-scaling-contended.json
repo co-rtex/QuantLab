@@ -1,0 +1,60 @@
+{
+  "mode": "scaling",
+  "environment": {
+    "timestamp": "2026-10-31T21:58:53.296446+00:00",
+    "platform": "macOS-26.6.2-arm64-arm-64bit",
+    "machine": "arm64",
+    "cpu_count": 8,
+    "memory_gb": 8.0,
+    "docker_vm_memory_gb": 3.83,
+    "python": "3.12.16",
+    "git_sha": "00d90b9b11c53b49ce451ef4f95e7e78b8133721",
+    "git_dirty": false
+  },
+  "data_is_synthetic": true,
+  "assets": 200,
+  "sessions_traded": "2018-2023",
+  "results": [
+    {
+      "workers": 1,
+      "jobs": 24,
+      "completed": 24,
+      "wall_s": 61.73,
+      "jobs_per_min": 23.3,
+      "speedup": 1.0
+    },
+    {
+      "workers": 2,
+      "jobs": 24,
+      "completed": 24,
+      "wall_s": 44.41,
+      "jobs_per_min": 32.4,
+      "speedup": 1.39
+    },
+    {
+      "workers": 4,
+      "jobs": 24,
+      "completed": 24,
+      "wall_s": 40.66,
+      "jobs_per_min": 35.4,
+      "speedup": 1.52
+    }
+  ],
+  "load": {
+    "start": {
+      "load_1m": 3.47,
+      "load_5m": 4.11,
+      "load_15m": 4.3,
+      "uptime": "16:55  up 7 days,  2:01, 5 users, load averages: 3.47 4.11 4.30",
+      "contended": false
+    },
+    "end": {
+      "load_1m": 7.17,
+      "load_5m": 5.2,
+      "load_15m": 4.68,
+      "uptime": "16:58  up 7 days,  2:04, 5 users, load averages: 7.17 5.20 4.68",
+      "contended": true
+    }
+  },
+  "contended": true
+}

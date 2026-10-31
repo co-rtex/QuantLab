@@ -1,163 +1,164 @@
 # Benchmarks
 
-All figures below were measured with `benchmarks/run_all.py` on 2026-10-30. Raw results,
-including library versions, are in `benchmarks/results/*.json`. Reproduce with:
+**These are measurements on one shared developer Mac, not a capacity claim.** They show
+how the code behaves on that machine on one afternoon. They say nothing about what a
+server, a cloud deployment or a different laptop would do, and no figure here is
+extrapolated.
+
+## Conditions (2026-10-31, quiet window for #24)
+
+The runs were taken during a quiet window the user approved: the other agents stopped
+their stacks and ran nothing locally. The rules are in `benchmarks/README.md`: only
+results that are `contended: false` at both ends (1-minute load at or below half the
+cores) and `git_dirty: false` are published. Each published figure is copied from the raw
+JSON in `benchmarks/results/` without further rounding.
+
+| | |
+|---|---|
+| Machine | Apple M3 (arm64), 8 cores (`cpu_count`), 8.0 GB RAM (`memory_gb`) |
+| OS | macOS 26.6.2 (`platform`: `macOS-26.6.2-arm64-arm-64bit`) |
+| Docker VM | 3.83 GB memory (`docker_vm_memory_gb`), 8 CPUs (from `docker info`, not recorded in the JSON) |
+| Software | Python 3.12.16, NumPy 2.5.4, pandas 3.1.0, DuckDB 2.0.0, PyArrow 26.0.0 |
+| Code | git `da8767a` (`git_dirty: false`) |
+| Cache | **warm**. Cold mode needs `sudo -n purge`, which was not available; the harness labelled the runs `warm (not requested)` |
+| Data | **synthetic** (`quantlab.data.synthetic`, `data_is_synthetic: true`) |
+| Services | PostgreSQL 17 and Redis 7 of this worktree's compose stack (slot 31) |
+| Repeats | 5 per timed quantity (the default). N below is the number of samples behind each median |
+
+The CPU model comes from `sysctl`; the JSON records the platform, core count and memory.
+macOS background services alone keep the 1-minute load at about 1.
+
+Reproduce (in a worktree, with its stack's ports from `scripts/stack-env.sh`):
 
 ```bash
-make up
-uv run python benchmarks/run_all.py --profile small --api http://localhost:8000
-uv run python benchmarks/run_all.py --profile medium
-uv run python benchmarks/run_all.py --profile large
+QUANTLAB_BENCH_PG=postgresql://quantlab:quantlab@localhost:<pg port>/quantlab \
+QUANTLAB_REDIS_URL=redis://localhost:<redis port>/1 \
+uv run python benchmarks/run_all.py --profile small   # then --profile medium
 ```
 
-**Hardware:** Apple Silicon laptop (arm64), 8 CPU cores, 8 GB RAM, macOS 26.6, Python 3.12.16,
-NumPy 2.5.4, pandas 3.1.0, DuckDB 2.0.0, PyArrow 26.0.0; PostgreSQL 17 and Redis 7 in
-Docker Desktop (4 GB VM). Data is synthetic (`quantlab.data.synthetic`, seed 1).
+## Published results
 
-## Workloads
-
-| Profile | Assets | Calendar years | Rows | Generate | Quality checks | Write Parquet |
-|---|---|---|---|---|---|---|
-| small | 100 | 6 | 142,384 | 0.21 s | 0.18 s | 0.13 s |
-| medium | 500 | 6 | 711,358 | 0.81 s | 0.81 s | 0.27 s |
-| large | 1,000 | 10 | 2,357,984 | 3.01 s | 2.61 s | 0.91 s |
-
-## Backtest engine (5 trading years, 1,258 sessions, monthly rebalance, next-open fills)
-
-| Universe | Equal weight | Momentum (top 10) |
+| Profile | File | Load at start / end (1-minute) |
 |---|---|---|
-| 100 assets | 0.28–0.35 s | 0.17–0.23 s |
-| 500 assets | 1.28 s | 0.54 s |
-| 1,000 assets | 3.22 s (41,520 fills) | 1.95 s |
+| small (100 assets, 6 calendar years) | `benchmarks/results/20261031T211545Z-small.json` | 1.92 / 2.96 |
+| medium (500 assets, 6 calendar years) | `benchmarks/results/20261031T211806Z-medium.json` | 3.34 / 3.51 |
 
-Target: a 100-asset, five-year daily backtest in under 60 s. Measured: under 0.4 s. The
-engine scales roughly linearly with universe size; equal weight is slower because it
-trades every asset each month.
+Medians with the interquartile range (IQR) in brackets. "Single" means timed once.
 
-## Parallel independent backtests (8 runs, warmed process pool)
+### Data preparation
 
-| Profile | Serial | 2 workers | 4 workers | Speedup (4) |
+| Step | small | medium |
+|---|---|---|
+| Rows generated (symbols) | 142,384 (101) | 711,358 (501) |
+| Generate (single) | 0.247 s | 0.877 s |
+| Quality checks (N = 5) | 161.629 ms [6.179] | 778.982 ms [9.229] |
+| Write Parquet (N = 5) | 75.366 ms [0.436] | 356.947 ms [19.727] |
+| Parquet size | 5.77 MB | 28.73 MB |
+| Quality status | `pass` | `pass` |
+
+### Backtest engine (in process; 1,258 sessions, monthly rebalance, next-open fills; N = 5)
+
+| Universe | Strategy | small run | medium run | Fills (small / medium) |
 |---|---|---|---|---|
-| small (100 assets) | 1.38 s | 1.45 s | 1.10 s | 1.25× |
-| medium (500 assets) | 4.49 s | 3.67 s | 3.03 s | 1.48× |
-| large (1,000 assets) | 17.74 s | 12.51 s | 14.87 s | 1.19× |
+| 100 assets | equal weight | 302.5 ms [8.632] | 321.732 ms [16.0] | 5,450 / 5,468 |
+| 100 assets | momentum | 183.301 ms [0.484] | 190.729 ms [1.687] | 755 / 772 |
+| 500 assets | equal weight | n/a | 1476.717 ms [55.756] | 23,408 |
+| 500 assets | momentum | n/a | 609.686 ms [29.546] | 789 |
 
-Scaling is weak on this machine. Small runs (~0.16 s each) are dominated by per-task
-overhead (each task reads the Parquet file and builds wide matrices). Large runs keep about
-1.3 GB per process, and four processes exceed what an 8 GB laptop running Docker can hold
-comfortably, so they contend for memory. The serial engine is fast enough for the target
-workloads. To scale out, add worker replicas on hosts with memory headroom (compose sets
-1.5 GB per worker) rather than oversubscribing one host. Not yet measured: RQ worker
-scaling across separate containers.
+The 100-asset rows were measured in both runs, on different synthetic universes (each
+profile generates its own market), so their fill counts differ.
 
-## Historical retrieval: one asset, five years
+Peak resident memory of the engine section: 263.2 MB (small), 665.9 MB (medium).
 
-| Method | small p95 | medium p95 | large p95 |
-|---|---|---|---|
-| DuckDB over Parquet, 1M-row groups (initial) | 7.1 ms | 11.2 ms | 12.6 ms |
-| DuckDB over Parquet, 50k-row groups (current) | | | **4.4 ms** (p50 3.4 ms) |
-| PyArrow dataset filters, 50k-row groups | | | 12.8 ms |
-| PostgreSQL rows, no index | 14.2 ms | 51.6 ms | 48.5 ms |
-| PostgreSQL rows, (symbol, date) B-tree | 3.1 ms | 3.3 ms | 3.4 ms |
-| API path, adjusted full history, Redis miss | 30.3 ms | 43.1 ms | 30.5 ms |
-| API path, adjusted full history, Redis hit | 4.4 ms | 4.9 ms | 3.5 ms |
+### Parallel independent backtests (8 runs per repeat, warmed process pools; N = 5)
 
-Target: p95 under 200 ms for one asset over five years. Measured: under 50 ms uncached and
-under 5 ms cached.
+| | small | medium |
+|---|---|---|
+| Serial, 8 runs | 1466.114 ms [6.113] | 5138.827 ms [200.389] |
+| One run (N = 40) | 176.855 ms [5.402] | 612.818 ms [34.947] |
+| 2 workers, 8 runs | 791.127 ms [27.254] | 2846.181 ms [36.111] |
+| 4 workers, 8 runs | 425.287 ms [48.812] | 2157.075 ms [137.671] |
+| Speedup, 4 workers (median) | 3.45× | 2.38× |
 
-**Caveats (2026-10-30 audit).** The "API path" rows call `bars_payload` in-process (no HTTP
-or authentication) with a warm OS page cache: the Parquet file is written just before the
-queries. The "Redis miss" loop sampled symbols *with* replacement, so a repeated symbol was
-already cached: about 35% of "misses" were hits in small, 15% in medium and 9% in large,
-which flatters the miss figures. `run_all.py` now samples without replacement; the table
-predates that fix and will be updated on the next run.
+The worker rows are not in process (`in_process: false`).
 
-**Optimization applied.** The default PyArrow row group (1M rows) left the large file with
-three row groups, so DuckDB could barely prune. Writing 50k-row groups (rows are sorted by
-symbol) cut single-symbol p50 from 11.9 ms to 3.5 ms (3.4×) for a 66% larger file
-(56.8 → 94.4 MB). Content hashes cover the data, not the file layout, so version identity
-is unchanged. An indexed Postgres row table is faster still for point lookups but costs a
-7.6 s load and much more space per row. Parquet stays the system of record because
-versions must be immutable files that DuckDB can also scan for analytics.
+### Historical retrieval: one symbol, last five trading years (warm cache)
 
-## API latency (small profile, 200 sequential requests each, local uvicorn, 1 process)
+Symbols are sampled without replacement, with a fresh seeded sample per repeat.
 
-| Endpoint | p50 | p95 | p99 |
-|---|---|---|---|
-| `GET /health` | 0.64 ms | 0.74 ms | 0.86 ms |
-| `GET /workspaces` (auth + DB) | 2.42 ms | 4.33 ms | 5.82 ms |
-| `GET /workspaces/{id}/experiments` | 4.61 ms | 7.35 ms | 8.71 ms |
-| `GET /strategies/catalog` | 1.67 ms | 2.20 ms | 2.94 ms |
+| Method | small | medium |
+|---|---|---|
+| DuckDB over Parquet | 2.679 ms [0.286], N = 500 | 2.865 ms [0.199], N = 1000 |
+| PyArrow dataset filters | 2.026 ms [0.242], N = 125 | 2.337 ms [0.19], N = 250 |
+| PostgreSQL rows, no index | 7.085 ms [0.754], N = 150 | 15.282 ms [3.687], N = 150 |
+| PostgreSQL rows, (symbol, date) B-tree | 1.258 ms [0.211], N = 500 | 1.236 ms [0.326], N = 1000 |
+| PostgreSQL COPY load (single) | 0.56 s | 2.42 s |
+| PostgreSQL index build (single) | 0.06 s | 0.32 s |
 
-Target: lightweight reads p95 under 300 ms (warm under 100 ms). Measured: under 8 ms.
-These numbers come from sequential requests; concurrent load testing is not yet done.
+The PostgreSQL rows are round trips to the Docker VM (`in_process: false`).
 
-## Concurrent HTTP load (containerized stack, 4 uvicorn workers)
+### Adjusted full history through `bars_payload` (in process, Redis in Docker)
 
-`benchmarks/load_and_scaling.py load`, run from inside the API container so Docker
-Desktop's port forwarding is not measured. Each level sends max(200, 20 × concurrency)
-requests. There were no errors at any level.
+The Redis cache is cleared before each repeat, so every miss is a real miss.
 
-| Endpoint | Concurrency | Throughput (run A / B) | p50 (A / B) | p95 (A / B) |
-|---|---|---|---|---|
-| experiments list (auth + DB, empty list) | 1 | 289 / 246 req/s | 3.2 / 3.5 ms | 4 / 6 ms |
-|  | 8 | 430 / 475 req/s | 17.3 / 12.7 ms | 26 / 25 ms |
-|  | 32 | 313 / 282 req/s | 79.1 / 78.1 ms | 242 / 317 ms |
-|  | 64 | 194 / 209 req/s | 208.2 / 175.0 ms | 1032 / 1006 ms |
-| bars, adjusted, Redis hit (one key) | 1 | 197 / 199 req/s | 4.8 / 4.7 ms | 7 / 7 ms |
-|  | 8 | 274 / 475 req/s | 28.3 / 11.8 ms | 38 / 31 ms |
-|  | 32 | 245 / 510 req/s | 120.9 / 59.7 ms | 206 / 117 ms |
-|  | 64 | 248 / 163 req/s | 244.8 / 248.9 ms | 401 / 1172 ms |
-| health | 1 | 882 / 835 req/s | 1.1 / 1.1 ms | 1 / 1 ms |
-|  | 8 | 1,046 / 914 req/s | 5.8 / 6.9 ms | 15 / 18 ms |
-|  | 32 | 366 / 366 req/s | 52.4 / 55.8 ms | 226 / 228 ms |
-|  | 64 | 221 / 228 req/s | 167.6 / 134.2 ms | 942 / 928 ms |
+| | small | medium |
+|---|---|---|
+| Redis miss | 20.289 ms [2.27], N = 500 | 21.026 ms [1.825], N = 1000 |
+| Redis hit | 0.941 ms [0.59], N = 500 | 0.919 ms [0.312], N = 1000 |
 
-Runs A and B are `benchmarks/results/20261030T202747Z-load.json` and
-`20261030T202903Z-load.json`, the only committed load results. (An earlier version of this
-table quoted higher figures that no committed result supports; it was regenerated from the
-JSON files during the 2026-10-30 audit.) The two runs differ by up to 2x at the same
-level, so treat single figures as indicative only.
+Peak resident memory of the whole run: 317.1 MB (small), 690.5 MB (medium).
 
-**What this does and does not show.** At 32 concurrent clients the experiments list met
-the p95 < 300 ms target in run A (242 ms) and missed it in run B (317 ms). The
-"experiments list" requests come from a freshly registered user with no experiments, and
-the bars case re-reads a single pre-warmed key, so neither exercises realistic payloads,
-uncached reads, writes or job submission. Beyond 32 clients even `/health`, which does no
-work, slows down. That is the signature of the single Python load-generator process
-competing with the API for the same 8-CPU Docker VM, so these figures say little about the
-API's capacity.
+## Not published from this machine
 
-## Worker scaling (24 momentum backtests, 200 assets, 2018–2023)
+**large and xl.** The end-of-run load check counts the benchmark's own load, and the
+large profile's work alone takes this 8-core M3 past 4, from a macOS baseline of about 1.
+Every large run started below the threshold and ended above it:
 
-`benchmarks/load_and_scaling.py scaling --workers 1 2 4 --jobs 24` scales the compose
-`worker` service. Wall time runs from the first submission to the last completion.
+| File (kept for diagnosis only; no figures quoted) | Run | 1-minute load, start → end |
+|---|---|---|
+| `20261031T212632Z-large-contended.json` | full | 3.79 → 5.09 |
+| `20261031T213553Z-large-contended.json` | full, rerun | 2.77 → 5.82 |
+| `20261031T214034Z-large-contended.json` | `--skip-parallel` | 2.98 → 4.76 |
 
-| Worker containers | Wall time | Throughput | Speedup |
-|---|---|---|---|
-| 1 | 18.4 s | 78 jobs/min | 1.00× |
-| 2 | 14.6 s | 99 jobs/min | 1.26× |
-| 4 | 11.5 s | 126 jobs/min | 1.61× |
+- The two full runs ended contended, partly because of their own 4-process parallel
+  step on 8 cores. So large's parallel section is not published.
+- The `--skip-parallel` run, labelled "large (--skip-parallel): parallel section not
+  measured", ended contended as well. So nothing from large is published.
+- xl is larger than large and was not run.
 
-All 24 jobs completed in each configuration. Scaling is sublinear because the workers,
-API, PostgreSQL and Redis share one 8-CPU VM, and each job loads the dataset from Parquet
-before simulating (about 0.4 s of the roughly 0.75 s per job).
+**HTTP load and worker scaling.** These ran with `benchmarks/load_and_scaling.py` at git
+`00d90b9`, against this worktree's freshly started stack. The load generator ran on the
+host and reached the API through Docker Desktop's port forwarding. All four runs ended
+contended: the generator, the API, PostgreSQL, Redis and up to four workers share this one
+machine. They are kept for diagnosis only, and no figures are quoted from them:
 
-## Scale: 10.4M observations (`xl` profile)
+| File | Mode | 1-minute load, start → end |
+|---|---|---|
+| `20261031T214942Z-load-contended.json` | load | 2.77 → 4.49 |
+| `20261031T215322Z-load-contended.json` | load, rerun | 2.82 → 4.59 |
+| `20261031T215853Z-scaling-contended.json` | scaling 1/2/4 workers | 3.47 → 7.17 |
+| `20261031T220408Z-scaling-contended.json` | scaling, rerun | 6.14 → 5.36 |
 
-`uv run python benchmarks/run_all.py --profile xl --skip-parallel --skip-postgres` uses
-2,000 assets over 22 calendar years. The parallel and PostgreSQL row-copy steps are
-skipped to fit an 8 GB laptop.
+Separating background load from the run's own load is a methodology follow-up; the rule
+was not changed for this window.
 
-| Step | Result |
-|---|---|
-| Observations generated and validated | **10,444,803** rows, 2,001 symbols |
-| Generation / quality checks / Parquet write | 25.9 s / 14.4 s / 6.7 s (418 MB) |
-| Quality status | `warn`: 5 `stale_prices` findings (synthetic names that hit the generator's $0.01 price floor; correctly flagged) |
-| Backtest, 2,000 assets × 5 years, monthly | equal weight 15.1 s (104,659 fills); momentum 10.9 s |
-| One asset, five years: DuckDB / PyArrow | p95 10.6 ms / 9.6 ms |
-| Adjusted full history: Redis miss / hit | p95 76.5 ms / 8.0 ms |
-| Peak resident memory | 2.6 GB |
+## Earlier figures withdrawn
+
+Earlier versions of this page quoted figures from the 2026-10-30 runs
+(`benchmarks/results/20261030T*.json`), including the large, xl, load and scaling tables
+and the Parquet row-group comparison. Those files predate the harness's variance, load and
+tree-state metadata (#110): they record no repeats, no `contended` flag and no
+`git_dirty`. So they cannot meet the publication rule, and their figures are no longer
+quoted here. The files stay in the repository as history.
+
+Two decisions those runs informed still stand. Parquet versions are written with
+50k-row groups so DuckDB can prune by symbol. Parquet stays the system of record, because
+dataset versions must be immutable files that DuckDB can also scan for analytics.
 
 ## Not yet measured
-Load from a dedicated generator host, and failure-recovery timing.
+
+- Cold-cache reads (they need `sudo -n purge` on macOS or root on Linux).
+- large and xl under the publication rule.
+- HTTP load from a separate generator host.
+- Worker scaling on hosts with headroom.
+- Failure-recovery timing.

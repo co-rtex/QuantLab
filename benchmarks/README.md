@@ -3,6 +3,11 @@
 `run_all.py` (library and storage) and `load_and_scaling.py` (HTTP load, worker scaling)
 write JSON results to `results/`. The measurement rules live in `harness.py`.
 
+Against a worktree's own stack, point the scripts at its ports (`scripts/stack-env.sh`):
+`QUANTLAB_BENCH_PG` and `QUANTLAB_REDIS_URL` for `run_all.py`, and `QUANTLAB_BENCH_API`
+for `load_and_scaling.py`. For `scaling`, export the stack's environment too, because it
+runs `docker compose` against the compose project.
+
 ## What every result records
 - **Variance.** Each timed quantity is measured `--repeats` times (default 5; 3 for load
   levels) and reported as median and IQR, with the raw samples kept. Setup steps timed once
