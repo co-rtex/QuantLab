@@ -9,7 +9,9 @@ Timestamp integrity:
 
 * features at ``t`` use only bars dated ``<= t`` (verified by a truncation test). Windows
   count the instrument's own observed bars, so a halt shortens nothing and voids nothing:
-  a 21-bar window just spans more calendar sessions across it (#120),
+  a 21-bar window just spans more calendar sessions across it (#120). A bar with zero
+  volume (a stale close nobody traded at) is no bar: it is removed before anything else,
+  so it is neither a decision row nor a price a label starts or ends at (#142),
 * the label at ``t`` uses closes from ``t`` to ``t + horizon``; it becomes known at
   ``t + horizon``,
 * cross-validation is chronological; training rows whose label window overlaps the test
@@ -34,7 +36,7 @@ from sklearn.metrics import brier_score_loss, log_loss, roc_auc_score
 from sklearn.pipeline import make_pipeline
 from sklearn.preprocessing import StandardScaler
 
-from quantlab.data.adjust import PointInTimeAdjuster, total_returns
+from quantlab.data.adjust import PointInTimeAdjuster, place_actions, total_returns
 from quantlab.data.identity import normalize_master
 from quantlab.data.schema import wide
 
@@ -54,8 +56,9 @@ FEATURES = [
     # Staleness covariates (#120): trade-time windows can reach back further in calendar
     # time, after a halt or for a thinly traded name. Instead of excluding such rows (a
     # selection against illiquid names), the models see how stale the windows are.
-    # (s[t] - s[t-21]) / 21, s = session position: the calendar span of mom_21's 21
-    # returns per return (1 = a bar every session, 2 = every other session).
+    # (s[t] - s[t-21]) / 21 over the instrument's bars, s = session position: the calendar
+    # span of mom_21's 21 returns per return (1 = a bar every session, 2 = every other
+    # session). Zero-volume bars are removed first, so they count as sessions without a bar.
     "bars_span_21",
     # log1p of max_gap_252 (the raw count is unbounded; the panel keeps it as max_gap_252).
     "log1p_max_gap_252",
@@ -65,7 +68,8 @@ PANEL_COLUMNS = [
     "symbol",
     *FEATURES,
     # Sessions without a bar in the longest gap between consecutive bars over the last 252
-    # returns (bars t-252..t). Reported, not a model input (see log1p_max_gap_252).
+    # returns (bars t-252..t); a zero-volume bar is no bar. Reported, not a model input
+    # (see log1p_max_gap_252).
     "max_gap_252",
     "fwd_return",
     "label",
@@ -77,7 +81,10 @@ PANEL_COLUMNS = [
 #   2: windows over each instrument's own bars (#120); flat non-zero volume gives
 #      volume_z_21 = 0 with the volume_flat_21 input; staleness inputs bars_span_21 and
 #      log1p_max_gap_252; rows with no volume in 21 bars are excluded (untraded_21)
-ML_PIPELINE_VERSION = 2
+#   3: a zero-volume bar is no bar (#142): removed before the features, so it is not a
+#      decision row, label price or window member and counts as a gap; reported as
+#      zero_volume_bars. That made the untraded_21 exclusion unreachable, so it is gone
+ML_PIPELINE_VERSION = 3
 # Below this, a rolling dispersion counts as zero (as in quantlab.analytics).
 _ZERO_DISPERSION = 1e-12
 ModelName = Literal["majority", "momentum_rule", "logistic", "random_forest", "gradient_boosting"]
@@ -117,13 +124,13 @@ def _own_bar_features(
     ret: pd.DataFrame,
     vol: pd.DataFrame,
     session: pd.DataFrame,
-) -> tuple[dict[str, pd.DataFrame], dict[str, pd.DataFrame]]:
-    """Features over rows that are each instrument's consecutive *own* bars, plus masks.
+) -> dict[str, pd.DataFrame]:
+    """Features over rows that are each instrument's consecutive *own* bars.
 
     Every window and lag is counted in bars (trade time), so a value uses its own bar and
     earlier ones, never a later one. ``session`` holds each bar's position on the session
-    calendar, which gives the staleness covariates. The masks (``untraded``: no volume at
-    all in the last 21 bars) decide which rows are excluded; they are not features.
+    calendar, which gives the staleness covariates. Zero-volume bars were removed before
+    (``_features``), so every volume here is positive or unknown (NaN).
     """
 
     def mom(n: int, skip: int = 0) -> pd.DataFrame:
@@ -131,13 +138,12 @@ def _own_bar_features(
 
     logv = np.log1p(vol)
     v_mean, v_std = logv.rolling(21).mean(), logv.rolling(21).std()
-    # No trading at all in the window (a quote that never trades) is not "steady volume":
-    # such rows are excluded and counted. Constant non-zero volume deviates from its mean
-    # by exactly zero, so its z-score is 0, not 0/0, and the flag keeps the case visible.
-    untraded = vol.rolling(21).sum() <= 0
-    flat = (v_std <= _ZERO_DISPERSION) & ~untraded
+    # Constant volume deviates from its mean by exactly zero, so its z-score is 0, not
+    # 0/0, and the flag keeps the case visible. An unknown volume leaves the 21 windows
+    # that contain it undefined.
+    flat = v_std <= _ZERO_DISPERSION
     z = ((logv - v_mean) / v_std.where(~flat)).where(~flat, 0.0)
-    z = z.where(v_std.notna() & ~untraded)
+    z = z.where(v_std.notna())
     feats = {
         "mom_21": mom(21),
         "mom_63": mom(63),
@@ -150,28 +156,39 @@ def _own_bar_features(
         "volume_z_21": z,
     }
     # Staleness is described, not punished: a halt is one long gap (large max_gap_252),
-    # thin trading many short ones (large bars_span_21, small max_gap_252).
+    # thin trading many short ones (large bars_span_21, small max_gap_252). A bar with an
+    # unknown volume still has a close, so it counts as a bar here as everywhere else.
     feats["bars_span_21"] = (session - session.shift(21)) / 21
     gap = session - session.shift(1) - 1  # sessions without a bar just before this bar
     feats["max_gap_252"] = gap.rolling(252).max()
     feats["log1p_max_gap_252"] = np.log1p(feats["max_gap_252"])
-    feats["volume_flat_21"] = flat.astype(float).where(v_std.notna() & ~untraded)
-    masks = {"untraded": untraded.astype(float).where(vol.rolling(21).count() == 21)}
-    return feats, masks
+    feats["volume_flat_21"] = flat.astype(float).where(v_std.notna())
+    return feats
 
 
 def compute_features(
     bars: pd.DataFrame, actions: pd.DataFrame, exclude: tuple[str, ...] = ("SYNIDX",)
 ) -> tuple[dict[str, pd.DataFrame], pd.DataFrame]:
     """Date x symbol feature matrices plus fully adjusted closes (see ``_features``)."""
-    feats, _, adj = _features(bars, actions, exclude)
+    feats, _, adj, _ = _features(bars, actions, exclude)
     return feats, adj
 
 
 def _features(
     bars: pd.DataFrame, actions: pd.DataFrame, exclude: tuple[str, ...]
-) -> tuple[dict[str, pd.DataFrame], dict[str, pd.DataFrame], pd.DataFrame]:
-    """Features, row-exclusion masks and fully adjusted closes, date x symbol.
+) -> tuple[dict[str, pd.DataFrame], pd.DataFrame, pd.DataFrame, int]:
+    """Features, the removed zero-volume bars, fully adjusted closes (date x symbol) and
+    the number of dividends lost with a zero-volume tail.
+
+    A bar with zero volume (a stale close a vendor keeps printing through a halt, or for a
+    name that rarely trades) is no bar (#142). It is removed before anything is computed,
+    so it reads exactly like a session without a bar: it is not a decision row or a label
+    price, windows skip it, the staleness inputs count it as a gap, and a corporate action
+    dated on it applies on the next bar, as it would across a gap. A bar with an unknown
+    (NaN) volume still has a close and is kept. The session calendar is that of all bars.
+    A dividend dated in a zero-volume tail (after the last bar with volume) has no later
+    bar, so it is never applied here; the backtest engine, which keeps such bars as
+    printed bars, pays it. Those dividends are counted.
 
     Fully adjusted levels are safe here because only *ratios* of prices dated on or before
     ``t`` are used: corporate actions after ``t`` scale both sides equally and cancel.
@@ -184,10 +201,29 @@ def _features(
     the values are scattered back.
     """
     bars = bars[~bars["symbol"].isin(exclude)]
-    close = wide(bars, "close")
+    calendar = wide(bars, "close")
+    zero = bars["volume"] <= 0  # negative volume is a quality error; no trade either way
+    zero_volume = (
+        wide(bars.assign(zero=zero.astype(float)), "zero")
+        .reindex(index=calendar.index, columns=calendar.columns)
+        .eq(1)
+    )
+    bars = bars[~zero]
+    close = wide(bars, "close").reindex(index=calendar.index, columns=calendar.columns)
     vol = wide(bars, "volume").reindex(index=close.index, columns=close.columns)
     acts = actions[actions["symbol"].isin(close.columns)]
-    adj = close * PointInTimeAdjuster(close, acts).multiplier(None)
+    adjuster = PointInTimeAdjuster(close, acts)
+    adj = close * adjuster.multiplier(None)
+    # Both placements sort the actions the same way, so they compare row by row.
+    printed_after = place_actions(calendar, acts)["placement"].eq("after_history").to_numpy()
+    placed = adjuster.placed
+    lost_dividends = int(
+        (
+            placed["kind"].eq("dividend").to_numpy()
+            & placed["placement"].eq("after_history").to_numpy()
+            & ~printed_after
+        ).sum()
+    )
     # The first bar after a gap carries the return over the whole gap (total_returns).
     rets = total_returns(bars, acts).reindex(index=close.index, columns=close.columns)
     has = close.notna().to_numpy()
@@ -209,12 +245,8 @@ def _features(
         index=close.index,
         columns=close.columns,
     )
-    own, masks = _own_bar_features(compress(adj), compress(rets), compress(vol), compress(session))
-    return (
-        {name: expand(f) for name, f in own.items()},
-        {name: expand(m) for name, m in masks.items()},
-        adj,
-    )
+    own = _own_bar_features(compress(adj), compress(rets), compress(vol), compress(session))
+    return {name: expand(f) for name, f in own.items()}, zero_volume, adj, lost_dividends
 
 
 def build_panel(
@@ -233,7 +265,7 @@ def build_panel(
     returns are applied to labels whose horizon reaches the first session after the
     security's delisting date.
     """
-    feats, masks, adj = _features(bars, actions, cfg.exclude)
+    feats, zero_volume, adj, lost_dividends = _features(bars, actions, cfg.exclude)
     close = adj
     h = cfg.horizon
     # The label runs to the last close at or before t+h. For an asset that stops trading
@@ -248,6 +280,7 @@ def build_panel(
     # return that is not public by its label_available_at. Without a return the
     # optimistic last-close exit remains (documented in METHODOLOGY).
     exit_px = adj
+    listed = pd.DataFrame(True, index=adj.index, columns=adj.columns)
     booked: list[tuple[str, int, float]] = []
     if instruments is not None and len(instruments):
         master = normalize_master(instruments)
@@ -259,6 +292,7 @@ def build_panel(
             for row in master.itertuples():
                 when = pd.Timestamp(row.delisting_date)
                 exit_px.loc[exit_px.index > when, row.instrument_id] = np.nan
+                listed.loc[listed.index > when, row.instrument_id] = False
                 if pd.notna(row.delisting_return):
                     first_after = int(adj.index.searchsorted(when, side="right"))
                     booked.append((row.instrument_id, first_after, float(row.delisting_return)))
@@ -271,26 +305,27 @@ def build_panel(
     dates = close.index[252 :: cfg.sample_every]
     dates = dates[dates <= close.index[-1 - h]] if len(close) > h else dates[:0]
     frames = []
-    excluded = {"untraded_21": 0, "dates_below_10_after_untraded": 0}
-    others = [c for c in FEATURES if c not in ("volume_z_21", "volume_flat_21")]
+    # Zero-volume bars of listed names on a sampled date: not decision rows (#142).
+    stale = zero_volume & listed
+    excluded = {
+        "zero_volume_bars": 0,
+        "dates_below_10_with_zero_volume": 0,
+        "dividends_after_last_trade": lost_dividends,
+    }
     for d in dates:
         k = close.index.get_loc(d)
         row = pd.DataFrame({name: f.loc[d] for name, f in feats.items()})  # incl. the flag
         row["fwd_return"] = fwd.loc[d]
-        row = row[close.loc[d].notna()]
-        # No trading in 21 bars: excluded. Counted only where the row would otherwise be
-        # kept (complete apart from the undefined volume z-score).
-        untraded = masks["untraded"].loc[d].reindex(row.index) == 1
-        complete = row[[*others, "fwd_return"]].notna().all(axis=1)
-        dropped = int((untraded & complete).sum())
-        row = row[~untraded].dropna()
+        row = row[close.loc[d].notna()].dropna()
+        n_stale = int(stale.loc[d].sum())
         if len(row) < 10:
-            # A date too thin for a cross-section is skipped whole; say when the untraded
-            # removal is what took it below ten names.
-            if len(row) + dropped >= 10:
-                excluded["dates_below_10_after_untraded"] += 1
+            # A date too thin for a cross-section is skipped whole; count it when it would
+            # have had ten names counting that date's own zero-volume bars. A longer
+            # warm-up (removed bars delay a name's 252nd bar) is not counted.
+            if len(row) + n_stale >= 10:
+                excluded["dates_below_10_with_zero_volume"] += 1
             continue
-        excluded["untraded_21"] += dropped  # only on dates that make the panel
+        excluded["zero_volume_bars"] += n_stale  # only on dates that make the panel
         row["label"] = (row["fwd_return"] > row["fwd_return"].median()).astype(int)
         row["date"] = d
         row["label_available_at"] = close.index[k + h]
@@ -486,9 +521,9 @@ def run_ml_experiment(
         "panel": {
             "rows": len(panel),
             "volume_flat_rows": int(panel["volume_flat_21"].sum()),
-            # Rows left out for a stated reason, among those otherwise kept: no volume at
-            # all in the last 21 bars. Stale windows are not excluded; see bars_span_21
-            # and max_gap_252.
+            # What was left out for a stated reason: zero-volume bars (no bars, #142), the
+            # dates they took below ten names, and dividends lost with a zero-volume tail.
+            # Stale windows are not excluded; see bars_span_21 and max_gap_252.
             "excluded_rows": dict(panel.attrs.get("excluded", {})),
             "dates": int(panel["date"].nunique()),
             "symbols": int(panel["symbol"].nunique()),
