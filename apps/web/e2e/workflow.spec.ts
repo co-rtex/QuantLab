@@ -73,6 +73,14 @@ test("research workflow: data -> backtest -> results -> reproduction", async ({ 
   const experimentUrl = page.url();
   await page.goto("/ml");
   await expect(page.getByText("Out-of-sample AUC")).toBeVisible({ timeout: 60_000 });
+  // A new result records how its panel was built (#144); ml-panel.spec.ts covers an old one.
+  const inputs = page.getByRole("region", { name: "Panel construction" });
+  await expect(inputs.getByRole("definition").first()).toHaveText(/^v\d+$/);
+  await expect(inputs.getByText("not recorded")).toHaveCount(0);
+  for (const term of ["Rows excluded: no trading", "Dates skipped: too few names", "Rows with flat volume"]) {
+    const item = inputs.locator("dl > div").filter({ has: page.getByRole("term").filter({ hasText: term }) });
+    await expect(item.getByRole("definition").first()).toHaveText(/^[\d,]+$/);
+  }
   await page.goto(experimentUrl);
 
   await page.getByRole("button", { name: "Reproduce" }).click();
