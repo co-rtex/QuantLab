@@ -55,7 +55,7 @@ def test_crashed_worker_lease_expiry_then_takeover_is_fenced(client, seeded):
         db.execute(
             update(Job)
             .where(Job.id == job_id)
-            .values(lease_expires_at=J.now() - timedelta(seconds=1))
+            .values(lease_expires_at=func.now() - timedelta(seconds=1))
         )
         db.commit()
     # A redelivery while the lease is expired lets worker B take over (attempt 2).
@@ -82,7 +82,7 @@ def test_reaper_requeues_then_fails_exhausted_jobs(client, seeded):
             db.execute(
                 update(Job)
                 .where(Job.id == job_id)
-                .values(lease_expires_at=J.now() - timedelta(seconds=1))
+                .values(lease_expires_at=func.now() - timedelta(seconds=1))
             )
             db.commit()
         stats = J.reap()
@@ -107,7 +107,7 @@ def test_reaper_recovers_and_job_completes(client, seeded):
         db.execute(
             update(Job)
             .where(Job.id == job_id)
-            .values(lease_expires_at=J.now() - timedelta(seconds=1))
+            .values(lease_expires_at=func.now() - timedelta(seconds=1))
         )
         db.commit()
     assert J.reap()["requeued"] == 1
@@ -279,7 +279,7 @@ def test_redis_outage_does_not_lose_jobs(client, seeded, monkeypatch):
 
     J.set_redis(fakeredis.FakeRedis())
     with SessionLocal() as db:
-        db.execute(update(Job).values(created_at=J.now() - timedelta(minutes=10)))
+        db.execute(update(Job).values(created_at=func.now() - timedelta(minutes=10)))
         db.commit()
     assert J.reap()["redelivered"] == 1
     assert len(J.get_queue()) == 1
