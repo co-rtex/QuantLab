@@ -163,3 +163,27 @@ def test_callbacks_and_webhooks_from_the_queue_are_dropped() -> None:
     assert trusted.success_callback is None
     assert trusted.failure_callback is None
     assert trusted.stopped_callback is None
+
+
+def test_the_worker_uses_the_trusted_options(monkeypatch: pytest.MonkeyPatch) -> None:
+    """``quantlab-worker`` builds its RQ worker with RQ_OPTIONS: without them it unpickles."""
+    from quantlab_api import worker
+
+    built: dict[str, object] = {}
+
+    class Recorder:
+        def __init__(self, queues: object, **kwargs: object) -> None:
+            built.update(kwargs)
+
+        def work(self, **_: object) -> None:
+            return None
+
+    monkeypatch.setattr(worker, "Worker", Recorder)
+    monkeypatch.setattr(worker, "redis_conn", fakeredis.FakeRedis)
+    monkeypatch.setattr(
+        worker, "get_queue", lambda: Queue("q", connection=fakeredis.FakeRedis(), **RQ_OPTIONS)
+    )  # type: ignore[arg-type]
+    monkeypatch.setattr(worker, "setup_tracing", lambda *a, **k: None)
+    worker.main()
+    assert built["serializer"] is JSONSerializer
+    assert built["job_class"] is TrustedJob

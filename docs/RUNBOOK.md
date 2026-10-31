@@ -6,9 +6,26 @@
 |---|---|---|
 | API liveness | `curl localhost:8000/api/v1/health` | `{"status":"ok"}` |
 | API readiness (DB + Redis) | `curl -i localhost:8000/api/v1/ready` | 200, both checks `ok` (503 when degraded) |
-| Workers | `docker compose --profile app ps worker` / `rq info -u $QUANTLAB_REDIS_URL` | workers listening on `quantlab` |
+| Workers | `docker compose --profile app ps worker` / `rq info` as below | workers listening on `quantlab` |
 | Reaper | logs contain `reaper_cycle` lines when it recovers anything | process running |
 | Metrics | `curl -H "Authorization: Bearer $QUANTLAB_METRICS_TOKEN" localhost:8000/metrics` | Prometheus text |
+
+### Inspecting the job queue
+
+The queue holds JSON entries that only `TrustedJob` will run (#115). The `rq` command line
+tools default to pickle and to RQ's base `Job`, so pointed at a Redis someone has tampered
+with they unpickle job meta and results *on your machine*. Always:
+
+```
+export RQ_REDIS_URL="$QUANTLAB_REDIS_URL"       # from the environment, never `-u <url>`:
+                                                # a command line, and its password, shows in `ps`
+export RQ_JOB_CLASS=quantlab_api.jobs.TrustedJob
+rq info -S rq.serializers.JSONSerializer
+rq requeue --all -S rq.serializers.JSONSerializer   # only with both variables set
+```
+
+Never point plain `rq` tools, or rq-dashboard (it reads jobs with the default serializer),
+at this Redis.
 
 ## Observability
 
