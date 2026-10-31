@@ -215,3 +215,31 @@ hop's ranges, and use `{client_ip}` instead of `{remote_host}` (see the comments
   global cap, so about 10·N a minute for an attacker with N addresses (an IPv6 /48 holds
   65,536 /64 buckets). Each probe that succeeds creates an audited account (ADR-0010).
   Email verification will close this once a mail adapter exists.
+
+## Cloud deployment (AWS, validated and never applied)
+`infra/terraform/` describes an AWS deployment (#19, ADR-0012); its README has the details.
+Nothing has been planned or applied against any account. Applying it creates paid
+resources and needs the user's account and approval. What differs from compose:
+* **Edge:** an NLB terminates TLS (ACM) and sends PROXY protocol v2 to Caddy, which
+  accepts that header only from the NLB's subnets and overwrites `X-Forwarded-For` with the
+  stated client (`infra/terraform/edge/Caddyfile`). Run `infra/edge/verify.sh` against the
+  public name before announcing it. That Caddyfile has not been checked with
+  `caddy adapt` yet; do that before building the edge image.
+* **Trusted proxies:** the web tier runs in its own subnets, and
+  `QUANTLAB_TRUSTED_PROXIES` is exactly those CIDRs. Never schedule other tasks there.
+* **Data directory:** EFS, mounted by api, worker **and reaper** (the reaper's sweeps and
+  trash purge need it). `.trash` is on the same file system, as quarantine requires.
+  Restore AWS Backup recovery points with the reaper scaled to 0.
+* **Migrations:** run the `migrate` task once per release before updating services, never
+  at API start.
+* **Secrets:** Secrets Manager entries are created empty. Set `jwt_secret`,
+  `metrics_token`, `edge_secret` and `database_url` before the first deploy. The LLM and
+  market-data keys are injected only when enabled; the vendor and licence remain the
+  user's choice (#11). Rotate a secret by writing a new version and redeploying the
+  services that read it; rotating `jwt_secret` signs everyone out.
+* **Redis:** TLS and AUTH, reachable only from api, worker and reaper. It holds login
+  rate-limit counters, cached bars and RQ job payloads. The token is generated at apply
+  time and stored only in the `redis_url` secret. To rotate it, increase
+  `redis_auth_token_version` (`infra/terraform/README.md`).
+* **Before any apply:** work through the checklist in `infra/terraform/README.md`: Redis
+  AUTH, the Caddyfile and `verify.sh`, `sslmode=verify-full`, and the JWT secret scope.
