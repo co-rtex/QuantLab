@@ -274,15 +274,28 @@ Full-stack runs are now serialized machine-wide (`make e2e-serial`).
 1. **Agent 2:** no unblocked issue; standing by for reviews.
 2. **Agent 3:** #152 (the worker checks the submitted engine version, mirroring #143).
 3. **Lead:** integrate.
-4. **Blocked on the user:**
+4. **User decisions (2026-10-31):**
+   * Public deployment and paid infrastructure **stay blocked** (#39 gate, any
+     `terraform apply`).
+   * #55 option A (uniform registration with email verification) is **deferred**
+     (ADR-0010).
+   * The weekly scheduled dependency audit (#137) is **deferred**. Audits run on every push
+     and PR (#139).
+   * #17 Playwright in CI is **approved, with Actions usage controlled**. The lead is
+     building it.
+   * Local Caddyfile validation is **approved** and **done** (#158, the pinned local
+     `caddy:2.10.2-alpine` image). It does **not** clear the #39 gate.
+   * A quiet benchmark window for #24 is **approved**, coordinated with both workers.
+     Only measured figures are published.
+   * Then an independent release-candidate assessment and a classified list of release
+     blockers, not new feature work.
+   * Paid market-data services and hosted LLM usage stay blocked.
+5. **Blocked on the user:**
    * #39 (a host that preserves client addresses, a second machine, and a real NLB; the
-     Caddyfiles pass local checks only);
-   * #17 (Actions minutes);
+     Caddyfiles pass local checks only, #158);
    * #11 and #12 live (vendor, licence and key);
    * #15 hosted eval (LLM key);
    * #20 (load host);
-   * #55 option A;
-   * a quiet window for #24 figures;
    * any `terraform apply` (cloud account, cost).
 
 ## Blockers
