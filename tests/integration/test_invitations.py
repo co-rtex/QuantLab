@@ -612,3 +612,26 @@ def test_an_invitation_purged_mid_accept_is_a_410_not_a_500(client, team, monkey
     r = client.post(ACCEPT, headers=team["bob"], json={"token": token})
     assert r.status_code == 410, r.text
     assert r.json()["error"]["code"] == "invitation_expired"
+
+
+def test_a_workspace_deleted_mid_accept_is_a_404(client, team, monkeypatch):
+    """The invitation vanished with its workspace: not found, not "expired"."""
+    from quantlab_api.routes import invitations as routes
+
+    temp = client.post("/api/v1/workspaces", headers=team["owner"], json={"name": "Temp"})
+    temp_id = temp.json()["id"]
+    token = _token(client, team["owner"], temp_id, "bob@example.com")
+    real = routes._require_pending
+    calls: list[int] = []
+
+    def then_deleted(i: Any) -> None:
+        real(i)
+        if not calls:
+            calls.append(1)
+            gone = client.delete(f"/api/v1/workspaces/{temp_id}", headers=team["owner"])
+            assert gone.status_code == 204
+
+    monkeypatch.setattr(routes, "_require_pending", then_deleted)
+    r = client.post(ACCEPT, headers=team["bob"], json={"token": token})
+    assert r.status_code == 404, r.text
+    assert r.json()["error"]["code"] == "invitation_not_found"

@@ -25,6 +25,10 @@ def _shared_dev_secret(data_dir: Path) -> SecretStr:
     and then read it. The key is written to a private temporary file and renamed into
     place, so even a reader that ignores the lock never sees half a key.
 
+    The lock needs a filesystem with working ``flock``: some FUSE and SMB mounts lack it
+    (this then fails loudly), and NFS without coherent locking could still let processes
+    write different keys. Keep ``data_dir`` on a local disk or volume in development.
+
     The key lives in ``data_dir`` and so travels with its backups. Delete the file to rotate
     it (everyone is signed out). A file readable by others is refused, not repaired: the key
     may already have been read.

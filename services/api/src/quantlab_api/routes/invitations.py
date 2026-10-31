@@ -11,7 +11,6 @@ from datetime import UTC, datetime, timedelta
 
 from fastapi import APIRouter, Request, Response
 from sqlalchemy import delete, func, or_, select, update
-from sqlalchemy.exc import InvalidRequestError
 from sqlalchemy.orm import Session
 
 from quantlab_api import invitations as inv_mod
@@ -249,6 +248,8 @@ def _require_inviter_still_owner(
     no longer a member) it is withdrawn. ``locked`` holds the inviter's row, locked, so a
     concurrent demotion or removal finishes first and is seen."""
     inviter = locked.get(i.invited_by) if i.invited_by is not None else None
+    if inviter is None and db.get(Workspace, i.workspace_id) is None:
+        raise ApiError(404, "invitation_not_found", NOT_FOUND)  # deleted with its workspace
     if inviter is None or inviter.role != Role.owner:
         db.execute(
             update(Invitation)
@@ -292,13 +293,16 @@ def _respond(db: Session, i: Invitation, user: User, status: str) -> None:
         .values(status=status, responded_at=now, responded_by=user.id)
     ).rowcount  # type: ignore[attr-defined]
     if not done:
+        inv_id, ws_id = i.id, i.workspace_id  # read before rollback expires the object
         db.rollback()
-        try:
-            db.refresh(i)
-        except InvalidRequestError:
-            # Purged meanwhile (it had long expired): answer as for an expired link, not 500.
-            raise ApiError(410, "invitation_expired", "This invitation has expired") from None
-        _require_pending(i)
+        fresh = db.get(Invitation, inv_id, populate_existing=True)
+        if fresh is None:
+            # The row is gone. With its workspace: deleted with it, so not found. Otherwise
+            # the purge of long-expired invitations removed it: answer as expired, not 500.
+            if db.get(Workspace, ws_id) is None:
+                raise ApiError(404, "invitation_not_found", NOT_FOUND)
+            raise ApiError(410, "invitation_expired", "This invitation has expired")
+        _require_pending(fresh)
         raise ApiError(409, "invitation_used", "This invitation was already answered")
 
 
