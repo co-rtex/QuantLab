@@ -4,7 +4,7 @@ import Link from "next/link";
 import { useState } from "react";
 import { CompareChart, SERIES } from "@/components/charts";
 import { PageHeader } from "@/components/Shell";
-import { ErrorNote, Panel, Skeleton } from "@/components/ui";
+import { ErrorNote, Panel, QueryError, Skeleton } from "@/components/ui";
 import { api, ApiError, type Experiment, type Metrics, type Page, type Series } from "@/lib/api";
 import { num, pct, signClass, strategyLabel } from "@/lib/format";
 import { useApi } from "@/lib/useApi";
@@ -67,9 +67,10 @@ export default function ComparePage() {
       />
       <div className="grid gap-6 xl:grid-cols-[1fr_2.5fr]">
         <Panel title="Completed experiments" aside={`${selected.length} of 6 selected`}>
+          <QueryError q={done} what="completed experiments" />
           {done.loading && !done.data ? (
             <Skeleton />
-          ) : done.data?.items.length === 0 ? (
+          ) : done.error && !done.data ? null : done.data?.items.length === 0 ? (
             <p className="text-sm text-ink-2">
               Nothing to compare yet. <Link className="text-cobalt underline underline-offset-2" href="/experiments/new">Run an experiment</Link> first.
             </p>

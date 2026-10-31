@@ -5,6 +5,7 @@ import { usePathname, useRouter } from "next/navigation";
 import { type ReactNode, useState } from "react";
 import { api, ApiError } from "@/lib/api";
 import { useWorkspace } from "@/lib/workspace";
+import { QueryError } from "./ui";
 
 const NAV = [
   { href: "/", label: "Overview" },
@@ -20,7 +21,7 @@ const NAV = [
 export function Shell({ children }: { children: ReactNode }) {
   const pathname = usePathname();
   const router = useRouter();
-  const { user, workspaces, workspace, setWorkspaceId } = useWorkspace();
+  const { user, workspaces, workspace, setWorkspaceId, error, retry } = useWorkspace();
 
   const [signOutFailed, setSignOutFailed] = useState(false);
 
@@ -95,7 +96,14 @@ export function Shell({ children }: { children: ReactNode }) {
           )}
         </div>
       </aside>
-      <main className="min-w-0 px-4 py-6 md:px-8 md:py-8">{children}</main>
+      <main className="min-w-0 px-4 py-6 md:px-8 md:py-8">
+        {error && (
+          <div className="mb-6">
+            <QueryError q={{ data: workspaces.length ? workspaces : undefined, error, reload: retry }} what="your account and workspaces" />
+          </div>
+        )}
+        {children}
+      </main>
     </div>
   );
 }

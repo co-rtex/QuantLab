@@ -1,7 +1,7 @@
 "use client";
 
 import { createContext, useContext, useEffect, useState, type ReactNode } from "react";
-import { api, type User, type Workspace } from "./api";
+import { api, ApiError, type User, type Workspace } from "./api";
 
 interface Ctx {
   user: User | undefined;
@@ -9,6 +9,9 @@ interface Ctx {
   workspace: Workspace | undefined;
   setWorkspaceId: (id: string) => void;
   refresh: () => Promise<void>;
+  /** Why the account or its workspaces could not be loaded, if they could not (#18). */
+  error: ApiError | undefined;
+  retry: () => void;
 }
 
 const WorkspaceContext = createContext<Ctx | null>(null);
@@ -18,6 +21,8 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<User>();
   const [workspaces, setWorkspaces] = useState<Workspace[]>([]);
   const [selected, setSelected] = useState<string | null>(null);
+  const [error, setError] = useState<ApiError>();
+  const [attempt, setAttempt] = useState(0);
 
   const load = () => Promise.all([api<User>("/auth/me"), api<Workspace[]>("/workspaces")]);
   const apply = ([me, ws]: [User, Workspace[]]) => {
@@ -34,12 +39,20 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     let alive = true;
     load()
-      .then((r) => alive && apply(r))
-      .catch(() => {});
+      .then((r) => {
+        if (!alive) return;
+        setError(undefined);
+        apply(r);
+      })
+      .catch((e) => {
+        // Used to be swallowed, leaving an app with no user and no workspace and no reason.
+        if (alive) setError(e instanceof ApiError ? e : new ApiError(0, "network", String(e)));
+      });
     return () => {
       alive = false;
     };
-  }, []);
+  }, [attempt]);
+  const retry = () => setAttempt((n) => n + 1);
 
   const setWorkspaceId = (id: string) => {
     setSelected(id);
@@ -50,7 +63,7 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
 
   const workspace = workspaces.find((w) => w.id === selected);
   return (
-    <WorkspaceContext.Provider value={{ user, workspaces, workspace, setWorkspaceId, refresh }}>
+    <WorkspaceContext.Provider value={{ user, workspaces, workspace, setWorkspaceId, refresh, error, retry }}>
       {children}
     </WorkspaceContext.Provider>
   );

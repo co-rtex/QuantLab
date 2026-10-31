@@ -56,10 +56,47 @@ export function ErrorNote({ error, action }: { error: ApiError | Error | undefin
   return (
     <div role="alert" className="rounded border border-loss/30 bg-loss-soft px-3 py-2 text-sm text-loss">
       <p>{error.message}</p>
-      {rid && <p className="mt-0.5 text-xs opacity-80">Request {rid}</p>}
+      {rid && <p className="mt-0.5 text-xs">Request {rid}</p>}
       {action}
     </div>
   );
+}
+
+/** The parts of a useApi() result the error components need. */
+export interface Query {
+  data?: unknown;
+  error?: ApiError;
+  reload: () => void;
+}
+
+/**
+ * A failed request, shown where its data would be, with a way to try again (#18). Panels
+ * used to render nothing, or a skeleton forever, when the API answered 5xx. If an earlier
+ * response is still on screen, the note says so instead of hiding the failure.
+ */
+export function QueryError({ q, what = "this data" }: { q: Query; what?: string }) {
+  if (!q.error) return null;
+  const stale = q.data !== undefined;
+  return (
+    <div className="mb-3">
+      <ErrorNote
+        error={q.error}
+        action={
+          <p className="mt-1 flex flex-wrap items-center gap-2">
+            <span>{stale ? `Showing the last ${what} that loaded.` : `Could not load ${what}.`}</span>
+            <button type="button" className="btn btn-quiet py-0.5" onClick={q.reload}>
+              Retry
+            </button>
+          </p>
+        }
+      />
+    </div>
+  );
+}
+
+/** The placeholder for data that has not arrived: a skeleton while loading, an error with Retry once it failed. */
+export function Pending({ q, h, what }: { q: Query; h?: string; what?: string }) {
+  return q.error ? <QueryError q={q} what={what} /> : <Skeleton h={h} />;
 }
 
 export function Empty({ title, children }: { title: string; children?: ReactNode }) {
