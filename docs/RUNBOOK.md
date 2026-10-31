@@ -150,10 +150,13 @@ Deleting a workspace removes its files after the database commit (#21,
 
 ## Configuration checklist for production
 
-`QUANTLAB_ENVIRONMENT=production` refuses to start unless `QUANTLAB_JWT_SECRET` is a real
-secret (≥ 32 characters, no placeholder words), `QUANTLAB_COOKIE_SECURE=true`,
-`QUANTLAB_METRICS_TOKEN` is set, and the Redis URL carries a real password (16+ characters,
-from `QUANTLAB_REDIS_PASSWORD` in compose; #115). Terminate TLS at the trusted edge (below). Run migrations
+`QUANTLAB_ENVIRONMENT=production` refuses to start every process (API, worker, reaper,
+migrations) unless `QUANTLAB_COOKIE_SECURE=true` and the Redis URL carries a real password
+(16+ characters, from `QUANTLAB_REDIS_PASSWORD` in compose; #115). The **API** also
+refuses unless `QUANTLAB_JWT_SECRET` is a real secret (≥ 32 characters, no placeholder
+words) and `QUANTLAB_METRICS_TOKEN` is set. Workers and the reaper never sign tokens and
+do not need either (#117); without the key a process fails closed instead of using a
+development key. Terminate TLS at the trusted edge (below). Run migrations
 (`alembic -c services/api/alembic.ini upgrade head`) before starting new API versions.
 
 In production, login and registration accept only requests that arrive through the web
@@ -199,6 +202,10 @@ and ten failed logins would lock everyone out. Step 3 checks this.
    export QUANTLAB_EDGE_SECRET=$(openssl rand -hex 32)   # store it like the JWT secret
    export QUANTLAB_JWT_SECRET=$(openssl rand -hex 32) QUANTLAB_METRICS_TOKEN=$(openssl rand -hex 24)
    export QUANTLAB_REDIS_PASSWORD=$(openssl rand -hex 24)   # hex: safe inside the Redis URL
+   ```
+   A password with other characters (`@`, `/`, `:`, `#`, `%` …) must be percent-encoded
+   where it appears in `QUANTLAB_REDIS_URL`, or the URL is read wrongly.
+   ```
    docker compose -f docker-compose.yml -f infra/edge/compose.yml --profile app up -d --build
    ```
    For a public domain also set `QUANTLAB_EDGE_SITE=quantlab.example.com` and
@@ -261,4 +268,4 @@ resources and needs the user's account and approval. What differs from compose:
   time and stored only in the `redis_url` secret. To rotate it, increase
   `redis_auth_token_version` (`infra/terraform/README.md`).
 * **Before any apply:** work through the checklist in `infra/terraform/README.md`: Redis
-  AUTH, the Caddyfile and `verify.sh`, `sslmode=verify-full`, and the JWT secret scope.
+  AUTH, the Caddyfile and `verify.sh`, and `sslmode=verify-full`.

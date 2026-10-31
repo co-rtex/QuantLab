@@ -187,3 +187,58 @@ def test_the_worker_uses_the_trusted_options(monkeypatch: pytest.MonkeyPatch) ->
     worker.main()
     assert built["serializer"] is JSONSerializer
     assert built["job_class"] is TrustedJob
+
+
+def test_registry_cleanup_does_not_run_a_failure_callback(tmp_path: Path) -> None:
+    """Worker maintenance fails abandoned jobs and runs their failure callbacks (rq's
+    StartedJobRegistry.cleanup): through our queue's registry, no callback runs."""
+    conn = fakeredis.FakeRedis()
+    marker = tmp_path / "cleanup-callback-ran"
+
+    def abandoned(queue: Queue) -> None:
+        job = Queue(queue.name, connection=conn, serializer=JSONSerializer).enqueue(
+            "os.getcwd", on_failure=Callback(mark), meta={"marker": str(marker)}
+        )
+        job.set_status(JobStatus.STARTED)
+        conn.zadd(queue.started_job_registry.key, {job.id: 1})  # expired long ago
+
+    ours = Queue("attack", connection=conn, **RQ_OPTIONS)  # type: ignore[arg-type]
+    abandoned(ours)
+    ours.started_job_registry.cleanup()
+    assert not marker.exists()
+
+    control = Queue("control", connection=conn, serializer=JSONSerializer)
+    abandoned(control)
+    control.started_job_registry.cleanup()
+    assert marker.exists()
+
+
+def test_a_scheduled_entry_is_refused_once_it_is_due(tmp_path: Path) -> None:
+    """The scheduler moves due entries onto the queue with RQ's base Job (rq.scheduler):
+    it runs nothing itself, and our worker refuses what it moved."""
+    from datetime import UTC, datetime, timedelta
+
+    from rq.scheduler import RQScheduler
+
+    conn = fakeredis.FakeRedis()
+    target = tmp_path / "made-by-a-scheduled-entry"
+    past = datetime.now(UTC) - timedelta(seconds=5)
+
+    def schedule(name: str) -> None:
+        queue = Queue(name, connection=conn, serializer=JSONSerializer)
+        queue.enqueue_at(past, "os.mkdir", str(target))
+        scheduler = RQScheduler([name], connection=conn, serializer=JSONSerializer)
+        # The registries it moves from, as acquire_locks() would set them (fakeredis has
+        # no Lua scripting for the lock itself).
+        scheduler.prepare_registries([name])
+        scheduler.enqueue_scheduled_jobs()
+        assert len(Queue(name, connection=conn, serializer=JSONSerializer)) == 1  # it moved
+
+    schedule("attack")
+    assert not target.exists()  # moving it ran nothing
+    run(conn, "attack", **RQ_OPTIONS)
+    assert not target.exists()
+
+    schedule("control")
+    run(conn, "control", serializer=JSONSerializer)
+    assert target.is_dir()

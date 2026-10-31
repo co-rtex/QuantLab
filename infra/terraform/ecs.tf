@@ -22,7 +22,7 @@ locals {
     ] : [],
   )
   python_secrets = concat(
-    [for k in ["jwt_secret", "metrics_token", "database_url"] : {
+    [for k in ["database_url"] : {
       name      = local.secrets[k].env
       valueFrom = aws_secretsmanager_secret.app[k].arn
     }],
@@ -36,6 +36,13 @@ locals {
       valueFrom = aws_secretsmanager_secret.app["market_data_key"].arn
     }] : [],
   )
+
+  # Only the API signs tokens and serves /metrics (#117): worker, reaper and migrate
+  # never receive these.
+  api_secrets = [for k in ["jwt_secret", "metrics_token"] : {
+    name      = local.secrets[k].env
+    valueFrom = aws_secretsmanager_secret.app[k].arn
+  }]
 
   data_volume_mount = { sourceVolume = "data", containerPath = "/data", readOnly = false }
   tmp_mount         = { sourceVolume = "tmp", containerPath = "/tmp", readOnly = false }
@@ -142,7 +149,7 @@ resource "aws_ecs_task_definition" "python" {
     readonlyRootFilesystem = true
     user                   = "10001"
     environment            = concat(local.python_env, each.value.env)
-    secrets                = local.python_secrets
+    secrets                = concat(local.python_secrets, each.key == "api" ? local.api_secrets : [])
     mountPoints            = [local.data_volume_mount, local.tmp_mount]
     portMappings           = each.value.port == null ? [] : [{ containerPort = each.value.port, protocol = "tcp" }]
     healthCheck = each.key == "api" ? {
