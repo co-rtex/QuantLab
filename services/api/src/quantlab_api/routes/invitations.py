@@ -7,10 +7,11 @@
 from __future__ import annotations
 
 import uuid
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 from fastapi import APIRouter, Request, Response
 from sqlalchemy import delete, func, or_, select, update
+from sqlalchemy.exc import InvalidRequestError
 from sqlalchemy.orm import Session
 
 from quantlab_api import invitations as inv_mod
@@ -38,6 +39,9 @@ from quantlab_api.security import DB, CurrentUser, audit, login_limiter, require
 
 owner_router = APIRouter(tags=["invitations"])
 invitee_router = APIRouter(prefix="/invitations", tags=["invitations"])
+
+# How long expired invitations are kept (answering 410) before they are purged.
+EXPIRED_KEPT_FOR = timedelta(days=30)
 
 NOT_FOUND = "This invitation is invalid, has expired, or is addressed to another account"
 
@@ -82,11 +86,13 @@ def create_invitation(
     if inviter is None or inviter.role != Role.owner:
         raise ApiError(403, "forbidden", "Requires owner role")
     # Expired invitations can never be answered; drop them rather than keep them forever.
+    # Only after a grace period, so a recently expired link still answers "expired" (410)
+    # rather than "not found" (#64 review).
     db.execute(
         delete(Invitation).where(
             Invitation.workspace_id == workspace_id,
             Invitation.status == "pending",
-            Invitation.expires_at <= now,
+            Invitation.expires_at <= now - EXPIRED_KEPT_FOR,
         )
     )
     db.execute(
@@ -287,7 +293,11 @@ def _respond(db: Session, i: Invitation, user: User, status: str) -> None:
     ).rowcount  # type: ignore[attr-defined]
     if not done:
         db.rollback()
-        db.refresh(i)
+        try:
+            db.refresh(i)
+        except InvalidRequestError:
+            # Purged meanwhile (it had long expired): answer as for an expired link, not 500.
+            raise ApiError(410, "invitation_expired", "This invitation has expired") from None
         _require_pending(i)
         raise ApiError(409, "invitation_used", "This invitation was already answered")
 

@@ -560,23 +560,55 @@ def test_accept_and_role_change_race_without_deadlock(client, no_invite_limits):
         assert _race(2, act) == [200, 200], trial
 
 
-def test_expired_pending_invitations_are_purged(client, team):
-    """#8: expired invitations can never be answered, so they do not accumulate."""
+def test_expired_pending_invitations_are_purged_after_a_grace_period(client, team):
+    """#8: expired invitations can never be answered, so they do not accumulate. They are
+    kept for 30 days first, so a recently expired link still answers 410, not 404."""
     from sqlalchemy import update
 
     from quantlab_api.db import SessionLocal
     from quantlab_api.invitations import Invitation
 
     _invite(client, team["owner"], team["ws"], "old@example.com")
+    recent = _token(client, team["owner"], team["ws"], "bob@example.com")
     _invite(client, team["owner"], team["ws"], "fresh@example.com")
     with SessionLocal() as db:
-        db.execute(
-            update(Invitation)
-            .where(Invitation.email == "old@example.com")
-            .values(expires_at=datetime.now(UTC) - timedelta(seconds=1))
-        )
+        for email, ago in (("old@example.com", 31), ("bob@example.com", 1)):
+            db.execute(
+                update(Invitation)
+                .where(Invitation.email == email)
+                .values(expires_at=datetime.now(UTC) - timedelta(days=ago))
+            )
         db.commit()
     assert _invite(client, team["owner"], team["ws"], "new@example.com").status_code == 201
     with SessionLocal() as db:
         emails = sorted(i.email for i in db.scalars(select(Invitation)))
-    assert emails == ["fresh@example.com", "new@example.com"]
+    assert emails == ["bob@example.com", "fresh@example.com", "new@example.com"]
+    r = client.post(ACCEPT, headers=team["bob"], json={"token": recent})
+    assert r.status_code == 410
+
+
+def test_an_invitation_purged_mid_accept_is_a_410_not_a_500(client, team, monkeypatch):
+    """#64 review: a purge between the pending check and the update made the refresh raise
+    ObjectDeletedError."""
+    from sqlalchemy import delete
+
+    from quantlab_api.db import SessionLocal
+    from quantlab_api.invitations import Invitation
+    from quantlab_api.routes import invitations as routes
+
+    token = _token(client, team["owner"], team["ws"], "bob@example.com")
+    real = routes._require_pending
+    calls: list[int] = []
+
+    def then_purged(i: Any) -> None:
+        real(i)
+        if not calls:
+            calls.append(1)
+            with SessionLocal() as db:  # the purge lands right after the check
+                db.execute(delete(Invitation))
+                db.commit()
+
+    monkeypatch.setattr(routes, "_require_pending", then_purged)
+    r = client.post(ACCEPT, headers=team["bob"], json={"token": token})
+    assert r.status_code == 410, r.text
+    assert r.json()["error"]["code"] == "invitation_expired"
