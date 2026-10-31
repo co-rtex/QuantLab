@@ -26,6 +26,8 @@ def _default_test_database() -> str:
 BASE_URL = os.environ.get("QUANTLAB_TEST_DATABASE_URL") or _default_test_database()
 # Arbitrary constant: sessions using the same database take this lock and run one at a time.
 SESSION_LOCK_KEY = 0x51AB_7E57
+# duplicate_database, or unique_violation on pg_database when two CREATEs race
+DATABASE_ALREADY_EXISTS = {"42P04", "23505"}
 os.environ["QUANTLAB_DATABASE_URL"] = BASE_URL
 os.environ["QUANTLAB_ENVIRONMENT"] = "test"
 os.environ.setdefault("QUANTLAB_DATA_DIR", tempfile.mkdtemp(prefix="quantlab-it-"))
@@ -35,6 +37,7 @@ os.environ["QUANTLAB_JOB_LEASE_SECONDS"] = "30"
 import fakeredis  # noqa: E402
 from sqlalchemy import create_engine, text  # noqa: E402
 from sqlalchemy.engine import make_url  # noqa: E402
+from sqlalchemy.exc import DBAPIError, OperationalError  # noqa: E402
 from sqlalchemy.pool import NullPool  # noqa: E402
 
 TABLES = [
@@ -65,9 +68,22 @@ def _ensure_database() -> None:
                 text("SELECT 1 FROM pg_database WHERE datname=:n"), {"n": url.database}
             )
             if not exists:
-                c.execute(text(f'CREATE DATABASE "{url.database}"'))
-    except Exception as exc:  # pragma: no cover
-        pytest.skip(f"PostgreSQL unavailable: {exc}")
+                try:
+                    c.execute(text(f'CREATE DATABASE "{url.database}"'))
+                except DBAPIError as exc:
+                    # Another session created it between our check and CREATE.
+                    if getattr(exc.orig, "sqlstate", None) not in DATABASE_ALREADY_EXISTS:
+                        raise
+    except OperationalError as exc:  # pragma: no cover
+        # A skipped suite reports success, which hid missing coverage more than once:
+        # fail unless skipping was asked for explicitly.
+        if os.environ.get("QUANTLAB_ALLOW_SKIP_INTEGRATION") == "1":
+            pytest.skip(f"PostgreSQL unavailable: {exc}")
+        pytest.fail(
+            f"PostgreSQL unavailable at {url.render_as_string(hide_password=True)}: run "
+            "`make up`, or set QUANTLAB_ALLOW_SKIP_INTEGRATION=1 to skip integration tests",
+            pytrace=False,
+        )
     finally:
         admin.dispose()
 
@@ -128,6 +144,23 @@ def register(client, email: str = "alice@example.com", password: str = "Correct-
     token = r.json()["access_token"]
     client.cookies.clear()
     return {"Authorization": f"Bearer {token}"}
+
+
+def accept_token(response) -> str:  # type: ignore[no-untyped-def]
+    """The token in a created invitation's accept link (shown once, to the owner)."""
+    return str(response.json()["accept_path"].split("#token=", 1)[1])
+
+
+def join_workspace(client, owner, ws, invitee, email, role="viewer"):  # type: ignore[no-untyped-def]
+    """Invite ``email`` and accept as ``invitee``: the only way to add a member (#5)."""
+    r = client.post(
+        f"/api/v1/workspaces/{ws}/invitations", headers=owner, json={"email": email, "role": role}
+    )
+    assert r.status_code == 201, r.text
+    token = accept_token(r)
+    r = client.post("/api/v1/auth/invitations/accept", headers=invitee, json={"token": token})
+    assert r.status_code == 200, r.text
+    return r.json()
 
 
 def workspace_id(client, headers) -> str:  # type: ignore[no-untyped-def]
