@@ -1,0 +1,123 @@
+name: E2E
+
+# The full stack (docker compose, profile "app") plus the Playwright suite (#17), as
+# `make e2e-serial` runs it locally: two API processes, one Playwright worker.
+#
+# Actions usage is controlled (user decision, 2026-10-31):
+#   * pull requests only, and only when code the suite exercises changes (paths below);
+#   * draft pull requests are skipped; marking one ready for review runs it;
+#   * a newer push to the same pull request cancels the run in progress;
+#   * one job, one Playwright worker, a hard timeout (the test step has its own, so a hang
+#     fails and still collects logs instead of being cancelled);
+#   * a test that only passes on retry fails the job (--fail-on-flaky-tests): flakiness is
+#     a finding, not noise (#16 was a real race);
+#   * artifacts only on failure, kept 7 days.
+# It can also be started by hand (workflow_dispatch). Nothing runs on a schedule.
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+    paths:
+      - "apps/web/**"
+      - "services/api/**"
+      - "packages/quantlab/**"
+      - "docker-compose.yml"
+      - "pyproject.toml"
+      - "uv.lock"
+      - ".python-version"
+      - ".dockerignore"
+      - ".github/workflows/e2e.yml"
+  workflow_dispatch:
+
+concurrency:
+  group: e2e-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  playwright:
+    if: github.event_name == 'workflow_dispatch' || github.event.pull_request.draft == false
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    env:
+      # As `make e2e-serial`: two API processes and one worker per spec file.
+      QUANTLAB_API_WORKERS: "2"
+      E2E_WORKERS: "1"
+      # The PR head, not the synthetic merge commit (github.sha on pull_request).
+      QUANTLAB_GIT_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+      PLAYWRIGHT_HTML_OPEN: never
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: apps/web/package-lock.json
+
+      - name: Install the test runner
+        working-directory: apps/web
+        run: npm ci
+
+      - name: Cache Playwright browsers
+        id: browsers
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ hashFiles('apps/web/package-lock.json') }}
+
+      - name: Install Chromium
+        working-directory: apps/web
+        env:
+          BROWSERS_CACHED: ${{ steps.browsers.outputs.cache-hit }}
+        run: |
+          if [ "$BROWSERS_CACHED" = "true" ]; then
+            npx playwright install-deps chromium
+          else
+            npx playwright install --with-deps chromium
+          fi
+
+      - name: Build and start the stack
+        run: docker compose --profile app up -d --build --wait --wait-timeout 600
+
+      - name: Wait for the web tier
+        # The web service has no healthcheck, so `--wait` returns before Next.js serves.
+        run: |
+          for _ in $(seq 1 60); do
+            if curl -fsS -o /dev/null http://127.0.0.1:3000/login; then exit 0; fi
+            sleep 2
+          done
+          echo "the web tier did not answer within 120 s" >&2
+          exit 1
+
+      - name: Playwright
+        working-directory: apps/web
+        timeout-minutes: 20
+        run: >-
+          npx playwright test --workers="$E2E_WORKERS" --reporter=list,github,html
+          --fail-on-flaky-tests
+
+      - name: Collect stack logs
+        if: failure()
+        run: |
+          docker compose --profile app ps -a > compose-ps.txt 2>&1 || true
+          docker compose --profile app logs --no-color --timestamps > compose-logs.txt 2>&1 || true
+
+      - name: Upload the report, traces and logs
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-failure-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            apps/web/playwright-report/
+            apps/web/test-results/
+            compose-ps.txt
+            compose-logs.txt
+          retention-days: 7
+          if-no-files-found: warn
+
+      - name: Stop the stack
+        if: always()
+        run: docker compose --profile app down -v
