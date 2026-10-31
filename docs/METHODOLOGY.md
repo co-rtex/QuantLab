@@ -139,12 +139,22 @@ the source of truth; tests in `tests/unit` pin each definition to a golden examp
     in an added `instrument_id` column. Rows after a delisting show the last ticker.
     Final holdings and P&L contributions are labelled as of the last session, never with
     a later ticker, and `[id]` disambiguates two instruments that show the same ticker.
+    `meta.universe` uses the same rule (two holders of a reused ticker in one run show
+    as `T [id]`).
   * ML `exclude` names tickers (the benchmark index by default). On keyed data every
     instrument that ever held an excluded ticker is excluded.
   * The catalog's `delisted` flag is per instrument: a renamed security's old ticker is
     not marked delisted.
-  * The catalog records each ticker's instrument and delisting facts, and
-    `InstrumentOut` exposes them as optional fields.
+  * The catalog has one row per (ticker, instrument) in a version (migration
+    `b5e1d7c3a924`, unique with `NULLS NOT DISTINCT`), so with ticker reuse the earlier
+    holder keeps its own row, dates, delisting facts, `delisted` flag and sector.
+    `InstrumentOut` exposes the instrument and delisting facts as optional fields.
+    Ticker-keyed metadata (name, sector) is applied only to the ticker's holder on its
+    last bar; metadata with an `instrument_id` column is matched by id. Downgrading the
+    migration refuses while any version has a reused ticker's rows.
+  * The survivorship check compares instrument ids (`universe_instrument_ids` against
+    the catalog's delisted ids) when both sides carry them, and tickers otherwise. It
+    never mixes the two.
 * **Reconciliation** (`quantlab.data.reconcile`) compares a dataset with an independent
   second source, after keying both by instrument. A secondary with its own symbol history
   is keyed by it (`id_map` translates its id space, one-to-one only) and the two

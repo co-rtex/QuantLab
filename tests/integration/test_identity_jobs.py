@@ -6,6 +6,7 @@ from __future__ import annotations
 import uuid
 
 import pandas as pd
+import pytest
 
 from quantlab.data.synthetic import SyntheticSpec, generate_market
 from tests.integration.conftest import join_workspace, register, run_pending_jobs, workspace_id
@@ -13,7 +14,7 @@ from tests.integration.conftest import join_workspace, register, run_pending_job
 SWITCH = pd.Timestamp("2021-07-01")
 
 
-def _add_version(dv_id: str, bars, actions, history=None, master=None) -> str:
+def _add_version(dv_id: str, bars, actions, history=None, master=None, instruments=None) -> str:
     """Register another version in the seeded dataset (as a dataset job would)."""
     from quantlab_api.db import SessionLocal
     from quantlab_api.models import Dataset, DatasetVersion
@@ -28,7 +29,7 @@ def _add_version(dv_id: str, bars, actions, history=None, master=None) -> str:
             bars,
             actions,
             {"provider": "synthetic", "is_synthetic": True, "note": "test fixture"},
-            None,
+            instruments,
             quality=gate_quality(bars, actions),
             symbol_history=history,
             master=master,
@@ -315,7 +316,36 @@ def test_a_malformed_stored_report_does_not_hide_the_valid_ones(client, seeded):
     names = [r["name"] for r in listed.json()]
     assert "reconciliation-good" in names and "reconciliation-bad" not in names
     bad = client.get(f"{base}/reconciliation-bad", headers=owner)
-    assert bad.status_code == 422 and bad.json()["error"]["code"] == "invalid_report"
+    assert bad.status_code == 500 and bad.json()["error"]["code"] == "invalid_report"
+
+
+def test_a_corrupt_report_file_is_skipped_in_the_list_and_500_on_get(client, seeded):
+    from quantlab.data.store import DatasetStore
+    from quantlab_api.config import get_settings
+    from quantlab_api.db import SessionLocal
+    from quantlab_api.models import Dataset, DatasetVersion
+
+    owner, ws, dv = seeded["headers"], seeded["ws"], seeded["dv"]
+    _store_report(dv, "reconciliation-ok")
+    with SessionLocal() as db:
+        row = db.get(DatasetVersion, uuid.UUID(dv))
+        ds = db.get(Dataset, row.dataset_id)
+    store = DatasetStore(get_settings().datasets_dir)
+    version = store.open(ds.slug, row.version_hash)
+    folder = store.write_report(version, "reconciliation-tmp", {}).parent
+    (folder / "reconciliation-tmp.json").unlink()
+    (folder / "reconciliation-corrupt.json").write_text('{"status": "pa')  # truncated
+    (folder / "reconciliation-list.json").write_text("[1, 2]")  # JSON, not an object
+    base = f"/api/v1/workspaces/{ws}/dataset-versions/{dv}/reconciliations"
+    listed = client.get(base, headers=owner)
+    assert listed.status_code == 200, listed.text
+    names = [r["name"] for r in listed.json()]
+    assert "reconciliation-ok" in names
+    assert not {"reconciliation-corrupt", "reconciliation-list"} & set(names)
+    for name in ("reconciliation-corrupt", "reconciliation-list"):
+        got = client.get(f"{base}/{name}", headers=owner)
+        assert got.status_code == 500 and got.json()["error"]["code"] == "invalid_report"
+    assert client.get(f"{base}/reconciliation-ok", headers=owner).status_code == 200
 
 
 def _ml_predictions(client, seeded, config: dict) -> pd.DataFrame:
@@ -352,3 +382,116 @@ def test_ml_excludes_the_benchmark_and_user_tickers_on_a_keyed_dataset(client, s
     custom = _ml_predictions(client, seeded, {"exclude": ["SYNIDX", "syn001"]})
     assert not {"QLSYN001", "QLSYNIDX"} & set(custom["instrument_id"])
     assert "SYN001" not in set(custom["symbol"])
+
+
+# ------------------------------------------------- #66 catalog per (ticker, instrument)
+def _reused_after_delisting():
+    """QLSYN002 delists on SWITCH; an unrelated company (QLNEW2) then lists as SYN002."""
+    m = generate_market(
+        SyntheticSpec(
+            n_assets=4,
+            start="2020-01-02",
+            end="2022-12-30",
+            seed=11,
+            delisting_fraction=0.0,
+            late_listing_fraction=0.0,
+        )
+    )
+    b, a = m.bars, m.actions
+    bars = b[~((b["symbol"] == "SYN002") & (b["date"] >= SWITCH))].copy()
+    acts = a[~((a["symbol"] == "SYN002") & (a["ex_date"] >= SWITCH))].copy()
+    newco = b[(b["symbol"] == "SYN003") & (b["date"] >= SWITCH)].copy()
+    newco["symbol"] = "SYN002"
+    for c in ("open", "high", "low", "close"):
+        newco[c] *= 2
+    bars = pd.concat([bars, newco], ignore_index=True)
+    h = m.symbol_history
+    start = h.loc[h["instrument_id"] == "QLSYN002", "valid_from"].iloc[0]
+    rows = h[h["instrument_id"] != "QLSYN002"].to_dict("records")
+    rows += [
+        {"instrument_id": "QLSYN002", "symbol": "SYN002", "valid_from": start, "valid_to": SWITCH},
+        {"instrument_id": "QLNEW2", "symbol": "SYN002", "valid_from": SWITCH, "valid_to": pd.NaT},
+    ]
+    master = pd.DataFrame(
+        {
+            "instrument_id": ["QLSYN002"],
+            "delisting_date": [SWITCH],
+            "delisting_reason": ["other"],
+            "delisting_return": [-0.2],
+        }
+    )
+    old_sector = m.instruments.set_index("instrument_id").loc["QLSYN002", "sector"]
+    instruments = pd.concat(
+        [
+            m.instruments,
+            pd.DataFrame(
+                [
+                    {
+                        "instrument_id": "QLNEW2",
+                        "symbol": "SYN002",
+                        "name": "Synthetic NewCo",
+                        "sector": "Synthetic NewCo Sector",
+                        "asset_class": "equity",
+                        "is_synthetic": True,
+                    }
+                ]
+            ),
+        ],
+        ignore_index=True,
+    )
+    return bars, acts, pd.DataFrame(rows), master, instruments, old_sector
+
+
+def test_a_reused_tickers_earlier_holder_keeps_its_catalog_row(client, seeded):
+    bars, acts, history, master, instruments, old_sector = _reused_after_delisting()
+    dv = _add_version(seeded["dv"], bars, acts, history, master, instruments)
+    inst = client.get(
+        f"/api/v1/dataset-versions/{dv}/instruments?limit=50", headers=seeded["headers"]
+    ).json()
+    rows = {i["instrument_id"]: i for i in inst["items"] if i["symbol"] == "SYN002"}
+    assert set(rows) == {"QLSYN002", "QLNEW2"}
+    old, new = rows["QLSYN002"], rows["QLNEW2"]
+    assert old["delisted"] is True and new["delisted"] is False
+    assert old["delisting_date"] == str(SWITCH.date()) and old["delisting_return"] == -0.2
+    assert old["sector"] == old_sector and new["sector"] == "Synthetic NewCo Sector"
+    assert old["last_date"] < str(SWITCH.date()) <= new["first_date"]
+    assert new["delisting_date"] is None
+
+
+def test_survivorship_sees_a_delisted_holder_of_a_reused_ticker(client, seeded):
+    """With no universe given, both holders of SYN002 trade and are labelled
+    'SYN002 [id]'. Matching labels against delisted tickers would miss the delisting; the
+    check compares ids."""
+    bars, acts, history, master, instruments, _ = _reused_after_delisting()
+    dv = _add_version(seeded["dv"], bars, acts, history, master, instruments)
+    h = seeded["headers"]
+    exp = _experiment(client, seeded, dv, {"start": "2020-03-02"})
+    assert run_pending_jobs() == ["completed"]
+    exp_id = exp["experiment"]["id"]
+    meta = client.get(f"/api/v1/experiments/{exp_id}/analysis", headers=h).json()["meta"]
+    assert {"SYN002 [QLSYN002]", "SYN002 [QLNEW2]"} <= set(meta["universe"])
+    assert {"QLSYN002", "QLNEW2"} <= set(meta["universe_instrument_ids"])
+    report = client.get(f"/api/v1/experiments/{exp_id}/integrity", headers=h).json()
+    check = next(c for c in report["checks"] if c["key"] == "universe")
+    assert check["status"] == "verified", check
+    assert check["evidence"]["delisted_included"] == 1
+
+
+def test_m3_downgrade_refuses_to_drop_a_reused_tickers_rows(client, seeded):
+    from alembic import command
+    from alembic.config import Config
+    from alembic.runtime.migration import MigrationContext
+    from sqlalchemy import create_engine
+
+    from tests.integration.conftest import BASE_URL
+
+    bars, acts, history, master, instruments, _ = _reused_after_delisting()
+    _add_version(seeded["dv"], bars, acts, history, master, instruments)
+    cfg = Config("services/api/alembic.ini")
+    cfg.set_main_option("sqlalchemy.url", BASE_URL)
+    with pytest.raises(RuntimeError, match="ticker reuse"):
+        command.downgrade(cfg, "9a4c6e2f1b37")
+    eng = create_engine(BASE_URL)
+    with eng.connect() as conn:
+        assert MigrationContext.configure(conn).get_current_revision() == "b5e1d7c3a924"
+    eng.dispose()
