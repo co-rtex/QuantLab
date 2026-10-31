@@ -110,8 +110,10 @@ and ten failed logins would lock everyone out. Step 3 checks this.
    * the API is unreachable from the edge network;
    * only the edge publishes a port.
 3. From a machine outside the host, send the probe in the script's header comment, then
-   run `infra/edge/verify.sh --check-remote-probe MARKER` on the host. It fails if the API
-   recorded a Docker address instead of the remote machine's.
+   run `infra/edge/verify.sh --check-remote-probe MARKER REMOTE_IP` on the host, where
+   REMOTE_IP is that machine's address as the host should see it. It passes only on an
+   exact match; any other recorded address fails. Docker Desktop and rootless Docker can
+   record addresses outside Docker's subnets.
 4. Only then bind the edge publicly: `QUANTLAB_EDGE_BIND=0.0.0.0 QUANTLAB_EDGE_PORT=443`.
 
 Behind a CDN or load balancer, the hop that faces the internet must overwrite

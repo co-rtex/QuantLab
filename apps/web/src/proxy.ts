@@ -20,5 +20,9 @@ export function proxy(request: NextRequest) {
 }
 
 export const config = {
-  matcher: ["/((?!api/|_next/|favicon.ico|.*\\.(?:png|svg|ico|txt)$).*)"],
+  // Only framework paths (_next/ is never an app route) and real static files are skipped.
+  // A pattern on file extensions also skipped dynamic routes ending in ".png" and the like,
+  // and with them the edge check (#39). There is no public/ directory; add its files here
+  // explicitly if one appears.
+  matcher: ["/((?!api/|_next/|favicon\\.ico$).*)"],
 };

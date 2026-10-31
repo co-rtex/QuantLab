@@ -9,6 +9,8 @@
 # under `servers { trusted_proxies static ... }` and switch {remote_host} to {client_ip}.
 {
 	admin off
+	# Never autosave the running config: it contains the edge secret (#39).
+	persist_config off
 	servers {
 		# Bounds on slow clients: headers within 10 s, a whole body (at most 110 MB, below)
 		# within 5 min. Uvicorn has no request-body timeout of its own.
