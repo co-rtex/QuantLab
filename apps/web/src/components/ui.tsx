@@ -179,6 +179,11 @@ export function Skeleton({ h = "h-40" }: { h?: string }) {
 
 export function JobProgress({ job, onCancel }: { job: Job; onCancel?: () => void }) {
   const active = job.status === "queued" || job.status === "running";
+  // Asked to stop but still running until the worker's next checkpoint: say so, and do not
+  // send (and audit) the request again on every click (#107).
+  const cancelling = active && !!job.cancel_requested;
+  const indeterminate = job.status === "queued";
+  const percent = Math.round(job.progress * 100);
   return (
     <div className="space-y-2" aria-live="polite">
       <div className="flex items-center justify-between gap-3 text-sm">
@@ -187,8 +192,14 @@ export function JobProgress({ job, onCancel }: { job: Job; onCancel?: () => void
           <span className="text-ink-2">{job.message || DASH}</span>
         </div>
         {active && onCancel && (
-          <button className="btn btn-quiet py-1 text-xs" onClick={onCancel}>
-            Cancel run
+          <button
+            className="btn btn-quiet py-1 text-xs"
+            aria-busy={cancelling}
+            // Not disabled: that would drop focus to the page.
+            aria-disabled={cancelling}
+            onClick={cancelling ? undefined : onCancel}
+          >
+            {cancelling ? "Cancelling…" : "Cancel run"}
           </button>
         )}
       </div>
@@ -198,10 +209,13 @@ export function JobProgress({ job, onCancel }: { job: Job; onCancel?: () => void
         aria-label="Job progress"
         aria-valuemin={0}
         aria-valuemax={100}
-        aria-valuenow={Math.round(job.progress * 100)}
+        // A queued job has no progress yet, not 0% of it.
+        aria-valuenow={indeterminate ? undefined : percent}
+        aria-valuetext={indeterminate ? "Queued" : `${percent}%${job.message ? `, ${job.message}` : ""}`}
       >
         <div className={`h-full transition-[width] duration-500 ${job.status === "failed" || job.status === "timed_out" ? "bg-loss" : "bg-cobalt"}`} style={{ width: `${Math.max(2, job.progress * 100)}%` }} />
       </div>
+      {cancelling && <p className="text-xs text-ink-2">Cancellation requested. The job stops at its next checkpoint.</p>}
       {job.error && (
         <p className="text-xs text-loss">
           {job.error.type}: {job.error.message}

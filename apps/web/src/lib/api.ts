@@ -102,6 +102,8 @@ export interface Job {
   attempts: number;
   max_attempts: number;
   error: { type: string; message: string } | null;
+  // Set when someone asked to cancel; the worker stops at its next checkpoint.
+  cancel_requested?: boolean;
   created_at: string;
   started_at: string | null;
   finished_at: string | null;

@@ -7,7 +7,7 @@ import { api, ApiError, cancelJob, newIdempotencyKey, type DatasetVersion, type 
 import { dateTime, num, pct, shortHash } from "@/lib/format";
 import { useSynthetic } from "@/lib/synthetic";
 import { useApi } from "@/lib/useApi";
-import { useWorkspace } from "@/lib/workspace";
+import { useCanEdit, useWorkspace } from "@/lib/workspace";
 
 interface ModelRow {
   model: string;
@@ -50,6 +50,7 @@ const MODEL_LABEL: Record<string, string> = {
 function RunDetail({ id }: { id: string }) {
   const run = useApi<MLRun>(`/ml-runs/${id}`, { poll: (r) => (r && (r.status === "queued" || r.status === "running") ? 1500 : false) });
   const [cancelErr, setCancelErr] = useState<ApiError>();
+  const canEdit = useCanEdit();
   if (!run.data) return <Pending q={run} what="this ML run" />;
   const r = run.data;
   if (!r.result)
@@ -60,11 +61,15 @@ function RunDetail({ id }: { id: string }) {
         {r.job ? (
           <JobProgress
             job={r.job}
-            onCancel={async () => {
-              setCancelErr(undefined);
-              await cancelJob(r.job!.id).catch((e) => setCancelErr(e as ApiError));
-              run.reload();
-            }}
+            onCancel={
+              canEdit
+                ? async () => {
+                    setCancelErr(undefined);
+                    await cancelJob(r.job!.id).catch((e) => setCancelErr(e as ApiError));
+                    run.reload();
+                  }
+                : undefined
+            }
           />
         ) : (
           <StatusPill status={r.status} />

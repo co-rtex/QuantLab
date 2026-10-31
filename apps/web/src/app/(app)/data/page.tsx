@@ -7,10 +7,11 @@ import { ErrorNote, JobProgress, Panel, QueryError, Skeleton, StatusPill, Synthe
 import { api, ApiError, cancelJob, newIdempotencyKey, type Dataset, type DatasetVersion, type Job } from "@/lib/api";
 import { compact, dateTime, shortHash } from "@/lib/format";
 import { useApi } from "@/lib/useApi";
-import { useWorkspace } from "@/lib/workspace";
+import { useCanEdit, useWorkspace } from "@/lib/workspace";
 
 export default function DataPage() {
   const { workspace } = useWorkspace();
+  const canEdit = useCanEdit();
   const ws = workspace?.id;
   const [jobId, setJobId] = useState<string | null>(null);
   const job = useApi<Job>(jobId ? `/jobs/${jobId}` : null, {
@@ -165,7 +166,7 @@ export default function DataPage() {
             <QueryError q={job} what="the ingestion job's status" />
             {job.data && (
               <div className="pt-2">
-                <JobProgress job={job.data} onCancel={cancel} />
+                <JobProgress job={job.data} onCancel={canEdit ? cancel : undefined} />
               </div>
             )}
           </form>

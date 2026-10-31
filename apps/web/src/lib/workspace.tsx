@@ -74,3 +74,11 @@ export function useWorkspace(): Ctx {
   if (!ctx) throw new Error("useWorkspace must be used inside WorkspaceProvider");
   return ctx;
 }
+
+/** Whether the current user may change things in the workspace (editor or owner), as the
+ * API requires for running and cancelling jobs: viewers are not offered what they would
+ * be refused (#107). */
+export function useCanEdit(): boolean {
+  const role = useWorkspace().workspace?.role;
+  return role === "editor" || role === "owner";
+}
