@@ -42,7 +42,7 @@ from urllib.parse import quote
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from quantlab.data.store import DatasetStore
+from quantlab.data.store import REPORTS_ROOT, DatasetStore
 from quantlab_api.config import get_settings
 from quantlab_api.db import SessionLocal
 from quantlab_api.models import Dataset, DatasetVersion, Experiment, Job, JobStatus, MLRun
@@ -132,6 +132,7 @@ class Garbage:
     """Files a workspace's rows referenced, gathered before its rows are deleted."""
 
     versions: set[tuple[str, str]] = field(default_factory=set)
+    report_owners: set[str] = field(default_factory=set)  # version row ids (#96)
     experiments: set[str] = field(default_factory=set)
     ml_runs: set[str] = field(default_factory=set)
     uploads: set[str] = field(default_factory=set)
@@ -140,14 +141,13 @@ class Garbage:
 def workspace_garbage(db: Session, workspace_id: uuid.UUID) -> Garbage:
     """What the workspace's rows point at on disk (call in the deleting transaction)."""
     g = Garbage()
-    g.versions = {
-        (slug, h)
-        for slug, h in db.execute(
-            select(Dataset.slug, DatasetVersion.version_hash)
-            .join(DatasetVersion, DatasetVersion.dataset_id == Dataset.id)
-            .where(Dataset.workspace_id == workspace_id)
-        )
-    }
+    held = db.execute(
+        select(Dataset.slug, DatasetVersion.version_hash, DatasetVersion.id)
+        .join(DatasetVersion, DatasetVersion.dataset_id == Dataset.id)
+        .where(Dataset.workspace_id == workspace_id)
+    ).all()
+    g.versions = {(slug, h) for slug, h, _ in held}
+    g.report_owners = {str(row_id) for _, _, row_id in held}
     g.experiments = {
         str(i)
         for i in db.scalars(select(Experiment.id).where(Experiment.workspace_id == workspace_id))
@@ -191,7 +191,14 @@ def collect(g: Garbage) -> dict[str, int]:
     Never raises: each item is attempted on its own, failures are logged and left for
     :func:`sweep_orphans`, so a disk problem cannot turn a committed delete into a 500.
     """
-    stats = {"versions": 0, "experiments": 0, "ml_runs": 0, "uploads": 0, "failed": 0}
+    stats = {
+        "versions": 0,
+        "reports": 0,
+        "experiments": 0,
+        "ml_runs": 0,
+        "uploads": 0,
+        "failed": 0,
+    }
 
     def attempt(kind: str, item: str, fn: Callable[[], bool]) -> None:
         try:
@@ -217,6 +224,9 @@ def collect(g: Garbage) -> dict[str, int]:
 
     for slug, version in sorted(g.versions):
         attempt("versions", f"{slug}/{version[:12]}", unreferenced(slug, version))
+    reports = settings.datasets_dir / REPORTS_ROOT
+    for owner in sorted(g.report_owners):  # this workspace's alone: no reference check
+        attempt("reports", owner, move(reports / owner, f"datasets/{REPORTS_ROOT}/{owner}"))
     for eid in sorted(g.experiments):
         attempt("experiments", eid, move(art / "experiments" / eid, f"experiments/{eid}"))
         for staged in _glob(art / "staging", f"{eid}-*"):
@@ -325,7 +335,13 @@ def sweep_orphans(
     ``min_age_seconds`` overrides the grace period.
     """
     settings = get_settings()
-    stats: dict[str, Any] = {"versions": 0, "temporaries": 0, "experiments": 0, "ml_runs": 0}
+    stats: dict[str, Any] = {
+        "versions": 0,
+        "reports": 0,
+        "temporaries": 0,
+        "experiments": 0,
+        "ml_runs": 0,
+    }
     enabled = settings.storage_sweep and (
         not throttle or _due(settings.storage_sweep_interval_seconds)
     )
@@ -344,6 +360,7 @@ def sweep_orphans(
                 .distinct()
             )
         }
+        version_rows = {str(i) for i in db.scalars(select(DatasetVersion.id))}
         experiments = {str(i) for i in db.scalars(select(Experiment.id))}
         ml_runs = {str(i) for i in db.scalars(select(MLRun.id))}
     cutoff = time.time() - grace
@@ -370,6 +387,12 @@ def sweep_orphans(
                     _warn("storage_sweep_failed", f"versions:{slug}/{version[:12]}", exc)
         for tmp in store.stale_temporaries(grace):
             stats["temporaries"] += _quarantine(tmp, bin_(), f"datasets-tmp/{tmp.name}")
+    # Report folders are per version row (#96); one whose row is gone is an orphan.
+    owners = _children(settings.datasets_dir / REPORTS_ROOT)
+    stale = [d for d in owners if _orphan(d.name, version_rows) and _old(d, cutoff)]
+    if force or not _refuse("reports", len(owners), len(version_rows), len(stale), frac):
+        for d in stale:
+            stats["reports"] += _quarantine(d, bin_(), f"datasets/{REPORTS_ROOT}/{d.name}")
     art = settings.artifacts_dir
     kinds = (("experiments", "experiments", experiments), ("ml_runs", "ml", ml_runs))
     for kind, sub, rows in kinds:

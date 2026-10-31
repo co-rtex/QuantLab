@@ -428,3 +428,19 @@ def test_a_failed_quarantine_is_logged_not_raised(client, seeded, monkeypatch):
     monkeypatch.setattr(storage.os, "rename", cross_device)
     assert storage._quarantine(src, storage._trash_dir(), "y") is False
     assert src.exists()
+
+
+def test_the_sweep_collects_report_folders_whose_version_row_is_gone(client, seeded):
+    from quantlab.data.store import REPORTS_ROOT
+    from quantlab_api import storage
+
+    reports = _settings().datasets_dir / REPORTS_ROOT
+    live = reports / seeded["dv"] / ("0" * 64)
+    gone = reports / str(uuid.uuid4()) / ("0" * 64)
+    for d in (live, gone):
+        d.mkdir(parents=True)
+        (d / "reconciliation-x.json").write_text("{}")
+    _old_everything(_settings().data_dir)
+    swept = storage.sweep_orphans(throttle=False)
+    assert swept["reports"] == 1
+    assert live.exists() and not gone.exists()

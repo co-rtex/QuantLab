@@ -1,7 +1,9 @@
 """Read-only access to stored reconciliation reports (#12).
 
 Reports are produced by ``quantlab.data.reconcile`` and stored beside the immutable
-dataset version (``DatasetStore.write_report``). These routes only serve what is stored;
+dataset version, keyed by the version *row* (``DatasetStore.write_report(...,
+owner=str(row.id))``), so they are private to its workspace even though identical
+versions share one directory (#96). These routes only serve what is stored;
 nothing is computed on request. Access follows the workspace: viewers and above, and a
 dataset version outside the workspace in the path is reported as not found, exactly like
 an id that does not exist.
@@ -46,7 +48,9 @@ def _reports(
         dv = store.open(ds.slug, dv_row.version_hash)
     except FileNotFoundError as exc:
         raise ApiError(404, "not_found", "Dataset version files not found") from exc
-    found = store.load_reports(dv, unreadable=unreadable)
+    # Keyed by this workspace's version row, never by the shared content (#96): another
+    # workspace holding the same slug and hash cannot see these reports.
+    found = store.load_reports(dv, owner=str(dv_row.id), unreadable=unreadable)
     unreadable[:] = [k for k in unreadable if k.startswith(PREFIX)]
     for name in unreadable:
         log.warning("reconciliation_report_unreadable", report=name, version=str(version_id))

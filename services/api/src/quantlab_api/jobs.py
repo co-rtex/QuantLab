@@ -790,7 +790,8 @@ def reap(redeliver_after_seconds: int = 120) -> dict[str, int]:
 
     swept = sweep_orphans()  # throttled inside: at most once per storage_sweep_interval
     stats["orphans_swept"] = sum(
-        int(swept.get(k, 0)) for k in ("versions", "temporaries", "experiments", "ml_runs")
+        int(swept.get(k, 0))
+        for k in ("versions", "reports", "temporaries", "experiments", "ml_runs")
     )
     stats["trash_purged"] = purge_trash_if_due()  # hourly, even with the sweep switched off
     if any(stats.values()):
