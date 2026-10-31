@@ -325,21 +325,56 @@ def key_by_instrument(
 
 
 def resolve_universe(
-    history: pd.DataFrame, tickers: list[str], as_of: pd.Timestamp | str
+    history: pd.DataFrame,
+    tickers: list[str],
+    as_of: pd.Timestamp | str,
+    until: pd.Timestamp | str | None = None,
 ) -> tuple[list[str], list[str]]:
-    """Instrument ids of ``tickers`` as of ``as_of`` (the backtest start), and the tickers
-    that name no instrument then.
+    """Instrument ids of ``tickers`` for a backtest starting ``as_of``, and the tickers that
+    name no instrument in the window.
 
-    Resolving at the start, never "today", keeps the universe point in time: a security
-    renamed later is still in it under its later ticker, and a ticker reused later by
-    another issuer does not pull that issuer in.
+    A ticker means the instrument it names **on the start date**, never "today": a
+    security renamed later stays in under its later ticker, and an issuer that takes over
+    the ticker later is not pulled in. A ticker that has never named anything by the
+    start (a later listing) means the first instrument to take it within the window (up to
+    ``until``), which then simply joins when it lists, as in an unkeyed dataset. A ticker
+    that named another security before the start but nothing on it (retired, or in a gap
+    before a reuse) is unresolved: its later holder would be a reuse.
     """
     when = pd.Timestamp(as_of)
     syms = pd.Series([str(t).upper().strip() for t in tickers])
     ids = resolve_ids(history, syms, pd.Series([when] * len(syms)))
+    for k in np.flatnonzero(ids.isna().to_numpy()):
+        uses = history[history["symbol"] == syms.iloc[k]]
+        if (uses["valid_from"] <= when).any():
+            continue  # it named another security before the start: a later holder is a reuse
+        later = uses[uses["valid_from"] > when]
+        if until is not None:
+            later = later[later["valid_from"] <= pd.Timestamp(until)]
+        if len(later):
+            ids.iloc[k] = later.sort_values("valid_from")["instrument_id"].iloc[0]
     resolved = sorted({str(i) for i in ids.dropna()})
     unresolved = sorted(syms[ids.isna().to_numpy()].tolist())
     return resolved, unresolved
+
+
+def label_ids(history: pd.DataFrame, ids: list[str], when: pd.Timestamp | str) -> dict[str, str]:
+    """A display ticker for each instrument as of ``when``, never a later one if avoidable.
+
+    The ticker valid on ``when``; else the last one it had before (it has delisted); else
+    its first ticker (it lists later); else the id itself.
+    """
+    if not ids:
+        return {}
+    keys = pd.Series([str(i) for i in ids])
+    dates = pd.Series([pd.Timestamp(when)] * len(keys))
+    valid = symbols_as_of(history, keys, dates)
+    last = _resolve(history, "instrument_id", "symbol", keys, dates, open_only=False)
+    first = history.sort_values("valid_from").groupby("instrument_id")["symbol"].first()
+    out = {}
+    for k, v, lt in zip(keys, valid, last, strict=True):
+        out[k] = str(v if v is not None else lt if lt is not None else first.get(k, k))
+    return out
 
 
 def tickers_of(history: pd.DataFrame, ids: list[str]) -> list[str]:

@@ -115,15 +115,29 @@ the source of truth; tests in `tests/unit` pin each definition to a golden examp
   * Backtest, research and ML jobs key data by instrument and pass the master to the
     engine and to ML.
   * **Universe rule:** the tickers in an experiment's `universe` and `benchmark` are
-    resolved to instruments **as of the backtest start** (the first date of the data when
-    no start is set), never as of today. A security renamed later stays in under its later
-    ticker; a ticker reused later by another issuer does not pull that issuer in; and a
-    ticker that names nothing at the start fails the job instead of being guessed. All
-    tickers each resolved instrument ever had are loaded, so its history is complete.
+    resolved to instruments **as of the backtest start**, never as of today. A start
+    before the data (a holiday, say) means the first session, and with no start set the
+    first session is used too.
+    * A security renamed later stays in under its later ticker.
+    * A ticker reused later by another issuer does not pull that issuer in.
+    * A ticker that has never named anything by the start (a later listing) means the
+      first instrument to take it within the backtest window. It joins when it lists,
+      as in an unkeyed dataset.
+    * A ticker that named another security before the start but names nothing on it
+      (retired, or in a gap before a reuse) fails the job instead of being guessed.
+
+    All tickers each resolved instrument ever had are loaded, so its history is
+    complete. The stored `meta.universe` and `meta.benchmark` are labelled with the
+    tickers as named at the start, with `universe_instrument_ids` and
+    `benchmark_instrument_id` beside them.
   * Results stay keyed by instrument for simulation, fingerprints and stored metrics.
     The trades, positions, target-weight, rejection and ML-prediction frames written for
     the API show the ticker valid on each row's date in `symbol`, with the permanent id
     in an added `instrument_id` column. Rows after a delisting show the last ticker.
+    Final holdings and P&L contributions are labelled as of the last session, never with
+    a later ticker, and `[id]` disambiguates two instruments that show the same ticker.
+  * The catalog's `delisted` flag is per instrument: a renamed security's old ticker is
+    not marked delisted.
   * The catalog records each ticker's instrument and delisting facts, and
     `InstrumentOut` exposes them as optional fields.
 * **Reconciliation** (`quantlab.data.reconcile`) compares a dataset with an independent

@@ -403,3 +403,24 @@ def test_display_frame_shows_the_ticker_valid_on_each_date():
     assert out["symbol"].iloc[2] == "XYZ"
     legacy = display_frame(frame.assign(symbol=["AAA"] * 4), legacy_history(["AAA"]))
     assert (legacy["symbol"] == legacy["instrument_id"]).all()
+
+
+def test_label_ids_never_shows_a_later_ticker_when_avoidable():
+    from quantlab.data.identity import label_ids
+
+    h = _rename_and_reuse_history()
+    # Before the rename I1 is OLD; I2 (retired 2021-03-01) shows its last ticker; I3 lists
+    # later, so its first ticker is the only label it has.
+    assert label_ids(h, ["I1", "I2", "I3"], "2021-05-03") == {"I1": "OLD", "I2": "XYZ", "I3": "XYZ"}
+    assert label_ids(h, ["I1"], "2022-01-03") == {"I1": "NEW"}
+    assert label_ids(h, ["UNKNOWN"], "2022-01-03") == {"UNKNOWN": "UNKNOWN"}
+
+
+def test_universe_takes_the_first_instrument_to_list_a_ticker_within_the_window():
+    from quantlab.data.identity import resolve_universe
+
+    h = _rename_and_reuse_history()
+    # NEW is not valid at a 2020 start; the first instrument to take it in the window is I1.
+    assert resolve_universe(h, ["NEW"], "2020-06-01", "2022-12-30") == (["I1"], [])
+    # ...but not if the window ends before anyone takes it.
+    assert resolve_universe(h, ["NEW"], "2020-06-01", "2021-01-04") == ([], ["NEW"])

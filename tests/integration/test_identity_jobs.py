@@ -129,7 +129,11 @@ def _renamed_and_reused():
     newco["symbol"] = "SYN004"
     for c in ("open", "high", "low", "close"):
         newco[c] *= 2
-    bars = pd.concat([bars, newco], ignore_index=True)
+    late = m.bars[(m.bars["symbol"] == "SYN006") & (m.bars["date"] >= SWITCH)].copy()
+    late["symbol"] = "LATE1"  # a new listing on SWITCH
+    for c in ("open", "high", "low", "close"):
+        late[c] *= 3
+    bars = pd.concat([bars, newco, late], ignore_index=True)
     h = m.symbol_history
     rows = h[~h["instrument_id"].isin(["QLSYN003", "QLSYN004"])].to_dict("records")
     for iid, old, new in (("QLSYN003", "SYN003", "NEW03"), ("QLSYN004", "SYN004", "SYN004B")):
@@ -140,6 +144,9 @@ def _renamed_and_reused():
         ]
     rows.append(
         {"instrument_id": "QLNEWCO", "symbol": "SYN004", "valid_from": SWITCH, "valid_to": pd.NaT}
+    )
+    rows.append(
+        {"instrument_id": "QLLATE", "symbol": "LATE1", "valid_from": SWITCH, "valid_to": pd.NaT}
     )
     return bars, acts, pd.DataFrame(rows)
 
@@ -160,11 +167,34 @@ def test_universe_tickers_resolve_as_of_the_backtest_start(client, seeded):
     late = _experiment(
         client, seeded, dv, {"start": "2022-01-03", "universe": ["SYN004"], "rebalance": "monthly"}
     )
-    # A ticker that does not exist yet at the start is rejected, not guessed.
+    # A ticker that names nothing anywhere in the window is rejected, not guessed: SYN003
+    # was retired at the rename, before this start.
     wrong = _experiment(
-        client, seeded, dv, {"start": "2020-06-01", "universe": ["NEW03"], "rebalance": "monthly"}
+        client, seeded, dv, {"start": "2022-01-03", "universe": ["SYN003"], "rebalance": "monthly"}
     )
-    assert sorted(run_pending_jobs()) == ["completed", "completed", "failed"]
+    # A later listing joins when it lists (as in an unkeyed dataset); a start before the
+    # data (a holiday here) means the first session, benchmark included.
+    joined = _experiment(
+        client,
+        seeded,
+        dv,
+        {
+            "start": "2020-01-01",
+            "universe": ["SYN001", "LATE1"],
+            "benchmark": "SYNIDX",
+            "rebalance": "monthly",
+        },
+    )
+    assert sorted(run_pending_jobs()) == ["completed", "completed", "completed", "failed"]
+    t_joined = _trades(client, seeded, joined["experiment"]["id"])
+    late_buys = [t for t in t_joined if t["instrument_id"] == "QLLATE"]
+    assert late_buys and min(t["date"] for t in late_buys) > "2021-07-01"
+    analysis = client.get(
+        f"/api/v1/experiments/{joined['experiment']['id']}/analysis", headers=h
+    ).json()
+    assert analysis["meta"]["universe"] == ["LATE1", "SYN001"]  # as the user named them
+    assert analysis["meta"]["universe_instrument_ids"] == ["QLLATE", "QLSYN001"]
+    assert analysis["meta"]["benchmark"] == "SYNIDX"
     t_early = _trades(client, seeded, early["experiment"]["id"])
     assert {t["instrument_id"] for t in t_early} == {"QLSYN001", "QLSYN003", "QLSYN004"}
     assert not [t for t in t_early if (t.get("note") or "").startswith("delisting")]
@@ -180,7 +210,7 @@ def test_universe_tickers_resolve_as_of_the_backtest_start(client, seeded):
     t_late = _trades(client, seeded, late["experiment"]["id"])
     assert {t["instrument_id"] for t in t_late} == {"QLNEWCO"}
     job = client.get(f"/api/v1/experiments/{wrong['experiment']['id']}/job", headers=h).json()
-    assert "not listed on 2020-06-01" in job["error"]["message"]
+    assert "not listed between 2022-01-03" in job["error"]["message"]
 
 
 # ------------------------------------------------- reconciliation reports (read-only)
@@ -235,3 +265,57 @@ def test_reconciliation_reports_are_read_only_and_workspace_scoped(client, seede
         assert client.get(f"{base}/{name}", headers=owner).status_code == 404
     for method in (client.post, client.put, client.delete):
         assert method(f"{base}/reconciliation-csv", headers=owner).status_code == 405
+
+
+# ------------------------------------------------------- review of #62 regressions
+def test_integrity_report_sees_delisted_names_in_a_keyed_universe(client, seeded):
+    """The stored universe is labelled with tickers again, so the survivorship check sees
+    the delisted name it includes (it reported a false warning on every keyed run)."""
+    h = seeded["headers"]
+    inst = client.get(f"/api/v1/dataset-versions/{seeded['dv']}/instruments", headers=h).json()
+    gone = sorted(i["symbol"] for i in inst["items"] if i["delisted"])
+    assert gone, "the seeded synthetic market has a delisting"
+    exp = _experiment(
+        client,
+        seeded,
+        seeded["dv"],
+        {"start": "2020-03-02", "universe": ["SYN001", gone[0]], "benchmark": "SYNIDX"},
+    )
+    assert run_pending_jobs() == ["completed"]
+    report = client.get(f"/api/v1/experiments/{exp['experiment']['id']}/integrity", headers=h)
+    check = next(c for c in report.json()["checks"] if c["key"] == "universe")
+    assert check["status"] != "warning", check
+
+
+def test_catalog_marks_instruments_not_tickers_as_delisted(client, seeded):
+    bars, acts, history = _renamed_and_reused()
+    dv = _add_version(seeded["dv"], bars, acts, history=history)
+    inst = client.get(
+        f"/api/v1/dataset-versions/{dv}/instruments?limit=50", headers=seeded["headers"]
+    ).json()
+    by = {i["symbol"]: i for i in inst["items"]}
+    # SYN003's last bar is the day before the rename, but the security still trades.
+    assert by["SYN003"]["instrument_id"] == "QLSYN003" and by["SYN003"]["delisted"] is False
+    assert by["NEW03"]["instrument_id"] == "QLSYN003"
+
+
+def test_a_malformed_stored_report_does_not_hide_the_valid_ones(client, seeded):
+    from quantlab.data.store import DatasetStore
+    from quantlab_api.config import get_settings
+    from quantlab_api.db import SessionLocal
+    from quantlab_api.models import Dataset, DatasetVersion
+
+    owner, ws, dv = seeded["headers"], seeded["ws"], seeded["dv"]
+    _store_report(dv, "reconciliation-good")
+    with SessionLocal() as db:
+        row = db.get(DatasetVersion, uuid.UUID(dv))
+        ds = db.get(Dataset, row.dataset_id)
+    store = DatasetStore(get_settings().datasets_dir)
+    store.write_report(store.open(ds.slug, row.version_hash), "reconciliation-bad", {"status": "x"})
+    base = f"/api/v1/workspaces/{ws}/dataset-versions/{dv}/reconciliations"
+    listed = client.get(base, headers=owner)
+    assert listed.status_code == 200
+    names = [r["name"] for r in listed.json()]
+    assert "reconciliation-good" in names and "reconciliation-bad" not in names
+    bad = client.get(f"{base}/reconciliation-bad", headers=owner)
+    assert bad.status_code == 422 and bad.json()["error"]["code"] == "invalid_report"

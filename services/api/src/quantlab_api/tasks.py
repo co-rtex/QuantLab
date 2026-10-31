@@ -18,6 +18,7 @@ from quantlab.data.identity import (
     display_frame,
     is_legacy,
     key_by_instrument,
+    label_ids,
     normalize_master,
     resolve_ids,
     resolve_universe,
@@ -124,6 +125,9 @@ def register_version(
             symbol_history, pd.Series(stats.index), pd.Series(stats["max"].to_numpy())
         )
         owner = {str(s): str(i) for s, i in zip(stats.index, ids, strict=True) if i is not None}
+    # Delisted means the *instrument* stopped trading: a renamed security's old ticker
+    # ends early but the security has not delisted.
+    last_of = stats["max"].groupby(lambda s: owner.get(str(s), str(s))).max()
     facts = normalize_master(master).set_index("instrument_id") if master is not None else None
     for sym, st in stats.iterrows():
         info = meta.loc[sym] if meta is not None and sym in meta.index else None
@@ -138,7 +142,7 @@ def register_version(
                 asset_class=str(info["asset_class"]) if info is not None else "equity",
                 first_date=st["min"].date(),
                 last_date=st["max"].date(),
-                delisted=bool(st["max"] < last_session),
+                delisted=bool(last_of[owner.get(str(sym), str(sym))] < last_session),
                 rows=int(st["count"]),
                 instrument_id=None if iid is None else str(iid),
                 delisting_date=(
@@ -219,6 +223,7 @@ class ExperimentInputs:
     cfg: BacktestConfig
     history: pd.DataFrame
     master: pd.DataFrame | None
+    start: pd.Timestamp | None = None  # the date universe tickers were resolved on
 
     @property
     def keyed(self) -> bool:
@@ -249,26 +254,32 @@ def load_experiment_inputs(db: Session, exp: Experiment) -> ExperimentInputs:
         return ExperimentInputs(bars, store.load_actions(dv, symbols=syms), cfg, history, master)
     # Tickers in the config name instruments as of the backtest start (point in time): a
     # security renamed later stays in, and a later reuse of the ticker is not picked up.
-    as_of = pd.Timestamp(cfg.start or dv.manifest["start"])
+    # A start before the data (a holiday, or 2010 on 2015+ data) means the first session.
+    first = pd.Timestamp(dv.manifest["start"])
+    as_of = max(pd.Timestamp(cfg.start), first) if cfg.start else first
+    until = pd.Timestamp(cfg.end or dv.manifest["end"])
+    window = f"between {as_of.date()} and {until.date()}"
     ids: list[str] | None = None
     if cfg.universe:
-        ids, unresolved = resolve_universe(history, cfg.universe, as_of)
+        ids, unresolved = resolve_universe(history, cfg.universe, as_of, until)
         if unresolved:
             raise PermanentJobError(
-                f"tickers not listed on {as_of.date()} in this dataset: {unresolved[:10]}"
+                f"tickers not listed {window} in this dataset: {unresolved[:10]}"
             )
     bench = None
     if cfg.benchmark:
-        found, unresolved = resolve_universe(history, [cfg.benchmark], as_of)
+        found, unresolved = resolve_universe(history, [cfg.benchmark], as_of, until)
         if unresolved:
-            raise PermanentJobError(f"benchmark {cfg.benchmark} not listed on {as_of.date()}")
+            raise PermanentJobError(f"benchmark {cfg.benchmark} not listed {window}")
         bench = found[0]
     syms = tickers_of(history, [*ids, *([bench] if bench else [])]) if ids else None
     bars, actions = key_by_instrument(
         store.load_bars(dv, symbols=syms, end=end), store.load_actions(dv, symbols=syms), history
     )
+    if master is not None:  # only the loaded instruments, so "unmatched" means a real mismatch
+        master = master[master["instrument_id"].isin(set(bars["symbol"]))]
     cfg = cfg.model_copy(update={"universe": ids, "benchmark": bench})
-    return ExperimentInputs(bars, actions, cfg, history, master)
+    return ExperimentInputs(bars, actions, cfg, history, master, as_of)
 
 
 def run_experiment_backtest(
@@ -330,23 +341,40 @@ def _for_display(
     )
     if not inputs.keyed:
         return shown, analysis
-    h = inputs.history.sort_values("valid_from")
-    latest = h.groupby("instrument_id")["symbol"].last().to_dict()
     out = dict(analysis)
-    out["final_holdings"] = {
-        latest.get(k, k): v for k, v in analysis.get("final_holdings", {}).items()
-    }
+    # Holdings and P&L are labelled as of the last session, never with a later ticker. If
+    # two instruments show the same ticker then (one delisted, one renamed into it), the
+    # id disambiguates.
+    final = res.equity.index[-1]
     contrib = dict(analysis.get("contributions") or {})
+    held = list(analysis.get("final_holdings", {}))
+    rows = [r["symbol"] for side in ("top", "bottom") for r in contrib.get(side, [])]
+    at_end = label_ids(inputs.history, sorted({*held, *rows}), final)
+    clash = {t for t in at_end.values() if list(at_end.values()).count(t) > 1}
+
+    def name(iid: str) -> str:
+        t = at_end.get(iid, iid)
+        return f"{t} [{iid}]" if t in clash else t
+
+    out["final_holdings"] = {name(k): v for k, v in analysis.get("final_holdings", {}).items()}
     for side in ("top", "bottom"):
         contrib[side] = [
-            {
-                **row,
-                "symbol": latest.get(row["symbol"], row["symbol"]),
-                "instrument_id": row["symbol"],
-            }
-            for row in contrib.get(side, [])
+            {**r, "symbol": name(r["symbol"]), "instrument_id": r["symbol"]}
+            for r in contrib.get(side, [])
         ]
     out["contributions"] = contrib
+    # The run's universe as the user named it (tickers on the start date), ids beside it.
+    meta = dict(analysis.get("meta") or {})
+    when = inputs.start or final
+    universe = [str(s) for s in meta.get("universe", [])]
+    named = label_ids(inputs.history, [*universe, *meta.get("not_listed_in_window", [])], when)
+    meta["universe_instrument_ids"] = universe
+    meta["universe"] = [named.get(i, i) for i in universe]
+    meta["not_listed_in_window"] = [named.get(i, i) for i in meta.get("not_listed_in_window", [])]
+    if meta.get("benchmark"):
+        meta["benchmark_instrument_id"] = meta["benchmark"]
+        meta["benchmark"] = label_ids(inputs.history, [meta["benchmark"]], when)[meta["benchmark"]]
+    out["meta"] = meta
     return shown, out
 
 

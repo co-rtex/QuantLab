@@ -13,12 +13,14 @@ import uuid
 from typing import Any
 
 from fastapi import APIRouter
+from pydantic import ValidationError
 from sqlalchemy import select
 
 from quantlab.data.store import REPORT_NAME, DatasetStore
 from quantlab_api.config import get_settings
 from quantlab_api.errors import ApiError
 from quantlab_api.models import Dataset, DatasetVersion, User
+from quantlab_api.observability import log
 from quantlab_api.schemas import ReconciliationOut, ReconciliationSummaryOut
 from quantlab_api.security import DB, CurrentUser, require_workspace
 
@@ -51,11 +53,13 @@ def _reports(db: DB, user: User, workspace_id: uuid.UUID, version_id: uuid.UUID)
 def list_reconciliations(
     workspace_id: uuid.UUID, version_id: uuid.UUID, user: CurrentUser, db: DB
 ) -> list[ReconciliationSummaryOut]:
-    reports = _reports(db, user, workspace_id, version_id)
-    return [
-        ReconciliationSummaryOut.model_validate({**r, "name": name})
-        for name, r in sorted(reports.items())
-    ]
+    out = []
+    for name, r in sorted(_reports(db, user, workspace_id, version_id).items()):
+        try:
+            out.append(ReconciliationSummaryOut.model_validate({**r, "name": name}))
+        except ValidationError:  # one unreadable file must not hide the valid reports
+            log.warning("reconciliation_report_invalid", report=name, version=str(version_id))
+    return out
 
 
 @router.get(
@@ -70,4 +74,7 @@ def get_reconciliation(
     reports = _reports(db, user, workspace_id, version_id)
     if name not in reports:
         raise ApiError(404, "not_found", "Reconciliation report not found")
-    return ReconciliationOut.model_validate({**reports[name], "name": name})
+    try:
+        return ReconciliationOut.model_validate({**reports[name], "name": name})
+    except ValidationError as exc:
+        raise ApiError(422, "invalid_report", "Stored reconciliation report is malformed") from exc
