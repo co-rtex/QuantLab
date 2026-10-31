@@ -65,6 +65,7 @@ SAFE_ERROR_TYPES = frozenset(
         "JobTimeoutError",
         "LeaseExpired",
         "LedgerError",
+        "ResourceExhausted",
     }
 )
 
@@ -832,6 +833,88 @@ class _Keepalive:
 
 
 # --------------------------------------------------------------------------- recovery
+# ------------------------------------------------------------- out-of-memory kills (#163)
+CGROUP = "/sys/fs/cgroup"  # cgroup v2, as in the worker containers
+
+
+def _cgroup_read(name: str) -> str | None:
+    try:
+        with open(os.path.join(CGROUP, name)) as f:
+            return f.read()
+    except OSError:  # not on Linux, or no cgroup v2: no evidence either way
+        return None
+
+
+def _oom_kills() -> int | None:
+    """The container's count of processes the kernel killed for exceeding memory."""
+    text = _cgroup_read("memory.events")
+    for line in (text or "").splitlines():
+        key, _, value = line.partition(" ")
+        if key == "oom_kill" and value.strip().isdigit():
+            return int(value)
+    return None
+
+
+def _memory_limit_mb() -> float | None:
+    text = (_cgroup_read("memory.max") or "").strip()
+    return int(text) / 2**20 if text.isdigit() else None
+
+
+_oom_kills_seen = _oom_kills()  # at worker start; each kill handled moves it on
+
+
+def horse_killed(rq_job: RQJob, retpid: int, ret_val: int, rusage: Any) -> None:
+    """RQ's ``work_horse_killed_handler``: runs in the worker when its horse dies.
+
+    A horse the kernel killed for exceeding the container's memory would otherwise surface
+    minutes later as ``LeaseExpired`` ("worker stopped heartbeating"), and be retried into
+    the same wall. An out-of-memory kill is recorded at once as ``ResourceExhausted``, not
+    retryable, because the same job needs the same memory again. The evidence is a SIGKILL
+    together with a rise in the cgroup's ``oom_kill`` count, or a peak resident set at the
+    memory limit. Any other death is left to the reaper as before (``LeaseExpired``).
+    """
+    global _oom_kills_seen
+    signalled = ret_val is not None and os.WIFSIGNALED(ret_val)
+    if not signalled or os.WTERMSIG(ret_val) != 9:
+        return
+    kills, limit = _oom_kills(), _memory_limit_mb()
+    rose = kills is not None and _oom_kills_seen is not None and kills > _oom_kills_seen
+    _oom_kills_seen = kills
+    peak = getattr(rusage, "ru_maxrss", 0) / 2**10  # kilobytes on Linux
+    at_limit = limit is not None and peak >= 0.95 * limit
+    if not (rose or at_limit):
+        return
+    args = getattr(rq_job, "args", None) or []
+    if len(args) != 1 or not isinstance(args[0], str) or not _is_uuid(args[0]):
+        return
+    # The attempt that died: before #162 the horse claimed as host:<its pid>; since then
+    # it inherits the worker's identity. A job another worker has reclaimed is left alone.
+    horse = {worker_identity(), f"{socket.gethostname()}:{retpid}"}
+    limit_text = f" of the worker's {limit:.0f} MB limit" if limit else ""
+    with SessionLocal() as db:
+        job = db.get(Job, uuid.UUID(args[0]), with_for_update=True)
+        if job is None or job.status != JobStatus.running or job.worker_id not in horse:
+            return
+        job.status = JobStatus.failed
+        job.error = {
+            "type": "ResourceExhausted",
+            "message": (
+                f"out of memory: the job was stopped after using {peak:.0f} MB{limit_text}. "
+                "A smaller universe, a shorter period or a less frequent rebalance needs "
+                "less memory."
+            ),
+            "retryable": False,
+        }
+        job.message = "failed: out of memory"
+        job.lease_expires_at = None
+        job.finished_at = db_now()
+        kind = job.kind
+        _mirror_status(db, job, JobStatus.failed)
+        db.commit()
+    JOB_OUTCOMES.labels(kind, "failed").inc()
+    log.warning("job_out_of_memory", job_id=args[0], peak_mb=round(peak), limit_mb=limit)
+
+
 def reap(redeliver_after_seconds: int = 120) -> dict[str, int]:
     """Recover jobs whose worker died and re-deliver queued jobs that were never picked up."""
     stats = {"requeued": 0, "failed": 0, "timed_out": 0, "redelivered": 0, "uploads_swept": 0}
