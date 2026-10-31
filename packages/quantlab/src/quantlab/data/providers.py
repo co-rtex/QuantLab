@@ -11,7 +11,8 @@ from typing import Any, Protocol
 
 import pandas as pd
 
-from quantlab.data.schema import normalize_actions, normalize_bars
+from quantlab.data.calendar import trading_days
+from quantlab.data.schema import EXCHANGE_TZ, normalize_actions, normalize_bars
 from quantlab.data.synthetic import SyntheticMarket, SyntheticSpec, generate_market
 
 
@@ -235,11 +236,21 @@ def ingest(
     existing_actions: pd.DataFrame | None = None,
     checkpoint: IngestionCheckpoint | None = None,
     on_progress: Callable[[int, int, str], None] | None = None,
+    now: pd.Timestamp | None = None,
 ) -> IngestionResult:
     """Incrementally ingest ``symbols``; symbols already complete per checkpoint are skipped.
 
-    Permanent failures are recorded per-symbol and do not abort the whole backfill.
+    Permanent failures are recorded per-symbol and do not abort the whole backfill. The
+    checkpoint records a symbol as done only through the last *completed* session (before
+    ``now``, New York time), never through ``end`` when ``end`` is today or later: a bar
+    for a session still in progress would otherwise never be fetched again.
     """
+    clock = pd.Timestamp.now(tz=EXCHANGE_TZ) if now is None else pd.Timestamp(now)
+    if clock.tzinfo is not None:
+        clock = clock.tz_convert(EXCHANGE_TZ).tz_localize(None)
+    # Sessions strictly before today (New York): today's bar may still be forming.
+    done = trading_days(clock - pd.Timedelta(days=14), clock - pd.Timedelta(days=1))
+    completed = done[-1] if len(done) else clock.normalize() - pd.Timedelta(days=1)
     s, e = pd.Timestamp(start), pd.Timestamp(end)
     cp = checkpoint or IngestionCheckpoint()
     bar_frames = [existing_bars] if existing_bars is not None and len(existing_bars) else []
@@ -262,7 +273,7 @@ def ingest(
             bar_frames.append(b)
         if len(a):
             act_frames.append(a)
-        cp.done_through[sym] = str(e.date())
+        cp.done_through[sym] = str(min(e, completed).date())
         cp.failed.pop(sym, None)
         ingested.append(sym)
         if on_progress:

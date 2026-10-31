@@ -154,10 +154,15 @@ def probabilistic_sharpe(
     return float(stats.norm.cdf((sr - benchmark_sr) * math.sqrt(n - 1) / math.sqrt(denom)))
 
 
-def expected_max_sharpe(trial_sharpes: list[float]) -> float:
-    """Expected maximum per-period Sharpe among N independent trials with zero true Sharpe."""
-    n = len(trial_sharpes)
-    if n < 2:
+def expected_max_sharpe(trial_sharpes: list[float], n_trials: int | None = None) -> float:
+    """Expected maximum per-period Sharpe among N independent trials with zero true Sharpe.
+
+    ``n_trials`` is the number of configurations tried. It can exceed the number of
+    Sharpes when some trials have none (no dispersion): those trials were still tried, so
+    they count toward N, while the variance comes from the defined Sharpes.
+    """
+    n = max(len(trial_sharpes), n_trials or 0)
+    if len(trial_sharpes) < 2:
         return 0.0
     var = float(np.var(trial_sharpes, ddof=1))
     z1 = stats.norm.ppf(1 - 1 / n)
@@ -171,18 +176,23 @@ def deflated_sharpe(
     *,
     risk_free_rate: float = 0.0,
     periods: int = 252,
+    n_trials: int | None = None,
 ) -> dict[str, Any]:
     """DSR: the PSR against the Sharpe one would expect from the best of N null trials.
+
+    ``n_trials`` counts every configuration tried, including those without a defined
+    Sharpe, so N is not understated (which would make the DSR less conservative).
 
     ``trial_sharpes`` are :func:`per_period_sharpe` values of every variant evaluated on the
     same data (including the selected one). ``returns`` must be the selected variant's
     returns over the same window, with the same ``risk_free_rate``, that produced its
     trial Sharpe; otherwise the comparison with the null maximum is biased.
     """
-    sr0 = expected_max_sharpe(trial_sharpes)
+    sr0 = expected_max_sharpe(trial_sharpes, n_trials)
     rf, p = risk_free_rate, periods
     return {
-        "trials": len(trial_sharpes),
+        "trials": max(len(trial_sharpes), n_trials or 0),
+        "trials_with_sharpe": len(trial_sharpes),
         "observations": int(returns.notna().sum()),
         "selected_sharpe_per_period": per_period_sharpe(returns, risk_free_rate=rf, periods=p),
         "expected_max_sharpe_per_period": sr0,

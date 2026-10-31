@@ -119,7 +119,8 @@ def build_panel(
     """Long panel (date, symbol, features..., fwd_return, label, label_available_at).
 
     ``instruments`` is an instrument master keyed like ``bars["symbol"]``; its delisting
-    returns are applied to labels whose horizon runs past the security's last bar.
+    returns are applied to labels whose horizon reaches the first session after the
+    security's delisting date.
     """
     feats, adj = compute_features(bars, actions, cfg.exclude)
     close = adj

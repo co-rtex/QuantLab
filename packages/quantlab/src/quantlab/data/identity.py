@@ -66,6 +66,9 @@ DELISTING_REASONS = (
     "voluntary",
     "other",
 )
+# Delisting reasons that indicate failure rather than a corporate transaction. Returns for
+# these are typically large losses (Shumway 1997 estimates about -30% on NYSE/AMEX).
+PERFORMANCE_REASONS = ("bankruptcy", "liquidation", "noncompliance")
 # Start of the open-ended interval used for datasets without identity data.
 LEGACY_FROM = pd.Timestamp("1900-01-01")
 SAMPLE = 5
@@ -179,7 +182,14 @@ def normalize_master(frame: pd.DataFrame) -> pd.DataFrame:
             f"expected one of {DELISTING_REASONS}"
         )
     ret = m["delisting_return"] if "delisting_return" in m else pd.Series(np.nan, index=m.index)
-    m["delisting_return"] = pd.to_numeric(ret, errors="coerce").astype("float64")
+    try:
+        # A malformed value (e.g. "-30%") must not silently become "unknown", which would
+        # take the optimistic last-close exit.
+        # Strip strings element by element; .str would turn non-string values into NaN.
+        cleaned = ret.map(lambda v: (v.strip() or None) if isinstance(v, str) else v)
+        m["delisting_return"] = pd.to_numeric(cleaned).astype("float64")
+    except (ValueError, TypeError) as exc:
+        raise IdentityError(f"delisting_return is not a number: {exc}") from exc
     r = m["delisting_return"]
     if (r.notna() & ~((r >= -1.0) & np.isfinite(r))).any():
         raise IdentityError("delisting_return must be a finite return >= -1")
@@ -238,7 +248,7 @@ def _resolve(
     left = (
         pd.DataFrame(
             {
-                by: keys.astype(str).str.upper().to_numpy(),
+                by: keys.astype(str).str.strip().str.upper().to_numpy(),
                 "_d": pd.to_datetime(dates).astype("datetime64[ns]").to_numpy(),
                 "_pos": np.arange(len(keys)),
             }

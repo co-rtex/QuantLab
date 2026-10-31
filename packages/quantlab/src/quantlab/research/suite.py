@@ -79,6 +79,7 @@ def run_validation_suite(
         simple_returns(invested_equity(base.equity)),
         trials,
         risk_free_rate=config.risk_free_rate,
+        n_trials=len(out["sensitivity"]["rows"]),
     )
     out["cost"] = cost_sensitivity(
         bars, actions, strategy_key, params, config, on_progress=stage(3), instruments=instruments
