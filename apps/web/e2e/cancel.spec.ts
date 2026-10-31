@@ -61,6 +61,7 @@ test("a running dataset job is cancelled once, and says it is cancelling", async
   stopped = true;
   await expect(page.getByText("Cancelled", { exact: true })).toBeVisible();
   await expect(button).toHaveCount(0);
+  await page.unrouteAll({ behavior: "ignoreErrors" });
 });
 
 test("a viewer is not offered a cancel the API would refuse", async ({ browser }: { browser: Browser }) => {
@@ -107,4 +108,7 @@ test("a viewer is not offered a cancel the API would refuse", async ({ browser }
 
   await owner.goto(`/experiments/${id}`);
   await expect(owner.getByRole("button", { name: "Cancel run" })).toBeVisible();
+  // Both pages keep polling through these routes; a callback still in flight when the
+  // test ends fails the run outside any test.
+  for (const page of [owner, viewer]) await page.unrouteAll({ behavior: "ignoreErrors" });
 });
