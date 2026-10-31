@@ -117,6 +117,9 @@ def build_panel(bars: pd.DataFrame, actions: pd.DataFrame, cfg: MLConfig) -> pd.
     # inside the horizon that is the return to delisting (the engine liquidates at the last
     # close). Using adj.shift(-h) alone made the label NaN and the row was dropped, so the
     # panel only contained assets that survived to t+h: selection on future information.
+    # The exit at the last close is optimistic: a real delisting return (often a large
+    # loss for performance delistings) is not modelled until instrument identity (#9)
+    # supplies delisting returns.
     fwd = adj.ffill().shift(-h) / adj - 1
     dates = close.index[252 :: cfg.sample_every]
     dates = dates[dates <= close.index[-1 - h]] if len(close) > h else dates[:0]

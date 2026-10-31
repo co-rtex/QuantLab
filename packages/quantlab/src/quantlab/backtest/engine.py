@@ -2,17 +2,19 @@
 
 Timeline for each session ``k`` (all prices are raw, as traded):
 
-1. **Open** — corporate actions with ex-date ``k`` are applied to holdings (dividend on the
-   pre-split share count, then split). Positions in symbols that have stopped trading
-   (delisted: no bar today and none later) are liquidated at their last close.
+1. **Open** — corporate actions placed on session ``k`` are applied to holdings: those
+   ex-dated ``k``, plus any whose ex-date fell on a day the symbol printed no bar (see
+   ``quantlab.data.adjust``), composed in ex-date order into one dividend on the share
+   count held before the open, then one split. Positions in symbols that have printed no
+   bar for ``delist_after_missing`` sessions are liquidated at their last close.
 2. **Open execution** (``execution="next_open"``) — orders decided at the previous
    rebalance close are filled at ``open[k]`` adjusted for slippage. Sells run before buys.
 3. **Close execution** (``execution="next_close"``) — as above but at ``close[k]``.
 4. **Mark-to-market** at ``close[k]`` (last known close for symbols with a gap).
 5. **Decision** — on rebalance dates the strategy receives a ``MarketView`` containing only
-   bars dated ``<= k`` with corporate actions ex-dated ``<= k`` and returns target weights.
-   Orders are sized against ``close[k]`` and queued for the *next* session, so no order is
-   ever filled at a price the strategy could not have known at decision time.
+   bars dated ``<= k`` with corporate actions placed on sessions ``<= k`` and returns target
+   weights. Orders are sized against ``close[k]`` and queued for the *next* session, so no
+   order is ever filled at a price the strategy could not have known at decision time.
 
 Orders that cannot be filled (no bar on the execution date, insufficient cash, sells
 exceeding holdings) are rejected and recorded with a reason; buys that exceed available
@@ -37,7 +39,7 @@ from quantlab.data.schema import wide
 from quantlab.portfolio.ledger import Ledger, LedgerError
 from quantlab.strategies.base import MarketView, Strategy
 
-ENGINE_VERSION = "1.1.0"
+ENGINE_VERSION = "1.2.0"
 
 
 class BacktestConfig(BaseModel):
@@ -190,11 +192,14 @@ def run_backtest(
     has_bar = np.isfinite(C)
     missing_run = np.zeros(len(universe), dtype=np.int64)
     col = {s: j for j, s in enumerate(universe)}
-    u_acts = acts[acts["symbol"].isin(universe)]
-    matched = pd.MultiIndex.from_arrays([u_acts["symbol"], u_acts["ex_date"]]).isin(
-        pd.MultiIndex.from_arrays([bars["symbol"], bars["date"]])
-    )
-    unmatched_actions = int((~matched).sum())
+    placement = adjuster.placed["placement"].value_counts()
+    action_counts = {
+        "on_ex_date": int(placement.get("ex_date", 0)),
+        "applied_next_session": int(placement.get("next_bar", 0)),
+        "outside_history": int(
+            placement.get("before_history", 0) + placement.get("after_history", 0)
+        ),
+    }
 
     start_pos = 0 if config.start is None else int(dates.searchsorted(pd.Timestamp(config.start)))
     if start_pos >= len(dates) - 1:
@@ -463,7 +468,7 @@ def run_backtest(
             "benchmark": bench,
             "sessions": n_steps,
             "not_listed_in_window": not_listed,
-            "unmatched_corporate_actions": unmatched_actions,
+            "corporate_actions": action_counts,
             "first_session": str(trade_dates[0].date()),
             "last_session": str(trade_dates[-1].date()),
         },
