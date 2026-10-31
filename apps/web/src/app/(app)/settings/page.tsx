@@ -1,7 +1,7 @@
 "use client";
 
 import { useRouter } from "next/navigation";
-import { useState, type FormEvent } from "react";
+import { useEffect, useRef, useState, type FormEvent } from "react";
 import { PageHeader } from "@/components/Shell";
 import { ErrorNote, Panel, QueryError } from "@/components/ui";
 import { api, ApiError, type Page } from "@/lib/api";
@@ -39,6 +39,7 @@ export default function SettingsPage() {
   const { workspace, user, refresh, setWorkspaceId } = useWorkspace();
   const ws = workspace?.id;
   const isOwner = workspace?.role === "owner";
+  const canEdit = isOwner || workspace?.role === "editor";
   const members = useApi<Member[]>(ws ? `/workspaces/${ws}/members` : null);
   const audit = useApi<Page<AuditEvent>>(ws && isOwner ? `/workspaces/${ws}/audit?limit=30` : null);
   const invitations = useApi<Invitation[]>(ws && isOwner ? `/workspaces/${ws}/invitations` : null);
@@ -46,6 +47,36 @@ export default function SettingsPage() {
   const [link, setLink] = useState<{ email: string; url: string }>();
   const [err, setErr] = useState<ApiError>();
   const [msg, setMsg] = useState<string>();
+  const [removing, setRemoving] = useState<Member>(); // member awaiting confirmation
+  const [removeErr, setRemoveErr] = useState<ApiError>();
+  const [confirmName, setConfirmName] = useState("");
+  const [pending, setPending] = useState<"rename" | "delete" | "remove">();
+  const confirmBox = useRef<HTMLDivElement>(null);
+  const membersHeading = useRef<HTMLHeadingElement>(null);
+  // Focus follows the confirmation step: into it when it opens (its prompt, so a repeated
+  // Enter cannot confirm), and back to the row's Remove button when it closes (#105).
+  const returnTo = useRef<string | null>(null);
+  useEffect(() => {
+    if (removing) {
+      confirmBox.current?.focus();
+      return;
+    }
+    const id = returnTo.current;
+    if (id === null) return;
+    returnTo.current = null;
+    // "" is the heading: after a removal the row, and its button, are about to go.
+    const back = id ? document.querySelector<HTMLElement>(`[data-remove="${CSS.escape(id)}"]`) : null;
+    (back ?? membersHeading.current)?.focus();
+  }, [removing]);
+
+  function openRemove(m: Member) {
+    setRemoveErr(undefined);
+    setRemoving(m);
+  }
+  function closeRemove(removed = false) {
+    if (removing) returnTo.current = removed ? "" : removing.user_id;
+    setRemoving(undefined);
+  }
 
   async function invite(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();
@@ -89,6 +120,70 @@ export default function SettingsPage() {
     members.reload();
   }
 
+  /** After leaving or deleting the current workspace, select one that is still there. */
+  async function selectRemaining() {
+    const left = await api<{ id: string }[]>("/workspaces");
+    await refresh();
+    setWorkspaceId(left[0]?.id ?? null);
+  }
+
+  async function removeMember(m: Member) {
+    if (pending) return; // one request at a time: a double click must not send two
+    setErr(undefined);
+    setRemoveErr(undefined);
+    setPending("remove");
+    try {
+      await api(`/workspaces/${ws}/members/${m.user_id}`, { method: "DELETE" });
+      closeRemove(true);
+      if (m.user_id === user?.id) {
+        await selectRemaining();
+        setMsg(`You left ${workspace?.name}.`);
+        return;
+      }
+      setMsg(`${m.display_name} was removed from ${workspace?.name}.`);
+      members.reload();
+    } catch (x) {
+      setRemoveErr(x as ApiError); // beside the confirmation, e.g. the last owner (409)
+      setErr(x as ApiError);
+    } finally {
+      setPending(undefined);
+    }
+  }
+
+  async function rename(e: FormEvent<HTMLFormElement>) {
+    e.preventDefault();
+    if (pending) return;
+    setErr(undefined);
+    const name = String(new FormData(e.currentTarget).get("name") ?? "").trim();
+    setPending("rename");
+    try {
+      await api(`/workspaces/${ws}`, { method: "PATCH", json: { name, description: workspace?.description ?? "" } });
+      await refresh();
+      setMsg(`Workspace renamed to ${name}.`);
+    } catch (x) {
+      setErr(x as ApiError);
+    } finally {
+      setPending(undefined);
+    }
+  }
+
+  async function deleteWorkspace(e: FormEvent<HTMLFormElement>) {
+    e.preventDefault();
+    if (pending || !workspace || confirmName !== workspace.name) return;
+    setErr(undefined);
+    setPending("delete");
+    try {
+      await api(`/workspaces/${ws}`, { method: "DELETE" });
+      setConfirmName("");
+      await selectRemaining();
+      setMsg(`Workspace ${workspace.name} was deleted, with its data, experiments and portfolios.`);
+    } catch (x) {
+      setErr(x as ApiError);
+    } finally {
+      setPending(undefined);
+    }
+  }
+
   async function createWorkspace(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();
     const f = new FormData(e.currentTarget);
@@ -119,7 +214,7 @@ export default function SettingsPage() {
         <ErrorNote error={err} />
       </div>
       <div className="grid gap-6 xl:grid-cols-2">
-        <Panel title="Members">
+        <Panel title={<span ref={membersHeading} tabIndex={-1} className="outline-none">Members</span>}>
           <QueryError q={members} what="members" />
           <table className="data">
             <thead>
@@ -127,6 +222,7 @@ export default function SettingsPage() {
                 <th>Name</th>
                 <th>Email</th>
                 <th>Role</th>
+                {isOwner && <th className="sr-only">Actions</th>}
               </tr>
             </thead>
             <tbody>
@@ -150,10 +246,59 @@ export default function SettingsPage() {
                       m.role
                     )}
                   </td>
+                  {isOwner && (
+                    <td className="r whitespace-nowrap">
+                      <button
+                        type="button"
+                        className="btn btn-quiet py-0.5"
+                        data-remove={m.user_id}
+                        aria-label={m.user_id === user?.id ? "Leave this workspace" : `Remove ${m.display_name}`}
+                        aria-expanded={removing?.user_id === m.user_id}
+                        aria-controls="remove-member"
+                        onClick={() => openRemove(m)}
+                      >
+                        {m.user_id === user?.id ? "Leave" : "Remove"}
+                      </button>
+                    </td>
+                  )}
                 </tr>
               ))}
             </tbody>
           </table>
+          {isOwner && removing && (
+            <div
+              id="remove-member"
+              ref={confirmBox}
+              role="group"
+              aria-labelledby="remove-member-prompt"
+              tabIndex={-1}
+              onKeyDown={(e) => {
+                if (e.key === "Escape") closeRemove();
+              }}
+              className="mt-3 rounded border border-loss/30 bg-loss-soft p-3 text-sm outline-none"
+            >
+              <p id="remove-member-prompt" className="text-loss">
+                {removing.user_id === user?.id
+                  ? `Leave ${workspace?.name}? You lose access to it immediately.`
+                  : `Remove ${removing.display_name} from ${workspace?.name}? They lose access immediately.`}
+              </p>
+              {removeErr && <p className="mt-1 text-loss">{removeErr.message}</p>}
+              <div className="mt-2 flex flex-wrap gap-2">
+                <button
+                  type="button"
+                  className="btn btn-quiet text-loss"
+                  aria-busy={pending === "remove"}
+                  aria-disabled={pending === "remove"}
+                  onClick={() => removeMember(removing)}
+                >
+                  {removing.user_id === user?.id ? "Confirm leaving" : `Confirm removing ${removing.display_name}`}
+                </button>
+                <button type="button" className="btn btn-quiet" onClick={() => closeRemove()}>
+                  {removing.user_id === user?.id ? "Stay" : `Keep ${removing.display_name}`}
+                </button>
+              </div>
+            </div>
+          )}
           {isOwner && (
             <form onSubmit={invite} className="mt-4 flex flex-wrap items-end gap-2 text-sm">
               <label className="min-w-56 flex-1">
@@ -238,6 +383,38 @@ export default function SettingsPage() {
               Sign out on all devices
             </button>
           </Panel>
+          {workspace && canEdit && (
+            <Panel title="This workspace">
+              <form onSubmit={rename} className="flex gap-2 text-sm" key={workspace.id}>
+                <label className="flex-1">
+                  <span className="mb-1 block">Name</span>
+                  <input name="name" required maxLength={120} defaultValue={workspace.name} className="field" />
+                </label>
+                <button className="btn btn-quiet self-end" aria-busy={pending === "rename"} aria-disabled={pending === "rename"}>
+                  {pending === "rename" ? "Renaming…" : "Rename"}
+                </button>
+              </form>
+              {isOwner && (
+                <form onSubmit={deleteWorkspace} className="mt-5 space-y-2 border-t border-rule pt-4 text-sm">
+                  <p className="text-ink-2">
+                    Deleting the workspace removes its datasets, experiments, ML runs and portfolios for every member. It cannot be undone.
+                  </p>
+                  <label className="block">
+                    <span className="mb-1 block">Type {workspace.name} to confirm</span>
+                    <input value={confirmName} onChange={(e) => setConfirmName(e.target.value)} className="field" autoComplete="off" />
+                  </label>
+                  <button
+                    className="btn btn-quiet text-loss"
+                    disabled={confirmName !== workspace.name}
+                    aria-busy={pending === "delete"}
+                    aria-disabled={pending === "delete" || undefined}
+                  >
+                    {pending === "delete" ? "Deleting…" : "Delete workspace"}
+                  </button>
+                </form>
+              )}
+            </Panel>
+          )}
           <Panel title="New workspace">
             <form onSubmit={createWorkspace} className="flex gap-2 text-sm">
               <label className="flex-1">
