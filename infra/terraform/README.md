@@ -42,9 +42,10 @@ CI does not run these yet; that waits on the user's approval of Actions minutes 
       it has never been run), build the edge image, then run `infra/edge/verify.sh`
       against the public name through a real NLB (#39). It must show each client's own
       address, and a forged `X-Forwarded-For` must have no effect.
-- [ ] **PostgreSQL TLS verification.** `rds.force_ssl` makes connections encrypted, but
-      `sslmode=require` does not check the server. Add the RDS CA bundle to the api image
-      and use `sslmode=verify-full&sslrootcert=<path>` in `database_url`.
+- [ ] **PostgreSQL TLS verification.** `database_url` must use `sslmode=verify-full`
+      with the RDS CA bundle, which the api image already includes (pinned by checksum
+      in services/api/Dockerfile). `sslmode=require` would encrypt without checking the
+      server.
 - [ ] **JWT secret only where it is needed.** Today every process requires
       `QUANTLAB_JWT_SECRET` in production (config.py), so worker, reaper and migrate get it
       too. #117 scopes it to the API.
@@ -88,7 +89,7 @@ is managed by RDS.
    `edge_secret`, and 16+ random characters for `metrics_token`. For `database_url`,
    connect with the RDS master secret (`database_master_secret_arn`), create an
    application role that owns database `quantlab`, and store
-   `postgresql+psycopg://<role>:<url-encoded password>@<database_endpoint>:5432/quantlab?sslmode=require`.
+   `postgresql+psycopg://<role>:<url-encoded password>@<database_endpoint>:5432/quantlab?sslmode=verify-full&sslrootcert=/etc/ssl/certs/rds-global-bundle.pem`.
 5. Run the `migrate` task once (`aws ecs run-task` with the `app_subnet_ids` and
    `migrate_security_group_id` outputs), then let the services start. Run it again before
    every release that changes the schema.

@@ -10,7 +10,7 @@ locals {
     jwt_secret    = { env = "QUANTLAB_JWT_SECRET", required = true, desc = "JWT signing key, 32+ random characters" }
     metrics_token = { env = "QUANTLAB_METRICS_TOKEN", required = true, desc = "Bearer token for /metrics, 16+ characters" }
     edge_secret   = { env = "QUANTLAB_EDGE_SECRET", required = true, desc = "Shared edge-to-web secret, 32+ characters (ADR-0008)" }
-    database_url  = { env = "QUANTLAB_DATABASE_URL", required = true, desc = "postgresql+psycopg URL of the application role, sslmode=require" }
+    database_url  = { env = "QUANTLAB_DATABASE_URL", required = true, desc = "postgresql+psycopg URL of the application role, sslmode=verify-full with the RDS bundle" }
     anthropic_key = { env = "QUANTLAB_ANTHROPIC_API_KEY", required = false, desc = "Optional LLM provider key" }
     market_data_key = {
       env      = "QUANTLAB_MARKET_DATA_API_KEY"
