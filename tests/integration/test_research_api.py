@@ -43,6 +43,7 @@ def test_integrity_before_and_after_validation(client, seeded):
     assert by["out_of_sample"]["status"] in ("verified", "warning")
     assert by["statistical_uncertainty"]["status"] in ("verified", "warning")
     assert by["multiple_testing"]["status"] in ("verified", "warning")
+    assert by["validation_engine"]["status"] == "verified"  # same engine as the experiment
 
     client.post(f"/api/v1/experiments/{exp_id}/reproduce", headers=h)
     assert run_pending_jobs() == ["completed"]
@@ -124,3 +125,33 @@ def test_assistant_answers_from_evidence_and_declines_advice(client, seeded):
     assert adv["citations"] == []
     bad = client.post(f"/api/v1/experiments/{exp_id}/assistant", headers=h, json={"question": ""})
     assert bad.status_code == 422
+
+
+def test_validating_an_older_engines_experiment_labels_the_mismatch(client, seeded):
+    """#155: the suite re-runs backtests on the worker's current engine. An experiment
+    computed on an older engine is validated under different rules, and says so."""
+    import uuid
+
+    from quantlab.backtest.engine import ENGINE_VERSION
+    from quantlab_api.db import SessionLocal
+    from quantlab_api.models import Experiment
+
+    h = seeded["headers"]
+    exp_id = _completed_experiment(client, seeded)
+    with SessionLocal() as db:  # as if it had been computed before #150
+        db.get(Experiment, uuid.UUID(exp_id)).engine_version = "1.3.0"
+        db.commit()
+    assert client.post(f"/api/v1/experiments/{exp_id}/validation", headers=h).status_code == 202
+    assert run_pending_jobs() == ["completed"]
+    val = client.get(f"/api/v1/experiments/{exp_id}/validation", headers=h).json()
+    assert val["engine_version"] == ENGINE_VERSION  # the engine it actually ran on
+    assert val["result"]["experiment_engine_version"] == "1.3.0"
+    rep = client.get(f"/api/v1/experiments/{exp_id}/integrity", headers=h).json()
+    check = {c["key"]: c for c in rep["checks"]}["validation_engine"]
+    assert check["status"] == "warning"
+    assert f"ran on engine {ENGINE_VERSION}" in check["finding"]
+    assert "computed on engine 1.3.0" in check["finding"]
+    assert check["evidence"] == {
+        "validation_engine_version": ENGINE_VERSION,
+        "experiment_engine_version": "1.3.0",
+    }

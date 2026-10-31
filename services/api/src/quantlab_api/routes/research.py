@@ -46,6 +46,8 @@ def _run_out(db: DB, run: ResearchRun) -> dict[str, Any]:
         "params": run.params,
         "created_at": run.created_at,
         "result": run.result,
+        # The engine the validation actually ran on (#155); None for runs recorded before.
+        "engine_version": (run.result or {}).get("engine_version"),
         "job": JobOut.model_validate(job).model_dump(mode="json") if job else None,
     }
 

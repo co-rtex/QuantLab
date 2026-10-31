@@ -388,6 +388,17 @@ each differing input (`input_differences`, for example `engine_version 1.2.0 →
 The integrity report only uses same-input re-runs to verify or fail reproducibility; it
 names changed-input re-runs and leaves the check "not assessed" if they are the only ones.
 
+**Engine versions.**
+* A worker refuses a backtest stamped for another engine version (#152).
+* A validation run re-runs backtests on the worker's current engine, so it records that
+  engine (`engine_version`) beside the experiment's (`experiment_engine_version`) (#155).
+* When they differ, the integrity report's `validation_engine` check warns that the two
+  follow different engine rules and suggests validating a reproduction. A run recorded
+  before #155 is "not assessed".
+* A mismatch is labelled rather than refused. The suite is internally consistent on one
+  engine, and refusing would leave every older experiment unvalidatable until it was
+  reproduced.
+
 ## Performance statistics (`quantlab.analytics.performance`)
 
 | Statistic | Definition |

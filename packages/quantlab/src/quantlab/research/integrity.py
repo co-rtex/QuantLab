@@ -304,6 +304,47 @@ def build_integrity_report(ev: dict[str, Any]) -> dict[str, Any]:
             )
         checks.append(Check("zero_volume", "Zero-volume bars", zv_status, zv_finding, evidence))
 
+    # 3d. the engine the validation ran on (#155). The suite re-runs backtests on the
+    # worker's current engine, so an experiment from an older engine is validated under
+    # different rules (#149's zero-volume fills, say). Labelled, not refused: the suite is
+    # internally consistent, and refusing would leave older experiments unvalidatable.
+    if val:
+        ran, computed = val.get("engine_version"), exp.get("engine_version")
+        engines = {"validation_engine_version": ran, "experiment_engine_version": computed}
+        if ran is None:
+            checks.append(
+                Check(
+                    "validation_engine",
+                    "Validation engine",
+                    "unassessed",
+                    "The validation run does not record the engine it ran on (recorded "
+                    "before #155), so it cannot be compared with the experiment's.",
+                    engines,
+                )
+            )
+        elif ran != computed:
+            checks.append(
+                Check(
+                    "validation_engine",
+                    "Validation engine",
+                    "warning",
+                    f"The validation ran on engine {ran}, but the experiment was computed on "
+                    f"engine {computed}, so they follow different engine rules. Reproduce the "
+                    "experiment and validate the reproduction to compare like with like.",
+                    engines,
+                )
+            )
+        else:
+            checks.append(
+                Check(
+                    "validation_engine",
+                    "Validation engine",
+                    "verified",
+                    f"The validation and the experiment both ran on engine {ran}.",
+                    engines,
+                )
+            )
+
     # 4. execution timing
     checks.append(
         Check(
