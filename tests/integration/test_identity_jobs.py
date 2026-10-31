@@ -226,11 +226,8 @@ def _store_report(dv_id: str, name: str) -> None:
         ds = db.get(Dataset, row.dataset_id)
     store = DatasetStore(get_settings().datasets_dir)
     dv = store.open(ds.slug, row.version_hash)
-    bars, acts = store.load_bars(dv), store.load_actions(dv)
-    report = reconcile(
-        Source("primary", bars, acts, store.load_symbol_history(dv), True, version=dv.version),
-        Source("csv copy", bars, acts, None, True),
-    )
+    primary = Source.from_version(store, dv, "primary", is_synthetic=True)
+    report = reconcile(primary, Source("csv copy", primary.bars, primary.actions, None, True))
     store.write_report(dv, name, report.to_dict())
 
 

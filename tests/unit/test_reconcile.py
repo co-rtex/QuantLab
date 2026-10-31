@@ -486,3 +486,211 @@ def test_report_writes_cannot_race_into_an_overwrite(mkt, tmp_path, monkeypatch)
         store.write_report(dv, "reconciliation-a", {"status": "fail"})
     monkeypatch.undo()
     assert store.load_reports(dv)["reconciliation-a"]["status"] == "pass"
+
+
+def test_a_stored_version_with_a_master_matches_its_data(mkt, tmp_path):
+    from quantlab.data.identity import normalize_master
+    from quantlab.data.store import DatasetStore
+
+    ids = sorted(mkt.symbol_history["instrument_id"].unique())
+    master = normalize_master(
+        pd.DataFrame(
+            {
+                "instrument_id": ids[:1],
+                "delisting_date": ["2021-12-31"],
+                "delisting_return": [-0.25],
+            }
+        )
+    )
+    store = DatasetStore(tmp_path)
+    dv = store.write(
+        "demo",
+        mkt.bars,
+        mkt.actions,
+        mkt.provenance,
+        symbol_history=mkt.symbol_history,
+        master=master,
+    )
+    assert store.verify(dv)
+    secondary = _secondary(mkt)
+    good = reconcile(Source.from_version(store, dv, "stored", is_synthetic=True), secondary)
+    assert good.inputs["primary"]["version_matches_data"] is True
+    assert good.inputs["primary"]["version"] == dv.version
+
+    def hand_built(m):
+        return Source(
+            "stored", mkt.bars, mkt.actions, mkt.symbol_history, True, version=dv.version, master=m
+        )
+
+    def matches(src):
+        return reconcile(src, secondary).inputs["primary"]["version_matches_data"]
+
+    assert matches(hand_built(master)) is True
+    # Leaving the master out, or passing a different one, is different data.
+    assert matches(hand_built(None)) is False
+    assert matches(hand_built(master.assign(delisting_return=[-0.5]))) is False
+
+
+# ------------------------------------------- lead review of #76: ratio levels
+def _raw_series(n: int = 60, events=((20, "dividend", 1.0), (40, "dividend", 1.0))):
+    """One raw instrument with a gentle drift and its actions (synthetic, hand-built)."""
+    from tests.conftest import make_bars
+
+    closes = [100.0 * (1.001**k) for k in range(n)]
+    for k, kind, value in events:  # the raw close drops by the event at its ex-date
+        for j in range(k, n):
+            closes[j] = closes[j] / value if kind == "split" else closes[j] - value
+    bars = make_bars({"A": closes})
+    d = pd.DatetimeIndex(sorted(bars["date"].unique()))
+    acts = normalize_actions(
+        pd.DataFrame(
+            [{"symbol": "A", "ex_date": d[k], "kind": kind, "value": v} for k, kind, v in events]
+        )
+    )
+    return bars, acts
+
+
+def _adjusted_copy(bars, acts):
+    from quantlab.data.adjust import adjusted_close
+
+    adj = adjusted_close(bars, acts).stack().rename("close").reset_index()
+    return bars.drop(columns="close").merge(adj, on=["date", "symbol"])
+
+
+def _ratio_run(p_bars, p_acts, s_bars):
+    return reconcile(Source("p", p_bars, p_acts), Source("s", s_bars, p_acts))
+
+
+def test_bad_prints_between_two_dividends_are_not_an_adjusted_series():
+    # Ten bad prints filling the segment between two dividends: levels [1.0, 0.97, 1.0].
+    bars, acts = _raw_series(events=((20, "dividend", 1.0), (30, "dividend", 1.0)))
+    bad = bars.copy()
+    bad.loc[bad.index[20:30], "close"] *= 0.97
+    r = _ratio_run(bars, acts, bad)
+    assert r.counts["adjusted_series"] == 0 and r.counts["scale_mismatch"] == 0
+    assert r.counts["price_mismatch"] == 10
+
+
+def test_bad_prints_before_the_first_dividend_are_not_an_adjusted_series():
+    # [0.97, 1.0] ends at 1 and is monotone, but a 3% step is not a 1% dividend.
+    bars, acts = _raw_series()
+    bad = bars.copy()
+    bad.loc[bad.index[:20], "close"] *= 0.97
+    r = _ratio_run(bars, acts, bad)
+    assert r.counts["adjusted_series"] == 0 and r.counts["price_mismatch"] == 20
+
+
+def test_a_one_session_segment_cannot_become_its_own_level():
+    # Ex-dates on consecutive sessions leave a 1-bar segment; a bad print there stays a
+    # price mismatch even though the rest of the series is genuinely adjusted.
+    bars, acts = _raw_series(events=((20, "dividend", 1.0), (21, "dividend", 1.0)))
+    adj = _adjusted_copy(bars, acts)
+    adj.loc[adj.index[20], "close"] *= 1.05
+    r = _ratio_run(bars, acts, adj)
+    assert r.counts["adjusted_series"] == 1
+    assert [x["date"] for x in r.samples["price_mismatch"]] == [str(bars["date"].iloc[20].date())]
+
+
+@pytest.mark.parametrize(
+    "events",
+    [
+        ((20, "dividend", 1.0), (40, "dividend", 1.0)),
+        ((20, "split", 2.0), (40, "dividend", 0.5)),
+        ((20, "split", 0.1), (40, "dividend", 1.0)),  # a reverse split steps the other way
+    ],
+)
+@pytest.mark.parametrize("adjusted_side", ["secondary", "primary"])
+def test_a_genuine_adjusted_series_is_still_explained(events, adjusted_side):
+    bars, acts = _raw_series(events=events)
+    adj = _adjusted_copy(bars, acts)
+    p, s = (bars, adj) if adjusted_side == "secondary" else (adj, bars)
+    r = _ratio_run(p, acts, s)
+    assert r.counts["adjusted_series"] == 1, r.counts
+    assert r.counts["price_mismatch"] == 0
+
+
+def test_a_split_only_adjusted_series_is_explained():
+    events = ((20, "split", 2.0), (40, "dividend", 1.0))
+    bars, acts = _raw_series(events=events)
+    adj = _adjusted_copy(bars, acts[acts["kind"] == "split"])
+    r = _ratio_run(bars, acts, adj)
+    assert r.counts["adjusted_series"] == 1 and r.counts["price_mismatch"] == 0
+
+
+def test_steps_in_mixed_orientations_are_not_explained():
+    # Adjusted for the first dividend on one side and the second on the other.
+    bars, acts = _raw_series()
+    first, second = acts.iloc[[0]], acts.iloc[[1]]
+    p = _adjusted_copy(bars, second)
+    s = _adjusted_copy(bars, first)
+    r = _ratio_run(p, acts, s)
+    assert r.counts["adjusted_series"] == 0 and r.counts["price_mismatch"] > 0
+
+
+def test_reports_are_written_on_a_filesystem_without_hard_links(mkt, tmp_path, monkeypatch):
+    import errno
+    import os
+
+    from quantlab.data.store import DatasetStore
+
+    store = DatasetStore(tmp_path)
+    dv = store.write("demo", mkt.bars, mkt.actions, mkt.provenance)
+
+    def no_link(*a, **k):
+        raise OSError(errno.EPERM, "Operation not permitted")
+
+    monkeypatch.setattr(os, "link", no_link)
+    store.write_report(dv, "reconciliation-x", {"status": "pass"})
+    assert store.load_reports(dv)["reconciliation-x"] == {"status": "pass"}
+    with pytest.raises(FileExistsError):
+        store.write_report(dv, "reconciliation-x", {"status": "fail"})
+    assert store.load_reports(dv)["reconciliation-x"] == {"status": "pass"}
+    leftovers = [x for x in dv.path.parent.parent.rglob(".tmp-*")]
+    assert leftovers == []
+
+
+def test_id_map_onto_an_id_used_only_by_actions_is_rejected():
+    from tests.conftest import make_bars
+
+    bars = make_bars({"A": [10.0] * 5})
+    d = sorted(bars["date"].unique())
+    hist = pd.DataFrame(
+        {"instrument_id": ["P1"], "symbol": ["A"], "valid_from": [d[0]], "valid_to": [None]}
+    )
+    s_hist = pd.DataFrame(
+        {
+            "instrument_id": ["V1", "V2"],
+            "symbol": ["A", "B"],
+            "valid_from": [d[0], d[0]],
+            "valid_to": [None, None],
+        }
+    )
+    # V2 has an action but no bars; mapping V1 onto V2 would merge two instruments.
+    s_acts = normalize_actions(
+        pd.DataFrame([{"symbol": "B", "ex_date": d[2], "kind": "dividend", "value": 0.1}])
+    )
+    p = Source("p", bars, normalize_actions(None), hist)
+    s = Source("s", bars, s_acts, s_hist)
+    with pytest.raises(ValueError, match="already used"):
+        reconcile(p, s, id_map={"V1": "V2"})
+
+
+def test_pairing_prefers_the_agreeing_amount_over_the_same_date():
+    from tests.conftest import make_bars
+
+    bars = make_bars({"A": [100.0] * 10})
+    d = pd.DatetimeIndex(sorted(bars["date"].unique()))
+
+    def rows(pairs):
+        return normalize_actions(
+            pd.DataFrame(
+                [{"symbol": "A", "ex_date": d[k], "kind": "dividend", "value": v} for k, v in pairs]
+            )
+        )
+
+    r = reconcile(
+        Source("p", bars, rows([(5, 0.50)])), Source("s", bars, rows([(5, 0.52), (7, 0.50)]))
+    )
+    assert [x["issue"] for x in r.samples["action_mismatch"]] == ["ex_date differs"]
+    assert r.counts["action_missing"] == 1
+    assert r.samples["action_missing"][0]["value_s"] == 0.52

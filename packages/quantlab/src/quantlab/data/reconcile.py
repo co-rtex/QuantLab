@@ -28,7 +28,9 @@ genuine -50% day produce the same prices (see the ``split_like_returns`` warning
   dividend-adjusted series compared with raw prices. It is reported once here instead of
   as many price mismatches. Reconcile raw (unadjusted) data.
 * ``scale_mismatch``: an instrument whose close ratio is one constant other than 1 (pence
-  vs pounds, another currency, a fixed offset). This is not an adjustment.
+  vs pounds, another currency, a fixed offset). This is not an adjustment. A series
+  adjusted only for an action outside the compared window also has one constant ratio,
+  so it is reported here.
   For both classes only bars on the ratio level are explained. A bar off it (a bad
   print inside an adjusted series) is still a ``price_mismatch``.
 * ``volume_mismatch``: volume differing by more than ``volume_rel``. Vendors legitimately
@@ -55,6 +57,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from dataclasses import asdict, dataclass, field
 from datetime import UTC, datetime
+from itertools import pairwise
 from typing import Any, Literal
 
 import numpy as np
@@ -70,7 +73,7 @@ from quantlab.data.identity import (
     symbols_as_of,
 )
 from quantlab.data.schema import normalize_actions, normalize_bars
-from quantlab.data.store import content_hash
+from quantlab.data.store import DatasetStore, DatasetVersion, content_hash
 
 Severity = Literal["fail", "warn"]
 CLASSES = (
@@ -102,6 +105,8 @@ class Tolerances:
       mismatches, at least this share of whose bars sit on a constant close ratio per
       segment between the primary's ex-dates, is explained as ``adjusted_series`` (two or
       more levels stepping at ex-dates) or ``scale_mismatch`` (one level other than 1).
+    * ``adjusted_min_segment``: bars a segment needs to define a level. Bars in shorter
+      segments stay price mismatches, so one bad session cannot become its own level.
     """
 
     close_rel: float = 0.0005
@@ -113,6 +118,7 @@ class Tolerances:
     listing_days: int = 0
     adjusted_min_bars: int = 5
     adjusted_share: float = 0.9
+    adjusted_min_segment: int = 3
     severity: Mapping[str, Severity] = field(
         default_factory=lambda: {
             "missing_bar": "fail",
@@ -137,6 +143,9 @@ class Source:
     secondary, resolve its tickers through the primary's history. ``version`` is the
     dataset version hash when the source is a stored version (computed when omitted).
     ``provider`` is the provider's ``describe()`` output, recorded in the report.
+    ``master`` is the instrument master: it is part of a stored version's hash, so a
+    version written with one only matches its data when it is passed here too. Build a
+    stored version's source with :meth:`from_version`, which loads every hashed part.
     """
 
     name: str
@@ -146,6 +155,29 @@ class Source:
     is_synthetic: bool = False
     version: str | None = None
     provider: Mapping[str, Any] | None = None
+    master: pd.DataFrame | None = None
+
+    @classmethod
+    def from_version(
+        cls,
+        store: DatasetStore,
+        dv: DatasetVersion,
+        name: str,
+        *,
+        is_synthetic: bool,
+        provider: Mapping[str, Any] | None = None,
+    ) -> Source:
+        """A stored version with everything its hash covers (history and master)."""
+        return cls(
+            name,
+            store.load_bars(dv),
+            store.load_actions(dv),
+            store.load_symbol_history(dv),
+            is_synthetic=is_synthetic,
+            version=dv.version,
+            provider=provider,
+            master=store.load_master(dv),
+        )
 
 
 @dataclass
@@ -189,7 +221,7 @@ def _half_tick(price: pd.Series) -> np.ndarray:
 
 
 def _describe(src: Source, bars: pd.DataFrame, actions: pd.DataFrame) -> dict[str, Any]:
-    computed = content_hash(bars, actions, src.history)
+    computed = content_hash(bars, actions, src.history, src.master)
     return {
         "name": src.name,
         "version": src.version or computed,
@@ -287,7 +319,10 @@ def reconcile(
             mapping = {str(k).upper(): str(v).upper() for k, v in id_map.items()}
             if len(set(mapping.values())) != len(mapping):
                 raise ValueError("id_map must be one-to-one (several ids map to one)")
-            native = set(sb["symbol"]) - set(mapping)
+            # Every id the secondary uses, not only bar ids: a mapping onto an id that only
+            # appears in its actions or history would merge two instruments too.
+            used = set(sb["symbol"]) | set(sa["symbol"]) | set(sh["instrument_id"])
+            native = used - set(mapping)
             taken = native & set(mapping.values())
             if taken:
                 raise ValueError(
@@ -454,12 +489,18 @@ def _ratio_classes(
     For an instrument with at least ``adjusted_min_bars`` price mismatches, the close
     ratio (secondary / primary) is taken per segment between the primary's ex-dates. A bar
     is *on level* when its ratio is within the ordinary close tolerance of its segment's
-    median. If at least ``adjusted_share`` of the bars are on level:
+    median. Only segments of at least ``adjusted_min_segment`` bars define a level; bars
+    in shorter segments are off level. If at least ``adjusted_share`` of the bars are on
+    level:
 
-    * two or more distinct levels that change at the ex-dates are an **adjusted series**
-      (one source split/dividend-adjusted, the other raw);
+    * two or more distinct levels are an **adjusted series** (one source split/dividend
+      back-adjusted, the other raw) only if the last level is 1 and every step between
+      levels is the factor the primary's actions at the ex-dates in between imply (see
+      :func:`_steps_follow_actions`). Levels that move any other way (a run of bad prints
+      between two dividends) are not explained;
     * a single level other than 1 is a **scale mismatch** (units, currency, or a constant
-      offset), not an adjustment.
+      offset), not an adjustment. A series adjusted for an action outside the compared
+      window also shows one constant level, so it is reported as a scale mismatch too.
 
     On-level bars of an explained instrument are no longer reported one by one; off-level
     bars stay price mismatches, so a bad print inside an adjusted series is never absorbed.
@@ -475,21 +516,34 @@ def _ratio_classes(
         band = np.maximum(tol.close_rel, floor / price.to_numpy())
         ex = np.sort(primary_actions.loc[primary_actions["symbol"] == iid, "ex_date"].unique())
         segment = np.searchsorted(ex, v["date"].to_numpy(), side="right")
-        levels = pd.Series(ratio).groupby(segment).median()
-        level_of = levels.reindex(segment).to_numpy()
-        on_level = np.abs(ratio / level_of - 1) <= band
+        sizes = pd.Series(segment).value_counts()
+        long = np.sort(sizes[sizes >= tol.adjusted_min_segment].index.to_numpy())
+        if not long.size:
+            continue
+        levels = pd.Series(ratio).groupby(segment).median().loc[long]
+        level_of = pd.Series(segment).map(levels).to_numpy(dtype=float)  # NaN: short
+        with np.errstate(invalid="ignore"):
+            on_level = np.abs(ratio / level_of - 1) <= band
         if on_level.mean() < tol.adjusted_share:
             continue
-        distinct = [float(levels.iloc[0])]
-        for x in levels.iloc[1:]:
-            if abs(x / distinct[-1] - 1) > tol.close_rel:
-                distinct.append(float(x))
+        # Runs of equal levels: (level, first segment, last segment).
+        runs = [[float(levels.iloc[0]), int(long[0]), int(long[0])]]
+        for seg, x in zip(long[1:], levels.iloc[1:], strict=True):
+            if abs(x / runs[-1][0] - 1) > tol.close_rel:
+                runs.append([float(x), int(seg), int(seg)])
+            else:
+                runs[-1][2] = int(seg)
+        distinct = [r[0] for r in runs]
         row = {
             "instrument_id": iid,
             "price_mismatches": int(counts[iid]),
             "ratios": [round(x, 8) for x in distinct],
         }
         if len(distinct) >= 2:
+            if abs(distinct[-1] - 1) > tol.close_rel or not _steps_follow_actions(
+                runs, ex, primary_actions[primary_actions["symbol"] == iid], v, tol
+            ):
+                continue
             adjusted.append({**row, "segments": int(levels.size)})
         elif abs(distinct[0] - 1) > tol.close_rel:
             scale.append(row)
@@ -503,6 +557,56 @@ def _ratio_classes(
         pd.DataFrame(scale, columns=cols),
         pd.Index(explained),
     )
+
+
+def _steps_follow_actions(
+    runs: list[list[Any]],
+    ex: np.ndarray,
+    actions: pd.DataFrame,
+    v: pd.DataFrame,
+    tol: Tolerances,
+) -> bool:
+    """Whether every step between ratio levels is an adjustment for the actions in between.
+
+    Back-adjusting for a split of ratio ``r`` divides earlier prices by ``r``. For a cash
+    dividend ``d`` vendors use either ``1 - d / c_prev`` (the close before the ex-date) or
+    the total-return form ``1 / (1 + d / c_ex)`` (the ex-date close), so both are
+    accepted. With the adjusted series as the secondary, the ratio rises by the factor
+    ``F`` across those ex-dates; with it as the primary, it falls by ``F``. A step must
+    equal ``F`` or the split-only factor (a vendor adjusting splits only) within
+    tolerance, with every step in the same orientation.
+    """
+    dates = v["date"].to_numpy()
+    closes = v["close_p"].to_numpy()
+    orientations = set()
+    for (lo, _, end), (hi, start, _) in pairwise(runs):
+        between = actions[actions["ex_date"].isin(ex[end:start])]
+        splits = between[between["kind"] == "split"]["value"].to_numpy(dtype=float)
+        divs = between[between["kind"] == "dividend"]
+        log_split = float(np.log(splits).sum()) if splits.size else 0.0
+        log_prev = log_ex = 0.0
+        for e, d in zip(divs["ex_date"], divs["value"], strict=True):
+            i = int(np.searchsorted(dates, np.datetime64(e), side="left"))
+            c_prev = closes[i - 1] if i >= 1 else np.nan
+            c_ex = closes[i] if i < len(closes) else np.nan
+            if not (np.isfinite(c_prev) and np.isfinite(c_ex)) or c_prev <= d or c_ex <= 0:
+                return False  # the factor is unknown, so the step cannot be explained
+            log_prev -= float(np.log1p(-d / c_prev))
+            log_ex += float(np.log1p(d / c_ex))
+        step = float(np.log(hi / lo))
+        candidates = {log_split + log_prev, log_split + log_ex, log_split}
+        near = max(2 * tol.close_rel, 0.05 * max(abs(x) for x in candidates))
+        for orient in (1, -1):
+            for expected in candidates:
+                if expected and abs(step - orient * expected) <= near:
+                    orientations.add(orient)
+                    break
+            else:
+                continue
+            break
+        else:
+            return False
+    return len(orientations) == 1
 
 
 def _compose(actions: pd.DataFrame) -> pd.DataFrame:
@@ -525,6 +629,12 @@ def _compare_actions(
     before a merely nearer date: two dividends recorded a session late pair with their own
     amounts, not crosswise. A pair on one date with agreeing values is a match; otherwise
     it is an ``action_mismatch``. Unpaired actions are ``action_missing``.
+
+    The ranking is a tie-break between diagnoses with the same number of issues. With a
+    primary 0.50 on day 5 and a secondary 0.52 on day 5 and 0.50 on day 7, the 0.50s
+    pair (``ex_date differs``) and the 0.52 is ``action_missing``, rather than a
+    same-date ``value differs`` plus a missing 0.50. Both are two issues; the report
+    names the agreeing amount as the late record.
     """
 
     def value_differs(kind: str, a: float, b: float) -> bool:

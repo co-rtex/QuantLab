@@ -158,9 +158,17 @@ the source of truth; tests in `tests/unit` pin each definition to a golden examp
     above $1, $0.00005 below)
   * `adjusted_series`: the close ratio sits on two or more levels that step at the
     primary's ex-dates, the signature of an adjusted series compared with raw prices.
-    Reported once per instrument; reconcile raw data.
+    Reported once per instrument; reconcile raw data. A level needs a segment of at
+    least 3 bars, the last level must be 1 (back-adjustment leaves the latest prices
+    raw), and every step must be the factor the primary's actions imply: the split
+    ratio, the dividend factor `1 - d/c_prev` or `1/(1 + d/c_ex)`, or the split-only
+    factor, all in one direction. Ten bad prints between two dividends are therefore
+    price mismatches, not a level. A one-session segment between consecutive ex-dates
+    defines no level, so its bars stay price mismatches even in a genuine adjusted
+    series.
   * `scale_mismatch`: one constant close ratio other than 1 (pence vs pounds, a
-    currency, a fixed offset), which is not an adjustment.
+    currency, a fixed offset), which is not an adjustment. A series adjusted only for
+    an action outside the compared window also has one constant ratio and lands here.
 
     For both ratio classes only bars on the ratio level are explained: a bar off it by
     more than the close tolerance (a bad print inside an adjusted series) is still a
@@ -169,7 +177,10 @@ the source of truth; tests in `tests/unit` pin each definition to a golden examp
   * `action_missing`, `action_mismatch`: dividends within $0.0001; split ratios within
     1e-6 relative; ex-dates up to 3 sessions apart are one mismatch, not two missing
     actions. Pairing prefers an agreeing amount over a nearer date, so two dividends
-    recorded a session late pair with their own amounts. Same-day actions of one kind are combined first, so regular plus special
+    recorded a session late pair with their own amounts. When two diagnoses have the
+    same number of issues this can move the blame: primary 0.50 on day 5 against
+    secondary 0.52 on day 5 and 0.50 on day 7 reports the 0.50s as `ex_date differs`
+    and the 0.52 as missing. Same-day actions of one kind are combined first, so regular plus special
     equals their total.
   * `listing_mismatch`: first or last bar dates differ (a stale secondary shows here)
   * `identity_mismatch`: an instrument in one source only, the two histories naming
@@ -179,7 +190,9 @@ the source of truth; tests in `tests/unit` pin each definition to a golden examp
   Tolerances and each class's severity are configurable. By default volume and listing
   differences warn and the rest fail, because vendors legitimately differ on
   consolidated vs primary-exchange volume. A report records its inputs (names, content
-  hashes, whether a supplied version hash matches the data compared, provider
+  hashes, whether a supplied version hash matches the data compared (a stored version's
+  hash covers its symbol history and instrument master, so build its side with
+  `Source.from_version`), provider
   descriptions, synthetic flags, coverage) and a UTC timestamp. Duplicate bars in either
   source are rejected rather than compared. Two known limits of a history-less secondary:
   * A vendor that maps a reused ticker to the *old* security shows up as price and volume
