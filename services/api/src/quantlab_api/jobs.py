@@ -155,6 +155,7 @@ def lock_idempotency_key(db: Session, workspace_id: uuid.UUID, key: str | None) 
 
 # How long a request waits for an earlier request with the same Idempotency-Key.
 IDEMPOTENCY_WAIT = "15s"
+LOCK_NOT_AVAILABLE = "55P03"  # PostgreSQL SQLSTATE raised when lock_timeout expires
 
 
 def advisory_lock(db: Session, name: str, *, timeout: str | None = None) -> None:
@@ -173,7 +174,15 @@ def advisory_lock(db: Session, name: str, *, timeout: str | None = None) -> None
     try:
         db.execute(text("SELECT pg_advisory_xact_lock(hashtextextended(:k, 0))"), {"k": name})
     except OperationalError as exc:
-        db.rollback()
+        # Only lock_timeout (55P03, lock_not_available) means "someone holds the key".
+        # A cancelled statement, a shutdown or a dropped connection is a real error.
+        if getattr(exc.orig, "sqlstate", None) != LOCK_NOT_AVAILABLE:
+            raise
+        try:
+            db.rollback()  # ends the aborted transaction, and with it the SET LOCAL
+        except Exception as rollback_exc:
+            # The 409 below is still right; the session is discarded with the request.
+            log.warning("rollback_after_lock_timeout_failed", error=type(rollback_exc).__name__)
         raise ApiError(
             409, "request_in_progress", "An identical request is still in progress; retry"
         ) from exc

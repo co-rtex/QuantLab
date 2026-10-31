@@ -156,8 +156,15 @@ def create_experiment(
         return db.get(Experiment, uuid.UUID(prior_exp)) if prior_exp else None
 
     def legacy_match(job: Job) -> bool:  # jobs from before request fingerprints
+        # Without a stored fingerprint, compare what the old one left out too: the parent
+        # (create vs reproduce of which run) and who sent it.
         prev = previous(job)
-        return prev is not None and prev.input_hash == exp.input_hash
+        return (
+            prev is not None
+            and prev.input_hash == exp.input_hash
+            and prev.parent_id == parent_id
+            and prev.created_by == user.id
+        )
 
     lock_idempotency_key(db, workspace_id, idempotency_key)
     prior = replayed_job(db, workspace_id, idempotency_key, fingerprint, legacy_match)

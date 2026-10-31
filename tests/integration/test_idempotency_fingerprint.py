@@ -188,3 +188,78 @@ def test_a_waiter_gives_up_instead_of_holding_a_connection(client, seeded, monke
         holder.close()
     url, body = _experiment(seeded)
     assert client.post(url, headers=_key(seeded, "held"), json=body).status_code == 202
+
+
+def test_lock_timeout_is_restored_after_the_lock_and_after_a_timeout():
+    from sqlalchemy import text
+
+    from quantlab_api import jobs
+    from quantlab_api.db import SessionLocal
+    from quantlab_api.errors import ApiError
+
+    with SessionLocal() as db:
+        default = db.scalar(text("SHOW lock_timeout"))
+        jobs.advisory_lock(db, "lt-free", timeout="2s")
+        assert db.scalar(text("SHOW lock_timeout")) == default
+        db.rollback()
+    holder = SessionLocal()
+    try:
+        holder.execute(text("SELECT pg_advisory_xact_lock(hashtextextended('lt-held', 0))"))
+        with SessionLocal() as db:
+            with pytest.raises(ApiError) as caught:
+                jobs.advisory_lock(db, "lt-held", timeout="100ms")
+            assert caught.value.status == 409
+            assert db.scalar(text("SHOW lock_timeout")) == default
+    finally:
+        holder.rollback()
+        holder.close()
+
+
+def test_other_database_errors_while_waiting_are_not_turned_into_a_409(monkeypatch):
+    """Only lock_timeout (55P03) means "an identical request holds the key". A cancelled
+    statement, a shutdown or a dropped connection must surface as the error it is."""
+    from sqlalchemy.exc import OperationalError
+
+    from quantlab_api import jobs
+    from quantlab_api.db import SessionLocal
+
+    class Cancelled(Exception):
+        sqlstate = "57014"  # query_canceled
+
+    with SessionLocal() as db:
+        real = db.execute
+
+        def execute(statement: Any, *args: Any, **kwargs: Any) -> Any:
+            if "pg_advisory_xact_lock" in str(statement):
+                raise OperationalError(str(statement), {}, Cancelled())
+            return real(statement, *args, **kwargs)
+
+        monkeypatch.setattr(db, "execute", execute)
+        with pytest.raises(OperationalError):
+            jobs.advisory_lock(db, "cancelled", timeout="2s")
+
+
+@pytest.mark.parametrize("change", ["reproduce", "other_user"])
+def test_legacy_jobs_do_not_replay_across_endpoints_or_users(client, seeded, change):
+    """Jobs from before fingerprints compare the parent and the sender as well."""
+    from quantlab_api.db import SessionLocal
+    from quantlab_api.models import Job
+
+    url, body = _experiment(seeded)
+    first = client.post(url, headers=_key(seeded, "old"), json=body)
+    assert first.status_code == 202
+    with SessionLocal() as db:
+        job = db.scalar(select(Job).where(Job.idempotency_key == "old"))
+        assert job is not None
+        job.payload = {k: v for k, v in job.payload.items() if k != "request_fingerprint"}
+        db.commit()
+    if change == "reproduce":
+        exp = first.json()["experiment"]["id"]
+        r = client.post(f"/api/v1/experiments/{exp}/reproduce", headers=_key(seeded, "old"))
+    else:
+        other = register(client, "other@example.com")
+        join_workspace(
+            client, seeded["headers"], seeded["ws"], other, "other@example.com", "editor"
+        )
+        r = client.post(url, headers={**other, "Idempotency-Key": "old"}, json=body)
+    assert r.status_code == 409, r.text
