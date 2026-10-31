@@ -200,7 +200,9 @@ def test_registry_cleanup_does_not_run_a_failure_callback(tmp_path: Path) -> Non
             "os.getcwd", on_failure=Callback(mark), meta={"marker": str(marker)}
         )
         job.set_status(JobStatus.STARTED)
-        conn.zadd(queue.started_job_registry.key, {job.id: 1})  # expired long ago
+        # Keyed as RQ 3's worker keys it, "<job id>:<execution id>" (a bare id is a legacy
+        # form RQ warns about, #137); the score says it expired long ago.
+        conn.zadd(queue.started_job_registry.key, {f"{job.id}:lost-execution": 1})
 
     ours = Queue("attack", connection=conn, **RQ_OPTIONS)  # type: ignore[arg-type]
     abandoned(ours)
