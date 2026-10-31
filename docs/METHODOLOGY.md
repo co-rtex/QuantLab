@@ -109,9 +109,42 @@ the source of truth; tests in `tests/unit` pin each definition to a golden examp
     responsibility (#11).
   * The instrument master (including delisting returns) is not yet part of the content
     hash. It will be once delisting returns affect backtests (#9 part B).
-  *Not yet wired:* API dataset and backtest jobs still key by ticker until the catalog
-  migration (#9, slot M2) lands. Universes must then be resolved as of the backtest start,
-  not as of today, or the universe becomes survivor-only.
+  *In the API jobs* (engine 1.3.0):
+  * Dataset versions store their symbol history and instrument master. Synthetic versions
+    always do; CSV uploads have none and use the legacy map.
+  * Backtest, research and ML jobs key data by instrument and pass the master to the
+    engine and to ML.
+  * **Universe rule:** the tickers in an experiment's `universe` and `benchmark` are
+    resolved to instruments **as of the backtest start**, never as of today. A start
+    before the data (a holiday, say) means the first session, and with no start set the
+    first session is used too.
+    * A security renamed later stays in under its later ticker.
+    * A ticker reused later by another issuer does not pull that issuer in.
+    * A ticker that has never named anything by the start (a later listing) means the
+      first instrument to take it within the backtest window, but only if it is that
+      instrument's first-ever ticker. It joins when it lists, as in an unkeyed
+      dataset. A security *renamed into* the ticker later was trading under another
+      name at the start, so selecting it by its later name would be a today's-ticker
+      bias; that ticker fails the job.
+    * A ticker that named another security before the start but names nothing on it
+      (retired, or in a gap before a reuse) fails the job instead of being guessed.
+
+    All tickers each resolved instrument ever had are loaded, so its history is
+    complete. The stored `meta.universe` and `meta.benchmark` are labelled with the
+    tickers as named at the start, with `universe_instrument_ids` and
+    `benchmark_instrument_id` beside them.
+  * Results stay keyed by instrument for simulation, fingerprints and stored metrics.
+    The trades, positions, target-weight, rejection and ML-prediction frames written for
+    the API show the ticker valid on each row's date in `symbol`, with the permanent id
+    in an added `instrument_id` column. Rows after a delisting show the last ticker.
+    Final holdings and P&L contributions are labelled as of the last session, never with
+    a later ticker, and `[id]` disambiguates two instruments that show the same ticker.
+  * ML `exclude` names tickers (the benchmark index by default). On keyed data every
+    instrument that ever held an excluded ticker is excluded.
+  * The catalog's `delisted` flag is per instrument: a renamed security's old ticker is
+    not marked delisted.
+  * The catalog records each ticker's instrument and delisting facts, and
+    `InstrumentOut` exposes them as optional fields.
 * **Reconciliation** (`quantlab.data.reconcile`) compares a dataset with an independent
   second source, after keying both by instrument. A secondary with its own symbol history
   is keyed by it (`id_map` translates its id space, one-to-one only) and the two

@@ -231,9 +231,19 @@ def is_legacy(history: pd.DataFrame) -> bool:
 
 
 def _resolve(
-    history: pd.DataFrame, by: str, target: str, keys: pd.Series, dates: pd.Series
+    history: pd.DataFrame,
+    by: str,
+    target: str,
+    keys: pd.Series,
+    dates: pd.Series,
+    *,
+    open_only: bool = True,
 ) -> pd.Series:
-    """For each (key, date), the ``target`` of the interval of ``by`` = key covering date."""
+    """For each (key, date), the ``target`` of the interval of ``by`` = key covering date.
+
+    With ``open_only=False`` the latest interval that *started* on or before the date is
+    used even if it has ended (the last ticker a delisted security had), for display only.
+    """
     # merge_asof needs identical key dtypes on both sides.
     left = (
         pd.DataFrame(
@@ -253,7 +263,9 @@ def _resolve(
     # Latest interval of this key starting on or before the date; intervals of one key
     # never overlap, so it is the only candidate, and it must still be open on the date.
     m = pd.merge_asof(left, right, left_on="_d", right_on="valid_from", by=by, direction="backward")
-    live = m["valid_from"].notna() & (m["valid_to"].isna() | (m["_d"] < m["valid_to"]))
+    live = m["valid_from"].notna()
+    if open_only:
+        live &= m["valid_to"].isna() | (m["_d"] < m["valid_to"])
     out = pd.Series(np.where(live, m[target], None), index=m["_pos"].to_numpy(), dtype=object)
     return out.sort_index().set_axis(keys.index)
 
@@ -320,3 +332,96 @@ def key_by_instrument(
         normalize_bars(keyed),
         normalize_actions(actions.assign(symbol=act_ids.astype(str))),
     )
+
+
+def resolve_universe(
+    history: pd.DataFrame,
+    tickers: list[str],
+    as_of: pd.Timestamp | str,
+    until: pd.Timestamp | str | None = None,
+) -> tuple[list[str], list[str]]:
+    """Instrument ids of ``tickers`` for a backtest starting ``as_of``, and the tickers that
+    name no instrument in the window.
+
+    A ticker means the instrument it names **on the start date**, never "today": a
+    security renamed later stays in under its later ticker, and an issuer that takes over
+    the ticker later is not pulled in. A ticker that has never named anything by the
+    start (a later listing) means the first instrument to take it within the window (up to
+    ``until``), which then simply joins when it lists, as in an unkeyed dataset, but only
+    if that is the instrument's first-ever ticker: a security renamed into the ticker later
+    was trading under another name at the start and is not selected by its later name. A
+    ticker that named another security before the start but nothing on it (retired, or in
+    a gap before a reuse) is unresolved: its later holder would be a reuse.
+    """
+    when = pd.Timestamp(as_of)
+    syms = pd.Series([str(t).upper().strip() for t in tickers])
+    ids = resolve_ids(history, syms, pd.Series([when] * len(syms)))
+    for k in np.flatnonzero(ids.isna().to_numpy()):
+        uses = history[history["symbol"] == syms.iloc[k]]
+        if (uses["valid_from"] <= when).any():
+            continue  # it named another security before the start: a later holder is a reuse
+        later = uses[uses["valid_from"] > when]
+        if until is not None:
+            later = later[later["valid_from"] <= pd.Timestamp(until)]
+        if not len(later):
+            continue
+        first = later.sort_values("valid_from").iloc[0]
+        # Only a genuine new listing: the ticker must be the instrument's first-ever ticker.
+        # A security renamed *into* it was trading under another ticker at the start, and
+        # taking it from the start would select it by its later name (today's-ticker bias).
+        own = history[history["instrument_id"] == first["instrument_id"]]
+        if own["valid_from"].min() == first["valid_from"]:
+            ids.iloc[k] = first["instrument_id"]
+    resolved = sorted({str(i) for i in ids.dropna()})
+    unresolved = sorted(syms[ids.isna().to_numpy()].tolist())
+    return resolved, unresolved
+
+
+def label_ids(history: pd.DataFrame, ids: list[str], when: pd.Timestamp | str) -> dict[str, str]:
+    """A display ticker for each instrument as of ``when``, never a later one if avoidable.
+
+    The ticker valid on ``when``; else the last one it had before (it has delisted); else
+    its first ticker (it lists later); else the id itself.
+    """
+    if not ids:
+        return {}
+    keys = pd.Series([str(i) for i in ids])
+    dates = pd.Series([pd.Timestamp(when)] * len(keys))
+    valid = symbols_as_of(history, keys, dates)
+    last = _resolve(history, "instrument_id", "symbol", keys, dates, open_only=False)
+    first = history.sort_values("valid_from").groupby("instrument_id")["symbol"].first()
+    out = {}
+    for k, v, lt in zip(keys, valid, last, strict=True):
+        out[k] = str(v if v is not None else lt if lt is not None else first.get(k, k))
+    return out
+
+
+def tickers_of(history: pd.DataFrame, ids: list[str]) -> list[str]:
+    """Every ticker the instruments ever traded under (to load their full history)."""
+    wanted = {str(i).upper() for i in ids}
+    return sorted(set(history.loc[history["instrument_id"].isin(wanted), "symbol"]))
+
+
+def display_frame(
+    frame: pd.DataFrame, history: pd.DataFrame, date_col: str = "date"
+) -> pd.DataFrame:
+    """Turn an id-keyed result frame back into tickers for display.
+
+    ``symbol`` becomes the ticker valid on each row's date and the permanent id moves to
+    an ``instrument_id`` column. Under the legacy map both are the same value. A row dated
+    after the instrument's last ticker ended (a delisting fill, say) shows that last ticker;
+    one with no ticker at all keeps the id.
+    """
+    if "symbol" not in frame.columns:
+        return frame
+    out = frame.copy()
+    ids = out["symbol"].astype(str)
+    if len(out) and date_col in out.columns:
+        when = pd.to_datetime(out[date_col])
+        shown = symbols_as_of(history, ids, when)
+        # After a delisting no ticker is valid any more: show the last one it had.
+        last = _resolve(history, "instrument_id", "symbol", ids, when, open_only=False)
+        shown = shown.where(shown.notna(), last)
+        out["symbol"] = shown.where(shown.notna(), ids).astype(str).to_numpy()
+    out.insert(out.columns.get_loc("symbol") + 1, "instrument_id", ids.to_numpy())
+    return out

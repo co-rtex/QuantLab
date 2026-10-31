@@ -39,6 +39,7 @@ def run_validation_suite(
     params: dict[str, Any],
     config: BacktestConfig,
     *,
+    instruments: pd.DataFrame | None = None,
     on_progress: Callable[[float, str], None] | None = None,
     seed: int = 0,
 ) -> dict[str, Any]:
@@ -51,7 +52,12 @@ def run_validation_suite(
 
     stage(0)(0.0, "baseline backtest")
     base = run_backtest(
-        bars, actions, create_strategy(strategy_key, params), config, record_positions=False
+        bars,
+        actions,
+        create_strategy(strategy_key, params),
+        config,
+        record_positions=False,
+        instruments=instruments,
     )
     r = simple_returns(base.equity["equity"])
     b = simple_returns(base.benchmark) if base.benchmark is not None else None
@@ -60,9 +66,11 @@ def run_validation_suite(
         "regimes": regime_analysis(r, b) if b is not None else [],
     }
     stage(1)(0.0, "look-ahead check")
-    out["leakage"] = leakage_check(bars, actions, strategy_key, params, config, seed=seed)
+    out["leakage"] = leakage_check(
+        bars, actions, strategy_key, params, config, seed=seed, instruments=instruments
+    )
     out["sensitivity"] = sensitivity(
-        bars, actions, strategy_key, params, config, on_progress=stage(2)
+        bars, actions, strategy_key, params, config, on_progress=stage(2), instruments=instruments
     )
     trials = out["sensitivity"].pop("trial_sharpes_per_period")
     # Deflate the selected run on the returns that produced its trial Sharpe: the invested
@@ -73,7 +81,7 @@ def run_validation_suite(
         risk_free_rate=config.risk_free_rate,
     )
     out["cost"] = cost_sensitivity(
-        bars, actions, strategy_key, params, config, on_progress=stage(3)
+        bars, actions, strategy_key, params, config, on_progress=stage(3), instruments=instruments
     )
     train, test = walk_forward_windows(len(base.equity))
     wf = walk_forward(
@@ -85,6 +93,7 @@ def run_validation_suite(
         train_sessions=train,
         test_sessions=test,
         on_progress=stage(4),
+        instruments=instruments,
     )
     wf.pop("oos_returns", None)
     out["walk_forward"] = wf

@@ -47,7 +47,7 @@ from quantlab.data.schema import wide
 from quantlab.portfolio.ledger import Ledger, LedgerError
 from quantlab.strategies.base import MarketView, Strategy
 
-ENGINE_VERSION = "1.2.0"
+ENGINE_VERSION = "1.3.0"
 
 
 class BacktestConfig(BaseModel):

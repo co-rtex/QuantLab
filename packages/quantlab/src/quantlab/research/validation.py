@@ -125,6 +125,7 @@ def walk_forward(
     base_params: dict[str, Any],
     config: BacktestConfig,
     *,
+    instruments: pd.DataFrame | None = None,
     grid: dict[str, list[Any]] | None = None,
     train_sessions: int = 504,
     test_sessions: int = 252,
@@ -171,6 +172,7 @@ def walk_forward(
                     create_strategy(strategy_key, params),
                     cfg,
                     record_positions=False,
+                    instruments=instruments,
                 )
                 s = _sharpe(invested_equity(res.equity), config.risk_free_rate)
             except BacktestError:
@@ -191,6 +193,7 @@ def walk_forward(
                 create_strategy(strategy_key, best[1]),
                 cfg,
                 record_positions=False,
+                instruments=instruments,
             )
         except BacktestError as exc:
             rows.append(
@@ -287,6 +290,7 @@ def sensitivity(
     base_params: dict[str, Any],
     config: BacktestConfig,
     *,
+    instruments: pd.DataFrame | None = None,
     grid: dict[str, list[Any]] | None = None,
     on_progress: Progress | None = None,
 ) -> dict[str, Any]:
@@ -297,7 +301,12 @@ def sensitivity(
     per_period: list[float] = []
     for i, params in enumerate(combos):
         res = run_backtest(
-            bars, actions, create_strategy(strategy_key, params), config, record_positions=False
+            bars,
+            actions,
+            create_strategy(strategy_key, params),
+            config,
+            record_positions=False,
+            instruments=instruments,
         )
         inv = invested_equity(res.equity)
         bench = res.benchmark.reindex(inv.index) if res.benchmark is not None else None
@@ -344,6 +353,7 @@ def cost_sensitivity(
     params: dict[str, Any],
     config: BacktestConfig,
     *,
+    instruments: pd.DataFrame | None = None,
     multipliers: tuple[float, ...] = (0.0, 0.5, 1.0, 2.0, 4.0, 8.0),
     on_progress: Progress | None = None,
 ) -> dict[str, Any]:
@@ -353,7 +363,12 @@ def cost_sensitivity(
     for i, k in enumerate(multipliers):
         cfg = config.with_costs(k)
         res = run_backtest(
-            bars, actions, create_strategy(strategy_key, params), cfg, record_positions=False
+            bars,
+            actions,
+            create_strategy(strategy_key, params),
+            cfg,
+            record_positions=False,
+            instruments=instruments,
         )
         m = compute_performance(
             res.equity["equity"], res.benchmark, risk_free_rate=config.risk_free_rate
@@ -399,6 +414,7 @@ def leakage_check(
     params: dict[str, Any],
     config: BacktestConfig,
     *,
+    instruments: pd.DataFrame | None = None,
     samples: int = 4,
     seed: int = 0,
 ) -> dict[str, Any]:
@@ -416,7 +432,12 @@ def leakage_check(
         else config
     )
     full = run_backtest(
-        bars, actions, create_strategy(strategy_key, params), cfg, record_positions=False
+        bars,
+        actions,
+        create_strategy(strategy_key, params),
+        cfg,
+        record_positions=False,
+        instruments=instruments,
     )
     decisions = full.weights_target
     dates = (
@@ -442,6 +463,7 @@ def leakage_check(
             create_strategy(strategy_key, params),
             cfg.model_copy(update={"end": nxt.date()}),
             record_positions=False,
+            instruments=instruments,
         )
         a = decisions[decisions["date"] <= d].reset_index(drop=True)
         b = trunc.weights_target[trunc.weights_target["date"] <= d].reset_index(drop=True)
