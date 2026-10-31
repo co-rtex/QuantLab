@@ -747,3 +747,95 @@ def test_genuine_adjusted_series_the_first_rule_missed(events, adjusted_side):
     r = _ratio_run(p, acts, s)
     assert r.counts["adjusted_series"] == 1, r.counts
     assert r.counts["scale_mismatch"] == 0
+
+
+# ----------------------------------------- #86: a split after the window, a dividend in it
+def _adjusted_through_a_later_split():
+    """A vendor back-adjusted through a split after the compared window (synthetic)."""
+    events = ((20, "dividend", 1.0), (70, "split", 2.0))
+    bars, acts = _raw_series(n=80, events=events)
+    adj = _adjusted_copy(bars, acts)
+    cut = sorted(bars["date"].unique())[60]
+    return bars[bars["date"] < cut], adj[adj["date"] < cut], acts
+
+
+@pytest.mark.parametrize("adjusted_side", ["secondary", "primary"])
+def test_a_split_after_the_window_with_a_dividend_inside_is_an_adjusted_series(adjusted_side):
+    raw, adj, acts = _adjusted_through_a_later_split()
+    p, s = (raw, adj) if adjusted_side == "secondary" else (adj, raw)
+    r = _ratio_run(p, acts, s)  # the primary carries the later split
+    assert r.counts["adjusted_series"] == 1, r.counts  # was 0 and 40 price mismatches
+    assert r.counts["price_mismatch"] == 0
+
+
+@pytest.mark.parametrize("adjusted_side", ["secondary", "primary"])
+def test_without_the_later_split_it_is_a_scale_mismatch(adjusted_side):
+    raw, adj, acts = _adjusted_through_a_later_split()
+    p, s = (raw, adj) if adjusted_side == "secondary" else (adj, raw)
+    in_window = acts[acts["kind"] == "dividend"]
+    r = _ratio_run(p, in_window, s)
+    assert r.counts["scale_mismatch"] == 1, r.counts
+    assert r.counts["adjusted_series"] == 0 and r.counts["price_mismatch"] == 0
+    assert r.samples["scale_mismatch"][0]["ratios"][-1] == pytest.approx(
+        0.5 if adjusted_side == "secondary" else 2.0, rel=1e-6
+    )
+
+
+def test_a_scaled_tail_is_never_called_an_adjusted_series():
+    # Both raw, the bars after the dividend 1% low: in the window this looks exactly like
+    # an adjustment through a later action the primary lacks, so it is a scale mismatch,
+    # never an adjusted series (and never silently dropped).
+    bars, acts = _raw_series(events=((20, "dividend", 1.0),))
+    s = bars.copy()
+    s.loc[s.index[20:], "close"] *= 0.99
+    r = _ratio_run(bars, acts, s)
+    assert r.counts["adjusted_series"] == 0
+    assert r.counts["scale_mismatch"] + r.counts["price_mismatch"] >= 1
+
+
+def test_a_failed_write_without_hard_links_leaves_no_partial_report(mkt, tmp_path, monkeypatch):
+    import builtins
+    import errno
+    import os
+
+    from quantlab.data import store as store_mod
+    from quantlab.data.store import DatasetStore
+
+    store = DatasetStore(tmp_path)
+    dv = store.write("demo", mkt.bars, mkt.actions, mkt.provenance)
+
+    def no_link(*a, **k):
+        raise OSError(errno.EPERM, "Operation not permitted")
+
+    class Full:
+        """Accepts the write and fails at close, as a buffered write to a full disk does."""
+
+        def __init__(self, fh):
+            self.fh = fh
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            self.fh.close()
+            raise OSError(errno.ENOSPC, "No space left on device")
+
+        def write(self, text):
+            self.fh.write(text[:10])  # part of it reaches the disk
+            self.fh.flush()
+
+    real_open = builtins.open
+
+    def full_open(path, mode="r", *a, **k):
+        fh = real_open(path, mode, *a, **k)
+        return Full(fh) if mode == "x" else fh
+
+    monkeypatch.setattr(os, "link", no_link)
+    monkeypatch.setattr(store_mod, "open", full_open, raising=False)
+    with pytest.raises(OSError, match="No space"):
+        store.write_report(dv, "reconciliation-x", {"status": "pass"})
+    monkeypatch.setattr(store_mod, "open", real_open, raising=False)
+    assert "reconciliation-x" not in store.load_reports(dv)  # no partial file left
+    store.write_report(dv, "reconciliation-x", {"status": "pass"})  # the rerun works
+    assert store.load_reports(dv)["reconciliation-x"] == {"status": "pass"}
+    assert not list(dv.path.parent.parent.rglob(".tmp-*"))
