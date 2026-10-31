@@ -1,6 +1,6 @@
 # Status (authoritative handoff)
 
-_Last updated: 2026-10-31 (lead integration cycle 2: 62 PRs merged before this update, per `gh pr list --state merged`; main `f7e399f`)_
+_Last updated: 2026-10-31 (lead integration cycle 2: 75 PRs merged before this update, per `gh pr list --state merged`; main `2cafc62`)_
 
 ## Where things stand
 All roadmap phases 0–10 are implemented. An independent audit on 2026-10-30
@@ -125,10 +125,23 @@ leases and migration slots: [docs/COORDINATION.md](docs/COORDINATION.md).
   * #104 no stale data across resource changes (#23 slice 2). #105 workspace rename,
     delete and member removal (#23 slice 3a).
   * #106 an authoritative `is_synthetic` on result rows (#102).
+  * #107 cancel jobs. #109 labels from the row field. #111 saved strategies. #112 session E2E.
+    #114 CSV import. **#23 complete.**
+  * #110 benchmark harness: variance, cold mode, load metadata; golden tests moved (#24,
+    no figures published).
+  * #113 AWS Terraform, validated and **never applied** (#19). Redis AUTH uses an ephemeral
+    write-only token. **The Caddyfile is NOT validated.**
+  * #116 (lead) the reaper mounts the data volume; it was sweeping an empty `/data`.
+  * #119 RDS CA bundle (pinned checksum) for `sslmode=verify-full`.
+  * #121 cross-feature point-in-time sweep (#118). It found **#120**: a short halt dropped a
+    security from the ML panel for up to 252 sessions. The fix is #125, in review.
+  * **#122 (P1 security, #115): no pickle in the job queue.** An allowlisted callable only,
+    no callbacks or webhooks, and Redis AUTH.
+  * #124 default start date on short datasets.
 * Every merge had an independent read-only lead review: no blockers. Should-fix items are
   tracked in #8, #51, #52 and #55 (Agent 2), #39 (gate), and #41, #50 and #54 (Agent 3).
 
-## Last verified (2026-10-31, main `f7e399f`)
+## Last verified (2026-10-31, main `2cafc62`)
 Each merge was verified on a trial merge with current main, with pytest output written to a
 file rather than piped:
 * #28, #32, #36, #29, #30, #31: tree identical to main afterwards; 314 passed;
@@ -172,6 +185,9 @@ file rather than piped:
   intermittent validation-panel race**, not only contention; it's reassigned to Agent 2.
 * #97: 892 passed, E2E 21/21. #99: E2E 23/23 (plus 5 consecutive full runs by Agent 2).
   #100: E2E 26/26.
+* #122 + #114: an unauthenticated Redis ping gets NOAUTH; **950 passed**, E2E 40/40.
+  #119 + #121: 933 passed plus the intended #120 xfail, E2E 37/37 on the rebuilt image.
+  #124: E2E 41/41 (byte-identical to main `2cafc62`).
 * #101 + #103 + #104: 899 passed, E2E 27/27. #105 + #106 (byte-identical to main
   `f7e399f`): **906 passed, E2E 30/30**.
 
@@ -185,22 +201,21 @@ E2E failures this cycle were resource starvation, not regressions:
 Full-stack runs are now serialized machine-wide (`make e2e-serial`).
 
 ## Next steps (issues carry owners and acceptance criteria)
-1. **Agent 2:**
-   * #107 (cancel workflows; two small fixes);
-   * the rest of #23 (saved strategies, CSV import, E2E for failure, session expiry and
-     logout);
-   * switch `useSynthetic` to the row field from #106;
-   * then #19 Terraform (validated, never applied; the edge must preserve client IPs).
-2. **Agent 3:** #24 harness and methodology (no published figures until a quiet window).
+1. **Agent 2:** the #122 follow-up (pinned registry and scheduler tests), then #123 (retry
+   not-before, migration M4).
+2. **Agent 3:** #125 (#120 ML own-bar windows; two fixes: exclude untraded windows and cap
+   staleness), then #117 (JWT secret only in the API).
 3. **Lead:** integrate.
 4. **Blocked on the user:**
-   * #39 (a host and a second machine);
+   * #39 (a host, a second machine, and Caddyfile validation, since the caddy download was
+     denied);
    * #17 (Actions minutes);
    * #11 and #12 live (vendor, licence and key);
    * #15 hosted eval (LLM key);
    * #20 (load host);
-   * #55 option A (product decision);
-   * a quiet window for #24 figures.
+   * #55 option A;
+   * a quiet window for #24 figures;
+   * any `terraform apply` (cloud account, cost).
 
 ## Blockers
 No LLM API key, market-data API key or cloud credentials (docs/BLOCKERS.md).
