@@ -1,6 +1,6 @@
 # Status (authoritative handoff)
 
-_Last updated: 2026-10-31 (lead integration cycle 2: 84 PRs merged before this update, per `gh pr list --state merged`; main `b85e3c0`)_
+_Last updated: 2026-10-31 (lead integration cycle 2: 90 PRs merged before this update, per `gh pr list --state merged`; main `1bc2da5`)_
 
 ## Where things stand
 All roadmap phases 0–10 are implemented. An independent audit on 2026-10-30
@@ -147,10 +147,23 @@ leases and migration slots: [docs/COORDINATION.md](docs/COORDINATION.md).
   * #132 every job lease, heartbeat, backoff, claim, finish and creation time comes from the
     database clock, so hosts with skewed clocks can neither claim a retry early nor see a
     live lease as expired (#130). Only the queue-wait metric still uses a host clock.
+  * #135 a route-wide authorization matrix (#133): all 70 routes classified, failing on an
+    unclassified route, mount or websocket; unauthenticated, outsider, below-role,
+    cross-workspace-role, path-swap and body-swap checks, plus an error-body leak check.
+    Ten deliberately broken versions of the authorization checks were each caught. No
+    route failed it.
+  * #136 job tests set deadlines in database time.
+  * #138 dependency audit (#137, `docs/SECURITY_DEPENDENCIES.md`): no known vulnerabilities
+    in any runtime dependency (pip-audit 2.10.1 on PyPI and OSV, npm audit). One dev-only
+    lint advisory accepted. The production JWT secret floor (32) is pinned by a test.
+  * #139 (lead) CI's runtime dependency audits now block; dev tools only warn. No
+    scheduled run (Actions minutes, #17).
+  * #140 runbook refreshed for Redis AUTH, the API-only secrets, retry backoff and
+    database-time job deadlines.
 * Every merge had an independent read-only lead review: no blockers. Should-fix items are
   tracked in #8, #51, #52 and #55 (Agent 2), #39 (gate), and #41, #50 and #54 (Agent 3).
 
-## Last verified (2026-10-31, main `b85e3c0`)
+## Last verified (2026-10-31, main `1bc2da5`)
 Each merge was verified on a trial merge with current main, with pytest output written to a
 file rather than piped:
 * #28, #32, #36, #29, #30, #31: tree identical to main afterwards; 314 passed;
@@ -204,6 +217,10 @@ file rather than piped:
   `alembic check` no drift; **E2E 41/41**.
 * main@f8830ab + #132 (byte-identical to main `b85e3c0`): **970 passed, 1 xfailed**;
   `alembic check` no drift; **E2E 41/41**.
+* #136: 970 passed. #135: **1213 passed**, the matrix alone 243/243 in about 9 s, and 269/269
+  for the affected files on the combined tree with #136. #138: 974 passed, and its changed
+  tests pass with DeprecationWarning as an error. These are test- and docs-only, so no E2E.
+* #139: the blocking audits passed locally (exit 0) and in the PR's own CI run.
 * #101 + #103 + #104: 899 passed, E2E 27/27. #105 + #106 (byte-identical to main
   `f7e399f`): **906 passed, E2E 30/30**.
 
@@ -217,8 +234,7 @@ E2E failures this cycle were resource starvation, not regressions:
 Full-stack runs are now serialized machine-wide (`make e2e-serial`).
 
 ## Next steps (issues carry owners and acceptance criteria)
-1. **Agent 2:** #133 (route-wide authorization matrix: outsider, viewer and unauthenticated
-   access on every route; fails when a route is added unclassified).
+1. **Agent 2:** no unblocked issue; standing by for reviews and findings.
 2. **Agent 3:** #125 (#120 ML own-bar windows). The staleness rule is being revised so it
    targets genuine halts, not sparsely traded names, with a selection table in METHODOLOGY.
 3. **Lead:** integrate.
