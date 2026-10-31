@@ -440,10 +440,15 @@ solving.
   was NaN for the window's length, which dropped a recently halted security, a selection
   correlated with distress, for up to 252 sessions.
 * **Staleness is described, not excluded.** Trade-time windows can reach far back in
-  calendar time, after a halt or for a thinly traded name. Two model inputs say how far:
-  * `bars_span_21`: sessions spanned by the last 21 bars ÷ 21, so 1 means a bar every
-    session;
-  * `max_gap_252`: the longest run of sessions without a bar within the last 252 bars.
+  calendar time, after a halt or for a thinly traded name. Two model inputs say how far
+  (s is a bar's position on the session calendar):
+  * `bars_span_21 = (s[t] − s[t−21]) / 21`: the calendar span of `mom_21`'s 21 returns,
+    per return. It is 1 for a bar every session and 2 for every other session.
+  * `log1p_max_gap_252 = log(1 + max_gap_252)`. `max_gap_252` is the largest number of
+    sessions without a bar between consecutive bars over the last 252 returns (bars
+    t−252 … t, so including the gap between t−252 and t−251). The raw count is unbounded,
+    so the model sees its log; the panel keeps the raw value as `max_gap_252`, which is
+    not a model input.
 
   A halt shows as one long gap (a 40-session halt gives `max_gap_252 = 40`). Thin trading
   shows many short ones: every other session gives `bars_span_21 = 2` with
@@ -451,10 +456,15 @@ solving.
   An earlier rule excluded a feature whose oldest bar lay more than 2·L sessions back. It
   was retracted because it selects against illiquid names: a sparsely traded name is not
   halted, but its gaps add up over a window. Measured by
-  `benchmarks/ml_liquidity_selection.py` (a synthetic market of 30 assets, 2018–2022,
-  every session sampled; a candidate row is a sampled date with a bar, complete features
-  apart from staleness and a defined label), the share of each name's candidate rows
-  kept:
+  `benchmarks/ml_liquidity_selection.py`, the share of each name's candidate rows kept:
+  * Market: synthetic, `generate_market` with 30 assets over 2018-01-02 to 2022-12-30,
+    seed 11, `split_probability` 0.002.
+  * Thinning: random keep with `numpy.random.default_rng(1)`; the halt covers sessions
+    600–639.
+  * Sampling: every session (`sample_every = 1`).
+  * Candidate row: a date the panel samples (at least 10 tradable names) on which the
+    name has a bar, complete features apart from staleness, and a defined label.
+
 
   | name | sessions traded | 2·L cap (retracted) | covariates (pipeline 2) |
   |---|---|---|---|
@@ -470,11 +480,13 @@ solving.
   own, so at 50% trading it needs about two years of calendar history instead of one.
 * **No trading vs flat volume.** A row whose last 21 bars have zero total volume (a
   quote that never trades) is excluded. `panel.excluded_rows.untraded_21` counts the rows
-  that would otherwise have been kept.
+  that would otherwise have been kept, on dates that make the panel.
+  `dates_below_10_after_untraded` counts dates skipped because that removal left fewer
+  than ten names.
   Constant non-zero volume (21-bar log-volume standard deviation at or below 1e-12)
-  deviates from its mean by exactly zero, so `volume_z_21` is 0, not 0/0, and
-  `volume_flat_21 = 1` records it. The flag is a panel column, not a model input;
-  results report the count as `panel.volume_flat_rows`.
+  deviates from its mean by exactly zero, so `volume_z_21` is 0, not 0/0. Then
+  `volume_flat_21 = 1`, which is a **model input**, so a model can tell "no dispersion"
+  from "average volume". Results report the count as `panel.volume_flat_rows`.
 * `ML_PIPELINE_VERSION` is recorded in every result (`pipeline_version`) and changes
   whenever the same dataset and config could produce a different panel.
 

@@ -11,7 +11,7 @@ its own-bar features are complete apart from staleness, and its label is defined
   more than twice its lookback in sessions back. It is recomputed here from bar session
   positions.
 * **Covariates (pipeline 2).** Nothing is excluded for staleness; ``bars_span_21`` and
-  ``max_gap_252`` describe it. This is what ``build_panel`` does.
+  ``log1p_max_gap_252`` (model inputs) describe it. This is what ``build_panel`` does.
 
 Usage::
 
@@ -38,7 +38,7 @@ RETRACTED_LOOKBACK = {
     "dist_high_252": 251,
     "volume_z_21": 20,
 }
-COVARIATES = ("bars_span_21", "max_gap_252")
+COVARIATES = ("bars_span_21", "log1p_max_gap_252")
 
 
 def _market(n_assets: int, start: str, end: str, seed: int) -> tuple[pd.DataFrame, pd.DataFrame]:

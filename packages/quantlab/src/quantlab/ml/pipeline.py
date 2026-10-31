@@ -48,17 +48,25 @@ FEATURES = [
     "vol_63",
     "dist_high_252",
     "volume_z_21",
+    # 1 where the 21-bar volume was constant and non-zero, so volume_z_21 = 0 there means
+    # "no dispersion", not "average volume" (#125 review).
+    "volume_flat_21",
     # Staleness covariates (#120): trade-time windows can reach back further in calendar
     # time, after a halt or for a thinly traded name. Instead of excluding such rows (a
     # selection against illiquid names), the models see how stale the windows are.
-    "bars_span_21",  # sessions spanned by the last 21 bars / 21 (1 = a bar every session)
-    "max_gap_252",  # longest run of sessions without a bar within the last 252 bars
+    # (s[t] - s[t-21]) / 21, s = session position: the calendar span of mom_21's 21
+    # returns per return (1 = a bar every session, 2 = every other session).
+    "bars_span_21",
+    # log1p of max_gap_252 (the raw count is unbounded; the panel keeps it as max_gap_252).
+    "log1p_max_gap_252",
 ]
 PANEL_COLUMNS = [
     "date",
     "symbol",
     *FEATURES,
-    "volume_flat_21",
+    # Sessions without a bar in the longest gap between consecutive bars over the last 252
+    # returns (bars t-252..t). Reported, not a model input (see log1p_max_gap_252).
+    "max_gap_252",
     "fwd_return",
     "label",
     "label_available_at",
@@ -66,7 +74,9 @@ PANEL_COLUMNS = [
 # Bumped whenever the panel a given dataset and config produce can change, so that an
 # old run reproduced on new code shows a named difference instead of a silent one.
 #   1: rolling windows over calendar sessions
-#   2: windows over each instrument's own bars; flat volume gives volume_z_21 = 0 (#120)
+#   2: windows over each instrument's own bars (#120); flat non-zero volume gives
+#      volume_z_21 = 0 with the volume_flat_21 input; staleness inputs bars_span_21 and
+#      log1p_max_gap_252; rows with no volume in 21 bars are excluded (untraded_21)
 ML_PIPELINE_VERSION = 2
 # Below this, a rolling dispersion counts as zero (as in quantlab.analytics).
 _ZERO_DISPERSION = 1e-12
@@ -141,6 +151,7 @@ def _own_bar_features(
     feats["bars_span_21"] = (session - session.shift(21)) / 21
     gap = session - session.shift(1) - 1  # sessions without a bar just before this bar
     feats["max_gap_252"] = gap.rolling(252).max()
+    feats["log1p_max_gap_252"] = np.log1p(feats["max_gap_252"])
     feats["volume_flat_21"] = flat.astype(float).where(v_std.notna() & ~untraded)
     masks = {"untraded": untraded.astype(float).where(vol.rolling(21).count() == 21)}
     return feats, masks
@@ -210,9 +221,10 @@ def build_panel(
     *,
     instruments: pd.DataFrame | None = None,
 ) -> pd.DataFrame:
-    """Long panel (date, symbol, features..., volume_flat_21, fwd_return, label,
-    label_available_at). ``volume_flat_21`` (1.0 where the 21-bar volume had no dispersion
-    and ``volume_z_21`` was set to 0) is reported, not used as a model input.
+    """Long panel (date, symbol, features..., max_gap_252, fwd_return, label,
+    label_available_at). The features include ``volume_flat_21`` (1.0 where the 21-bar
+    volume was constant and non-zero, so ``volume_z_21`` is 0) and the staleness inputs;
+    ``max_gap_252`` is the raw gap count behind ``log1p_max_gap_252``, reported only.
 
     ``instruments`` is an instrument master keyed like ``bars["symbol"]``; its delisting
     returns are applied to labels whose horizon reaches the first session after the
@@ -256,8 +268,8 @@ def build_panel(
     dates = close.index[252 :: cfg.sample_every]
     dates = dates[dates <= close.index[-1 - h]] if len(close) > h else dates[:0]
     frames = []
-    excluded = {"untraded_21": 0}
-    others = [c for c in FEATURES if c != "volume_z_21"]
+    excluded = {"untraded_21": 0, "dates_below_10_after_untraded": 0}
+    others = [c for c in FEATURES if c not in ("volume_z_21", "volume_flat_21")]
     for d in dates:
         k = close.index.get_loc(d)
         row = pd.DataFrame({name: f.loc[d] for name, f in feats.items()})  # incl. the flag
@@ -267,10 +279,15 @@ def build_panel(
         # kept (complete apart from the undefined volume z-score).
         untraded = masks["untraded"].loc[d].reindex(row.index) == 1
         complete = row[[*others, "fwd_return"]].notna().all(axis=1)
-        excluded["untraded_21"] += int((untraded & complete).sum())
+        dropped = int((untraded & complete).sum())
         row = row[~untraded].dropna()
         if len(row) < 10:
+            # A date too thin for a cross-section is skipped whole; say when the untraded
+            # removal is what took it below ten names.
+            if len(row) + dropped >= 10:
+                excluded["dates_below_10_after_untraded"] += 1
             continue
+        excluded["untraded_21"] += dropped  # only on dates that make the panel
         row["label"] = (row["fwd_return"] > row["fwd_return"].median()).astype(int)
         row["date"] = d
         row["label_available_at"] = close.index[k + h]
