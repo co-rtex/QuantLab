@@ -233,10 +233,12 @@ def run_backtest(
     has_bar = np.isfinite(C)
     # A bar with zero volume printed an open and a close nobody traded at (#149), so nothing
     # fills on it: an order meets it as it meets a session without a bar (rejected, here
-    # as `no_volume`), and the strategy is not offered the symbol that day. Its close still
-    # marks a position (a stale mark), and it still counts as a printed bar for the
-    # missing-bars delisting rule, so a stale-quoted holding is kept until it trades again.
-    # An unknown (NaN) volume is tradable: many datasets carry no volume at all.
+    # as `no_volume`). The fill rule alone blocks the escape from a halt. The strategy is
+    # still offered the symbol (it has a bar), so a holding is not sold and rebought just
+    # because one session printed zero volume. Its close still marks a position (a stale
+    # mark), and it still counts as a printed bar for the missing-bars delisting rule, so
+    # a stale-quoted holding is kept until it trades again. An unknown (NaN) volume is
+    # tradable; only library callers can pass it, as the platform's quality gate rejects it.
     no_trade = has_bar & (volume.to_numpy(dtype=float) <= 0)
     traded_bar = has_bar & ~no_trade
     missing_run = np.zeros(len(universe), dtype=np.int64)
@@ -282,7 +284,8 @@ def run_backtest(
     pos_rows: list[tuple[pd.Timestamp, str, float, float]] = []
     decisions: list[tuple[pd.Timestamp, str, float]] = []
     cum = {"commission": 0.0, "slippage": 0.0, "dividends": 0.0}
-    # Positions marked at a zero-volume close: equity on such stale marks is not realisable.
+    # Held positions marked at a stale price: a zero-volume close, or the last close when
+    # the session has no bar. Equity on stale marks is not realisable.
     stale_position_days = 0
     # The largest share of equity on stale marks; None until something is held with
     # positive equity.
@@ -506,7 +509,7 @@ def run_backtest(
         prices = {s: float(last_px[col[s]]) for s in ledger.positions}
         mv = ledger.market_value(prices)
         equity = ledger.cash + mv
-        stale_held = [s for s in ledger.positions if no_trade[k, col[s]]]
+        stale_held = [s for s in ledger.positions if not traded_bar[k, col[s]]]
         stale_position_days += len(stale_held)
         if ledger.positions and equity > 0:
             share = sum(ledger.positions[s] * prices[s] for s in stale_held) / equity
@@ -545,9 +548,7 @@ def run_backtest(
                 close=view_close,
                 returns=rets.iloc[: k + 1],
                 volume=volume.iloc[: k + 1],
-                tradable=pd.Series(
-                    traded_bar[k] & ~(delist_day <= d.to_datetime64()), index=universe
-                ),
+                tradable=pd.Series(has_bar[k] & ~(delist_day <= d.to_datetime64()), index=universe),
                 holdings=holdings,
                 raw_close=close_raw.iloc[: k + 1],
             )
@@ -610,10 +611,17 @@ def run_backtest(
             "delistings": delist_counts,
             # Universe bars in the window printed with zero volume: not tradable (#149).
             "zero_volume_bars": int(no_trade[start_pos:].sum()),
-            # The cost of keeping stale-quoted holdings (#149 review): equity marked at a
-            # zero-volume close is not realisable.
+            # Universe symbols with bars in the window, every one of them zero volume: the
+            # backtest could never trade them (a CSV uploaded with volume 0, say).
+            "never_traded": [
+                s
+                for j, s in enumerate(universe)
+                if has_bar[start_pos:, j].any() and not traded_bar[start_pos:, j].any()
+            ],
+            # The cost of keeping stale-marked holdings (#149 review): equity marked at a
+            # zero-volume close, or at the last close across a missing bar, is not realisable.
             "stale_marks": {
-                "zero_volume_position_days": stale_position_days,
+                "position_days": stale_position_days,
                 "max_equity_share": stale_share,
                 "undefined": {}
                 if stale_share is not None

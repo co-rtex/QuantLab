@@ -191,7 +191,7 @@ def build_integrity_report(ev: dict[str, Any]) -> dict[str, Any]:
         if stale:
             concerns.append(
                 f"{stale} held position(s) delist after the backtest window and are marked at "
-                "a stale close (no bar on the last session)"
+                "a stale close (no bar, or a zero-volume bar, on the last session)"
             )
         if assumed:
             evidence["assumed_performance_delisting_return"] = assumption
@@ -240,6 +240,57 @@ def build_integrity_report(ev: dict[str, Any]) -> dict[str, Any]:
                     "unassessed",
                     "The dataset has no instrument master, so delistings could not be checked "
                     "against delisting dates or returns.",
+                    evidence,
+                )
+            )
+
+    # 3c. zero-volume bars (engine meta, absent before #149): nothing fills on them, and
+    # holdings on them are marked at a stale close.
+    zero_bars = _get(analysis, "meta", "zero_volume_bars")
+    if isinstance(zero_bars, int):
+        never = list(_get(analysis, "meta", "never_traded") or [])
+        marks = _get(analysis, "meta", "stale_marks") or {}
+        evidence = {"zero_volume_bars": zero_bars, "never_traded": never, "stale_marks": marks}
+        share = marks.get("max_equity_share")
+        exposure = (
+            f" Held positions sat on stale marks (zero-volume or missing bars) on "
+            f"{_plural(int(marks.get('position_days', 0)), 'position-day')}, at most "
+            f"{share:.0%} of equity on one day; that equity was not realisable."
+            if isinstance(share, (int, float)) and share > 0
+            else ""
+        )
+        if never:
+            listed = ", ".join(never[:10]) + (", ..." if len(never) > 10 else "")
+            checks.append(
+                Check(
+                    "zero_volume",
+                    "Zero-volume bars",
+                    "failed",
+                    f"{_plural(len(never), 'universe symbol')} printed zero volume on every bar "
+                    f"in the window and could never be traded ({listed}), so the backtest "
+                    "describes a smaller universe than configured. Data without volume must "
+                    "not be recorded as volume 0." + exposure,
+                    evidence,
+                )
+            )
+        elif zero_bars > 0:
+            checks.append(
+                Check(
+                    "zero_volume",
+                    "Zero-volume bars",
+                    "warning",
+                    f"{_plural(zero_bars, 'universe bar')} printed zero volume; no order fills "
+                    "on such a bar." + exposure,
+                    evidence,
+                )
+            )
+        else:
+            checks.append(
+                Check(
+                    "zero_volume",
+                    "Zero-volume bars",
+                    "verified",
+                    "No universe bar in the window printed zero volume.",
                     evidence,
                 )
             )
