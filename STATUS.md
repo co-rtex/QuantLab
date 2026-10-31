@@ -1,6 +1,6 @@
 # Status (authoritative handoff)
 
-_Last updated: 2026-10-31 (lead integration cycle 2: #28 #32 #36 #29 #30 #31 #38 merged)_
+_Last updated: 2026-10-31 (lead integration cycle 2 complete: 12 PRs merged; main `2e7d3e7`)_
 
 ## Where things stand
 All roadmap phases 0–10 are implemented. An independent audit on 2026-10-30
@@ -44,44 +44,59 @@ leases and migration slots: [docs/COORDINATION.md](docs/COORDINATION.md).
   * #31 permanent instrument identity, part A of #9: library and store only.
   * #38 tracebacks no longer log frame locals. Before this, a 500 during login logged the
     plaintext password.
+  * #40 idempotent retries return the original run (#6). Advisory lock, then workspace
+    lock, then user lock.
+  * #42 (lead) `make e2e-serial` with a machine-wide full-stack lock; Playwright defaults
+    to one worker; one DB engine per URL.
+  * #37 consent-based invitations replace direct add-member (#5), with migration M1
+    `7c3e5a1d9b20`. Merged after two lead merge conditions: degraded-mode limiter windows,
+    and member lock order.
+  * #27 corporate-action placement, ordering and ingestion gates (#10). Engine 1.2.0.
+    Merged after four gate false positives were fixed.
+  * #44 (lead) integration tests fail instead of silently skipping when Postgres is
+    unreachable.
 * Every merge had an independent read-only lead review: no blockers. Should-fix items are
-  tracked in #8 (Agent 2), #39 (gate) and #41 (Agent 3).
+  tracked in #8 and #43 (Agent 2), #39 (gate) and #41 (Agent 3).
 
-## Last verified (2026-10-31, main `e7d3d82`)
-* The combined trial merge of #28, #32, #36, #29, #30 and #31 on `40565cd` gave a tree
-  **identical** to main after the merges (`93ca7be`):
-  * ruff, format and mypy clean;
-  * **pytest 314 passed** (Postgres, slot 85);
-  * web lint, typecheck and build clean; `edge.test.mts` 4/4;
-  * **Playwright 12/12** with `--workers=1`, at load 6.5–16, OOMKilled=false.
-* #38 on top: ruff and mypy clean; the logging, security and edge suites (31) passed. The
-  new test fails on the previous main.
-* CI is green on main at `93ca7be`. It doesn't run Playwright (#17).
-* Agent 2's earlier E2E failures were resource starvation, not regressions:
-  * 4 parallel Playwright workers, each registration an Argon2id hash (64 MiB × 4 lanes),
-    load 9–12;
-  * registrations took 25 s, against 0.56 s alone;
-  * each failing spec passed when rerun alone;
-  * OOMKilled was false in every run.
+## Last verified (2026-10-31, main `2e7d3e7`)
+Each merge was verified on a trial merge with current main, with pytest output written to a
+file rather than piped:
+* #28, #32, #36, #29, #30, #31: tree identical to main afterwards; 314 passed;
+  Playwright 12/12.
+* #38: 31 targeted passing; the new test fails on the previous main.
+* main + #27 + #40 + #42: 369 passed; Playwright 12/12 via `make e2e-serial`.
+* #37 head (merged with main): 366 passed, 0 skipped; `test_migrations` 2/2; Playwright
+  13/13 via `make e2e-serial` at load 13–20.
+* main (with #37) + #27 + #44: **418 passed, exit 0**, ruff, format and mypy clean;
+  **Playwright 13/13**.
 
-  Full-stack runs are now serialized with `make e2e-serial` (docs/COORDINATION.md).
+CI is green on every merged head. CI doesn't run Playwright (#17).
+
+E2E failures this cycle were resource starvation, not regressions:
+* parallel Playwright workers, registrations' Argon2id hashes queued, load up to 35;
+* OOMKilled false in every run;
+* each failing spec passed when run serially.
+
+Full-stack runs are now serialized machine-wide (`make e2e-serial`).
 
 ## Next steps (issues carry owners and acceptance criteria)
-1. **Agent 2:**
-   * #37 invitations (M1): needs a merge from main after #32, then lead review.
-   * Then #39 gate code items, #6 (jobs.py lease), #7 (after #27, tasks.py lease), and the
-     #8 nits.
+1. **Agent 2:** #39 security-gate code (in progress) → #7 (`tasks.py` lease) → #43
+   idempotency fingerprint (`jobs.py` lease) → #8 nits, plus the `test_trusted_edge`
+   registration-window flake.
 2. **Agent 3:**
-   * #27 corporate-action gates (tasks.py lease): needs a merge from main after #31.
-   * Then merge main into the stacked drafts #34 (#12) and #33 (#11) for review.
-   * #9 part B (delisting returns; no migration). Part C waits for M2, which opens after M1.
-   * #41 review follow-ups. #24 market-data benchmarks (quiet window only).
+   * merge main into #33 for review;
+   * #34 to its review bar (NaN values, history-less identity, ex-date tolerance, recorded
+     inputs);
+   * #9 part B (delisting returns), then part C (M2 open; `models.py`/`schemas.py` leased;
+     `tasks.py` after #7);
+   * #41 follow-ups;
+   * #24 market-data benchmarks (quiet window only).
 3. **Lead:**
-   * integrate #37, #27, #34 and #33;
-   * #17 E2E in CI;
-   * #16 (likely parallel-worker contention; passes serially);
-   * #22 isolation hardening;
-   * #25 job-deletion semantics.
+   * integrate #33, #34, #39, #7 and #43;
+   * #17 E2E in CI (Actions minutes on a private repo: confirm with the user);
+   * #16 (close after 5 clean serial runs; 4 so far);
+   * the rest of #22;
+   * #25.
 4. **Unassigned:** #15, #18, #20, #21, #23, the benchmark half of #24. **Later:** #19
    Terraform, after #39.
 

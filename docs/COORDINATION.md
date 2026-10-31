@@ -42,12 +42,13 @@ follow-up docs commit. A lease ends when the PR that used it merges or closes.
 
 | Shared file | Current holder | For |
 |---|---|---|
-| `services/api/src/quantlab_api/models.py` | — | |
-| `services/api/src/quantlab_api/schemas.py` | — | |
+| `services/api/src/quantlab_api/models.py` | Agent 3 | #9 part C (M2) |
+| `services/api/src/quantlab_api/schemas.py` | Agent 3 | #9 part C (M2) |
 | `services/api/src/quantlab_api/config.py` | — | |
-| `services/api/src/quantlab_api/jobs.py` | Agent 2 | #6 idempotent retries |
-| `services/api/src/quantlab_api/tasks.py` | Agent 3 | #10 / PR #27 gate call sites. **Queue:** Agent 2 (#7) after #27 merges, then Agent 3 (#9 part C) |
-| `services/api/alembic/env.py` | Agent 2 | #5 / PR #37, one model import |
+| `services/api/src/quantlab_api/jobs.py` | Agent 2 | #43 idempotency fingerprint (#6 merged as #40) |
+| `services/api/src/quantlab_api/tasks.py` | Agent 2 | #7 CSV retry / ambiguous-commit cleanup (#27 merged). **Queue:** Agent 3 (#9 part C) after #7 merges |
+| `services/api/alembic/env.py` | — | (#37 merged) |
+| `scripts/case_study.py` | — | (Agent 2's invitation fix merged in #37) |
 | `services/api/src/quantlab_api/main.py` | — | |
 | `services/api/alembic/versions/**` | see migration slots | |
 | `docker-compose.yml`, `Makefile`, `scripts/stack-env.sh` | — | |
@@ -64,8 +65,8 @@ Alembic revisions form one linear chain, so only one migration may be in flight 
 
 | Slot | Holder | Issue | State |
 |---|---|---|---|
-| M1 | Agent 2 | #5 invitations, PR #37, revision `7c3e5a1d9b20` → `4f1c2a9e7b10` | in review |
-| M2 | Agent 3 | #9 part C, instrument identity in the catalog | **closed** until the M1 PR merges; the lead announces it on #9 |
+| M1 | Agent 2 | #5 invitations, revision `7c3e5a1d9b20` → `4f1c2a9e7b10` | **merged** (#37, `9e76ff3`) |
+| M2 | Agent 3 | #9 part C, instrument identity in the catalog | **open** since 2026-10-31: `down_revision = "7c3e5a1d9b20"` |
 
 Rules: request the slot on the issue before running `alembic revision`; set `down_revision`
 to the current head on `main` at the time; include a working `downgrade`; the migration
