@@ -37,6 +37,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
+from urllib.parse import quote
 
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
@@ -53,6 +54,7 @@ MIN_GRACE_SECONDS = 24 * 3600
 LIVE = (JobStatus.queued, JobStatus.running)
 TRASH = ".trash"
 LAST_SWEEP = ".last-storage-sweep"
+LAST_PURGE = ".last-trash-purge"
 
 
 def version_lock(db: Session, slug: str, version: str) -> None:
@@ -89,10 +91,18 @@ def _trash_dir() -> Path:
 
 
 def _quarantine(path: Path, trash: Path, label: str) -> bool:
-    """Move ``path`` into ``trash`` in one rename. False if it is already gone."""
+    """Move ``path`` into ``trash`` in one rename. False if it is gone or cannot move.
+
+    Never raises: one failure (``EXDEV`` when ``.trash`` is on another mount, say) is
+    logged and leaves the file in place, without aborting the rest of the cycle.
+    """
     try:
-        os.rename(path, trash / f"{label.replace('/', '__')}-{uuid.uuid4().hex[:8]}")
+        # URL-encoded, so the original path is recoverable even when names contain "_".
+        os.rename(path, trash / f"{quote(label, safe='')}-{uuid.uuid4().hex[:8]}")
     except FileNotFoundError:
+        return False
+    except OSError as exc:
+        _warn("storage_quarantine_failed", label, exc)
         return False
     return True
 
@@ -250,14 +260,34 @@ def _children(root: Path) -> list[Path]:
         return []
 
 
-def _due(interval: float) -> bool:
-    """At most one sweep per ``interval`` across processes (a marker file's mtime)."""
-    marker = get_settings().data_dir / LAST_SWEEP
-    if _old(marker, time.time() - interval) or not marker.exists():
+def _due(interval: float, name: str = LAST_SWEEP) -> bool:
+    """At most one run per ``interval`` across processes (a marker file's mtime).
+
+    A marker dated in the future (the clock stepped back) counts as due, so the run is
+    never frozen until the clock catches up.
+    """
+    marker = get_settings().data_dir / name
+    now = time.time()
+    try:
+        last = marker.stat().st_mtime
+    except FileNotFoundError:
+        last = None
+    if last is None or last < now - interval or last > now + 60:
         marker.parent.mkdir(parents=True, exist_ok=True)
         marker.touch()
         return True
     return False
+
+
+def purge_trash_if_due() -> int:
+    """The reaper's hourly purge, independent of ``storage_sweep``.
+
+    ``collect`` quarantines on every workspace delete, so the trash must be emptied even
+    while the sweep is switched off (as during maintenance), or it would fill the disk.
+    """
+    if not _due(get_settings().storage_sweep_interval_seconds, LAST_PURGE):
+        return 0
+    return purge_trash()
 
 
 def _refuse(kind: str, on_disk: int, rows: int, candidates: int, max_fraction: float) -> bool:
@@ -354,7 +384,6 @@ def sweep_orphans(
     for d in _children(art / "staging"):
         if _old(d, cutoff) and _orphan(d.name.rsplit("-", 1)[0], experiments):
             _quarantine(d, bin_(), f"staging/{d.name}")
-    stats["trash_purged"] = purge_trash()
     stats["grace_seconds"] = grace
     return stats
 

@@ -90,8 +90,16 @@ Deleting a workspace removes its files after the database commit (#21,
   timeout of any queued or running job, and at least 24 h; every version write runs
   inside a job, so none can outlast it.
 * Nothing is deleted at once. Removed files move to `$QUANTLAB_DATA_DIR/.trash/<time>/`
-  and are purged after `QUANTLAB_STORAGE_TRASH_RETENTION_SECONDS` (default 7 days). To
-  undo a mistaken removal, move them back.
+  (names URL-encoded from their path under the data directory) and are purged after
+  `QUANTLAB_STORAGE_TRASH_RETENTION_SECONDS` (default 7 days), hourly by the reaper even
+  while the sweep is off. **Disk space is reclaimed only after that retention period.**
+  To undo a mistaken removal, move them back.
+* `.trash` must be on the same filesystem as `datasets/` and `artifacts/` (it is, under
+  one `QUANTLAB_DATA_DIR` volume). Quarantine is a rename; across mounts it fails with
+  `EXDEV`, is logged, and nothing is freed.
+* The hourly markers (`.last-storage-sweep`, `.last-trash-purge`) are file mtimes. A
+  marker dated in the future after the clock steps back counts as due, so it never freezes.
+  Staging directories are temporary and are quarantined without the refusal check.
 * The sweep refuses, logs `storage_sweep_refused` at error level and removes nothing,
   when the database has no rows but the disk has files (a restore in progress, or the
   wrong `QUANTLAB_DATABASE_URL`), or when one cycle would remove more than

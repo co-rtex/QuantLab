@@ -786,12 +786,13 @@ def reap(redeliver_after_seconds: int = 120) -> dict[str, int]:
                 job.heartbeat_at = t
         db.commit()
     stats["uploads_swept"] = sweep_uploads()
-    from quantlab_api.storage import sweep_orphans  # storage imports jobs: no cycle at load
+    from quantlab_api.storage import purge_trash_if_due, sweep_orphans  # no load cycle
 
     swept = sweep_orphans()  # throttled inside: at most once per storage_sweep_interval
     stats["orphans_swept"] = sum(
         int(swept.get(k, 0)) for k in ("versions", "temporaries", "experiments", "ml_runs")
     )
+    stats["trash_purged"] = purge_trash_if_due()  # hourly, even with the sweep switched off
     if any(stats.values()):
         log.info("reaper_cycle", **stats)
     return stats

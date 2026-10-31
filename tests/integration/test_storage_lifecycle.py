@@ -373,3 +373,58 @@ def test_the_upload_sweep_keeps_a_queued_jobs_files_however_old(client, seeded):
     sweep_uploads()
     assert queued.exists()  # its job is still queued after three days
     assert not abandoned.exists()
+
+
+# ------------------------------------------------- #97 review round 2
+def test_the_trash_is_purged_while_the_sweep_is_off(client, seeded, monkeypatch):
+    from quantlab_api import storage
+    from quantlab_api.jobs import reap
+
+    trash = _settings().data_dir / ".trash" / "20240101T000000Z"
+    trash.mkdir(parents=True)
+    old = time.time() - 30 * 86400
+    os.utime(trash, (old, old))
+    monkeypatch.setattr(_settings(), "storage_sweep", False)
+    stats = reap()
+    assert stats["trash_purged"] == 1 and not trash.exists()
+    assert storage.purge_trash_if_due() == 0  # hourly: not again straight away
+
+
+def test_a_marker_from_the_future_does_not_freeze_the_sweep(client, seeded):
+    from quantlab_api import storage
+
+    marker = _settings().data_dir / storage.LAST_SWEEP
+    marker.parent.mkdir(parents=True, exist_ok=True)
+    marker.touch()
+    future = time.time() + 7 * 86400  # the clock stepped back a week
+    os.utime(marker, (future, future))
+    assert "skipped" not in storage.sweep_orphans()
+
+
+def test_quarantined_names_decode_to_their_original_path(client, seeded):
+    from urllib.parse import unquote
+
+    from quantlab_api import storage
+
+    src = _settings().data_dir / "x"
+    src.mkdir(parents=True)
+    trash = storage._trash_dir()
+    assert storage._quarantine(src, trash, "datasets/my_slug/_reports/abc")
+    (moved,) = list(trash.iterdir())
+    assert unquote(moved.name.rsplit("-", 1)[0]) == "datasets/my_slug/_reports/abc"
+
+
+def test_a_failed_quarantine_is_logged_not_raised(client, seeded, monkeypatch):
+    import errno
+
+    from quantlab_api import storage
+
+    src = _settings().data_dir / "y"
+    src.mkdir(parents=True)
+
+    def cross_device(*a, **k):
+        raise OSError(errno.EXDEV, "Invalid cross-device link")
+
+    monkeypatch.setattr(storage.os, "rename", cross_device)
+    assert storage._quarantine(src, storage._trash_dir(), "y") is False
+    assert src.exists()
