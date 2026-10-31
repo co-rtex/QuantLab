@@ -167,6 +167,13 @@ def test_handlers(seeded):
         J.HANDLERS.pop(k, None)
 
 
+def _due(jid):
+    """Let a queued retry's backoff pass at once (the queue's delay is skipped here)."""
+    with SessionLocal() as db:
+        db.execute(update(Job).where(Job.id == jid).values(not_before=None))
+        db.commit()
+
+
 def test_transient_errors_retry_until_success(test_handlers):
     jid = _make_job("t.flaky")
     assert J.execute_job(str(jid)) == "retry"
@@ -174,7 +181,9 @@ def test_transient_errors_retry_until_success(test_handlers):
         job = db.get(Job, jid)
         assert job.status == JobStatus.queued
         assert job.error["retryable"] is True
+    _due(jid)
     assert J.execute_job(str(jid)) == "retry"
+    _due(jid)
     assert J.execute_job(str(jid)) == "completed"
     with SessionLocal() as db:
         job = db.get(Job, jid)

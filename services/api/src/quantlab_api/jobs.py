@@ -187,8 +187,11 @@ def get_queue() -> Queue:
     return Queue(get_settings().queue_name, connection=redis_conn(), **RQ_OPTIONS)
 
 
-def enqueue(job: Job, delay_seconds: float = 0.0) -> bool:
-    """Best effort: if Redis is down the job stays queued and the reaper re-delivers it."""
+def enqueue(job: Job, delay_seconds: float = 0.0, delivery_id: str | None = None) -> bool:
+    """Best effort: if Redis is down the job stays queued and the reaper re-delivers it.
+
+    ``delivery_id`` names the queue entry, so enqueueing the same delivery again replaces
+    it rather than adding another."""
     try:
         q = get_queue()
         kwargs: dict[str, Any] = {
@@ -197,6 +200,8 @@ def enqueue(job: Job, delay_seconds: float = 0.0) -> bool:
             "failure_ttl": 86400,
             "description": f"{job.kind}:{job.id}",
         }
+        if delivery_id is not None:
+            kwargs["job_id"] = delivery_id
         if delay_seconds > 0:
             q.enqueue_in(timedelta(seconds=delay_seconds), execute_job, str(job.id), **kwargs)
         else:
@@ -550,13 +555,17 @@ def claim(job_id: uuid.UUID, worker_id: str) -> Job | None:
                 Job.id == job_id,
                 Job.cancel_requested.is_(False),
                 or_(
-                    Job.status == JobStatus.queued,
+                    # A queued retry only once its backoff has passed (#123): an early or
+                    # forged delivery claims nothing, and so consumes no attempt.
+                    (Job.status == JobStatus.queued)
+                    & or_(Job.not_before.is_(None), Job.not_before <= t),
                     (Job.status == JobStatus.running) & (Job.lease_expires_at < t),
                 ),
                 Job.attempts < Job.max_attempts,
             )
             .values(
                 status=JobStatus.running,
+                not_before=None,
                 attempts=Job.attempts + 1,
                 worker_id=worker_id,
                 lease_expires_at=t + timedelta(seconds=lease),
@@ -599,12 +608,32 @@ def _finish(
         return True
 
 
+def _redeliver_when_due(job_id: uuid.UUID) -> None:
+    """A delivery that arrived before a queued retry's backoff ends (early, or forged) is
+    put back for when the job is due, so a scheduler running slightly fast cannot strand a
+    retry until the reaper's next pass (#123)."""
+    with SessionLocal() as db:
+        job = db.get(Job, job_id)
+        if job is None or job.status != JobStatus.queued or job.cancel_requested:
+            return
+        if job.not_before is not None and job.not_before > now():
+            # One delivery per due time: k early (or forged) deliveries reschedule it once.
+            due = job.not_before
+            enqueue(
+                job,
+                delay_seconds=(due - now()).total_seconds(),
+                # No ":" in it: RQ registries key entries as "<job id>:<execution id>".
+                delivery_id=f"{job.id}-{round(due.timestamp() * 1_000_000)}",
+            )
+
+
 def execute_job(job_id: str, worker_id: str | None = None) -> str:
     """Entry point invoked by RQ (or directly in tests). Returns the outcome label."""
     jid = uuid.UUID(job_id)
     wid = worker_id or worker_identity()
     job = claim(jid, wid)
     if job is None:
+        _redeliver_when_due(jid)
         log.info("job_skip", job_id=job_id, reason="not claimable")
         return "skipped"
     token = attach_carrier(job.trace_context)
@@ -711,6 +740,7 @@ def _run_claimed(job: Job, jid: uuid.UUID, wid: str) -> str:
                         status=JobStatus.queued,
                         error=err,
                         lease_expires_at=None,
+                        not_before=now() + timedelta(seconds=delay),
                         message=f"retrying in {delay:.0f}s after {type(exc).__name__}",
                     )
                 )
@@ -849,6 +879,7 @@ def reap(redeliver_after_seconds: int = 120) -> dict[str, int]:
                 Job.cancel_requested.is_(False),
                 Job.created_at < cutoff,
                 or_(Job.heartbeat_at.is_(None), Job.heartbeat_at < cutoff),
+                or_(Job.not_before.is_(None), Job.not_before <= t),  # its backoff is over
             )
             .order_by(Job.created_at)
             .limit(500)
