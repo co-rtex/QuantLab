@@ -71,14 +71,52 @@ passing through the edge. During a Redis outage limits are per process (ADR-0007
 
 ### Disk usage
 `$QUANTLAB_DATA_DIR/datasets` holds immutable dataset versions; `artifacts/` holds
-experiment and ML outputs; `uploads/` holds staged CSV imports (swept by the reaper after
-24 h). Deleting a dataset version directory breaks experiments that reference it; archive
-instead.
+experiment and ML outputs; `uploads/` holds staged CSV imports. Deleting a dataset version
+directory by hand breaks experiments that reference it; archive instead.
+
+Deleting a workspace removes its files after the database commit (#21,
+`quantlab_api.storage`):
+* Its experiment, ML and staging artifacts are removed, along with the uploads staged
+  for its jobs.
+* Dataset version directories are content-addressed and shared when two workspaces hold
+  the same slug and content. One is removed only when no version row references it any
+  more. That is decided under the directory's advisory lock (`dataset-dir:<slug>/<hash>`),
+  which `register_version` also holds from before its write through its commit.
+* If the process dies between the commit and the deletion, only unreferenced files
+  remain. The reaper's `sweep_orphans` (at most once per
+  `QUANTLAB_STORAGE_SWEEP_INTERVAL_SECONDS`, default an hour) collects unreferenced
+  version directories, leftover `.tmp-*` and `.old-*` directories, and artifacts whose
+  row is gone, once older than the grace period. That period is twice the longest
+  timeout of any queued or running job, and at least 24 h; every version write runs
+  inside a job, so none can outlast it.
+* Nothing is deleted at once. Removed files move to `$QUANTLAB_DATA_DIR/.trash/<time>/`
+  (names URL-encoded from their path under the data directory) and are purged after
+  `QUANTLAB_STORAGE_TRASH_RETENTION_SECONDS` (default 7 days), hourly by the reaper even
+  while the sweep is off. **Disk space is reclaimed only after that retention period.**
+  To undo a mistaken removal, move them back.
+* `.trash` must be on the same filesystem as `datasets/` and `artifacts/` (it is, under
+  one `QUANTLAB_DATA_DIR` volume). Quarantine is a rename; across mounts it fails with
+  `EXDEV`, is logged, and nothing is freed.
+* The hourly markers (`.last-storage-sweep`, `.last-trash-purge`) are file mtimes. A
+  marker dated in the future after the clock steps back counts as due, so it never freezes.
+  Staging directories are temporary and are quarantined without the refusal check.
+* The sweep refuses, logs `storage_sweep_refused` at error level and removes nothing,
+  when the database has no rows but the disk has files (a restore in progress, or the
+  wrong `QUANTLAB_DATABASE_URL`), or when one cycle would remove more than
+  `QUANTLAB_STORAGE_SWEEP_MAX_FRACTION` (default 25%) of what is on disk. Advisory locks
+  are per database, so never point two stacks with different databases at one
+  `QUANTLAB_DATA_DIR`. Set `QUANTLAB_STORAGE_SWEEP=false` to switch the sweep off. After
+  checking a refusal, run `quantlab_api.storage.sweep_orphans(force=True)` by hand.
+* The upload sweep never deletes the files of a queued or running job, however old.
+  Other staged uploads go after 24 h.
 
 ## Backup and restore
 
 * PostgreSQL: `docker compose exec postgres pg_dump -U quantlab -Fc quantlab > quantlab.dump`;
-  restore with `pg_restore -c -d quantlab quantlab.dump`.
+  restore with `pg_restore -c -d quantlab quantlab.dump`. **Stop the worker and reaper
+  first** (`docker compose stop worker reaper`), or set `QUANTLAB_STORAGE_SWEEP=false`, and start
+  them again after the restore. While tables are dropped and reloaded the database has
+  no rows for the files on disk; the sweep refuses to act on that, but don't rely on it.
 * Data directory: copy `$QUANTLAB_DATA_DIR` (or snapshot the `appdata` volume).
   Without `QUANTLAB_JWT_SECRET` (development), the signing key is generated into
   `$QUANTLAB_DATA_DIR/.jwt-dev-secret` and travels with these backups; treat them as

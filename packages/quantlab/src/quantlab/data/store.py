@@ -16,6 +16,7 @@ version directory is never rewritten once written.
 
 from __future__ import annotations
 
+import contextlib
 import errno
 import hashlib
 import json
@@ -23,6 +24,8 @@ import os
 import re
 import shutil
 import tempfile
+import time
+from collections.abc import Iterator
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -52,6 +55,7 @@ ROW_GROUP_ROWS = 50_000
 # link() errors meaning the filesystem has no hard links (some network and FUSE mounts).
 _NO_HARD_LINKS = {errno.EPERM, errno.EOPNOTSUPP, errno.ENOTSUP, errno.EXDEV, errno.EMLINK}
 REPORTS_DIR = "_reports"
+_VERSION = re.compile(r"[0-9a-f]{64}")
 REPORT_NAME = re.compile(r"[a-z0-9][a-z0-9_-]{0,63}")
 
 
@@ -116,6 +120,74 @@ class DatasetStore:
         if not all(c in "0123456789abcdef" for c in version) or len(version) != 64:
             raise ValueError("invalid version hash")
         return self.root / slug / version
+
+    @staticmethod
+    def version_of(
+        bars: pd.DataFrame,
+        actions: pd.DataFrame,
+        symbol_history: pd.DataFrame | None = None,
+        master: pd.DataFrame | None = None,
+    ) -> str:
+        """The version hash :meth:`write` would give these inputs, without writing."""
+        history = None if symbol_history is None else normalize_history(symbol_history)
+        return content_hash(
+            normalize_bars(bars),
+            normalize_actions(actions),
+            history,
+            None if master is None else normalize_master(master),
+        )
+
+    def version_paths(self, slug: str, version: str) -> list[tuple[Path, str]]:
+        """The version's directory and its reports, with a label for each.
+
+        For a caller that removes them (``quantlab_api.storage`` quarantines them in one
+        rename each, under a lock, after deciding nothing references the version). A
+        rename never leaves a half-deleted version visible under its name, which ``write``
+        would treat as already written.
+        """
+        return [
+            (self._dir(slug, version), f"datasets/{slug}/{version}"),
+            (self.root / slug / REPORTS_DIR / version, f"datasets/{slug}/_reports/{version}"),
+        ]
+
+    def prune_slug(self, slug: str) -> None:
+        """Remove the slug's directories if they are now empty."""
+        slug_dir = self.root / slug
+        for d in (slug_dir / REPORTS_DIR, slug_dir):
+            with contextlib.suppress(OSError):
+                d.rmdir()  # only if empty
+
+    def versions_on_disk(self) -> Iterator[tuple[str, str, Path]]:
+        """(slug, version, directory) of every published version under the root.
+
+        Directories renamed or removed concurrently are skipped, never raised.
+        """
+        for slug_dir in _listing(self.root):
+            if slug_dir.name.startswith(".") or not slug_dir.is_dir():
+                continue
+            for d in _listing(slug_dir):
+                if _VERSION.fullmatch(d.name) and d.is_dir():
+                    yield slug_dir.name, d.name, d
+
+    def stale_temporaries(self, older_than_seconds: float) -> list[Path]:
+        """Leftovers of interrupted writes (``.tmp-*``) older than the age.
+
+        Covers version writes (``<slug>/.tmp-*``) and report writes
+        (``<slug>/_reports/<version>/.tmp-*``); anything that vanishes meanwhile is skipped.
+        """
+        cutoff = time.time() - older_than_seconds
+        out = []
+        for slug_dir in _listing(self.root):
+            if slug_dir.name.startswith("."):
+                continue
+            found = [*_glob(slug_dir, ".tmp-*"), *_glob(slug_dir, f"{REPORTS_DIR}/*/.tmp-*")]
+            for d in found:
+                try:
+                    if d.stat().st_mtime < cutoff:
+                        out.append(d)
+                except FileNotFoundError:
+                    continue
+        return sorted(out)
 
     def write(
         self,
@@ -329,3 +401,18 @@ class DatasetStore:
             return False
         bars, actions = self.load_bars(dv), self.load_actions(dv)
         return content_hash(bars, actions, history, master) == dv.version
+
+
+def _listing(root: Path) -> list[Path]:
+    """``root``'s entries, or none if it vanished (a concurrent rename or removal)."""
+    try:
+        return sorted(root.iterdir())
+    except (FileNotFoundError, NotADirectoryError):
+        return []
+
+
+def _glob(root: Path, pattern: str) -> list[Path]:
+    try:
+        return sorted(root.glob(pattern))
+    except FileNotFoundError:
+        return []

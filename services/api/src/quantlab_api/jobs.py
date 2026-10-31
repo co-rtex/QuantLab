@@ -786,22 +786,44 @@ def reap(redeliver_after_seconds: int = 120) -> dict[str, int]:
                 job.heartbeat_at = t
         db.commit()
     stats["uploads_swept"] = sweep_uploads()
+    from quantlab_api.storage import purge_trash_if_due, sweep_orphans  # no load cycle
+
+    swept = sweep_orphans()  # throttled inside: at most once per storage_sweep_interval
+    stats["orphans_swept"] = sum(
+        int(swept.get(k, 0)) for k in ("versions", "temporaries", "experiments", "ml_runs")
+    )
+    stats["trash_purged"] = purge_trash_if_due()  # hourly, even with the sweep switched off
     if any(stats.values()):
         log.info("reaper_cycle", **stats)
     return stats
 
 
 def sweep_uploads(max_age_hours: float = 24.0) -> int:
-    """Delete staged upload directories older than ``max_age_hours`` (abandoned imports)."""
+    """Delete abandoned staged uploads: older than ``max_age_hours`` and owned by no live job.
+
+    A directory named in a queued or running job's ``staged_dir`` is kept however old it
+    is: a job can wait in the queue longer than a day, and deleting its files would turn
+    it into "uploads no longer available" (#21). An upload still streaming has no job yet,
+    so the age rule protects it.
+    """
     import shutil
+    from pathlib import Path
 
     root = get_settings().data_dir / "uploads"
     if not root.exists():
         return 0
+    with SessionLocal() as db:
+        live = {
+            str(Path(p["staged_dir"]).resolve())
+            for p in db.scalars(
+                select(Job.payload).where(Job.status.in_((JobStatus.queued, JobStatus.running)))
+            )
+            if p and p.get("staged_dir")
+        }
     cutoff = time.time() - max_age_hours * 3600
     removed = 0
     for d in root.iterdir():
-        if d.is_dir() and d.stat().st_mtime < cutoff:
+        if d.is_dir() and d.stat().st_mtime < cutoff and str(d.resolve()) not in live:
             shutil.rmtree(d, ignore_errors=True)
             removed += 1
     return removed

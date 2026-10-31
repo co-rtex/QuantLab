@@ -6,6 +6,7 @@ from fastapi import APIRouter, Query, Request
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
+from quantlab_api import storage
 from quantlab_api.config import get_settings
 from quantlab_api.errors import ApiError
 from quantlab_api.invitations import MemberRoleIn
@@ -97,8 +98,12 @@ def delete_workspace(workspace_id: uuid.UUID, user: CurrentUser, db: DB, request
         target_id=ws.id,
         name=ws.name,
     )
+    # What the rows point at on disk, read in this transaction; the files go only after
+    # the commit, and a crash in between leaves garbage for the reaper's sweep (#21).
+    garbage = storage.workspace_garbage(db, ws.id)
     db.delete(ws)
     db.commit()
+    storage.collect(garbage)
 
 
 @router.get("/{workspace_id}/members", response_model=list[MemberOut])
