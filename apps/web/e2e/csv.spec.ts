@@ -57,7 +57,15 @@ test("a CSV is imported into a new dataset", async ({ page }) => {
   await panel.getByRole("button", { name: "Import CSV" }).click();
   await expect(panel.getByRole("progressbar", { name: "Job progress" })).toBeVisible();
   await expect(panel.getByText("Completed", { exact: true })).toBeVisible({ timeout: 60_000 });
-  await expect(page.locator("section").filter({ hasText: "Datasets" }).getByText("Imported prices")).toBeVisible();
+  const datasets = page.locator("section").filter({ hasText: "Datasets" }).first();
+  await expect(datasets.getByText("Imported prices")).toBeVisible();
+
+  // Provenance end to end: user-supplied data is not synthetic, and is not labelled so.
+  const ws = (await (await page.request.get("/api/v1/workspaces")).json())[0].id as string;
+  const versions = await (await page.request.get(`/api/v1/workspaces/${ws}/dataset-versions`)).json();
+  expect(versions).toHaveLength(1);
+  expect(versions[0].is_synthetic).toBe(false);
+  await expect(datasets.getByText(/Synthetic/)).toHaveCount(0);
 });
 
 test("an oversized file is refused before it is sent", async ({ page }) => {
@@ -95,6 +103,11 @@ test("the API's refusals are shown in the panel", async ({ page }) => {
   await expect(panel.getByRole("alert")).toContainText("Request validation failed");
   await expect(panel.getByRole("alert")).toContainText("license: String should have at least 3 characters");
   await expect(panel.getByText("Request req-csv-422")).toBeVisible();
+  // The field the API refused is marked at the input, too.
+  const licence = panel.getByLabel("Licence");
+  await expect(licence).toHaveAttribute("aria-invalid", "true");
+  await expect(licence).toHaveAccessibleDescription(/String should have at least 3 characters/);
+  await expect(panel.getByLabel("Source")).not.toHaveAttribute("aria-invalid", "true");
   await audit(page, "data page, import refused");
 
   // 413 from the API's own limit.

@@ -12,23 +12,44 @@ import { useCanEdit, useWorkspace } from "@/lib/workspace";
 // The API's limit per uploaded file (MAX_UPLOAD_BYTES in routes/datasets.py).
 const MAX_UPLOAD_BYTES = 50 * 2 ** 20;
 
+function pollJob(j: Job | undefined): number | false {
+  return j && (j.status === "queued" || j.status === "running") ? 1000 : false;
+}
+
 export default function DataPage() {
   const { workspace } = useWorkspace();
   const canEdit = useCanEdit();
   const ws = workspace?.id;
+  // One job per form, so starting an import never hides a generation in progress (#114).
   const [jobId, setJobId] = useState<string | null>(null);
-  const job = useApi<Job>(jobId ? `/jobs/${jobId}` : null, {
-    poll: (j) => (j && (j.status === "queued" || j.status === "running") ? 1000 : false),
-  });
-  // Re-fetch the catalog once the ingestion job settles by keying the request on it.
-  const settled = job.data && !["queued", "running"].includes(job.data.status) ? job.data.id : "";
+  const job = useApi<Job>(jobId ? `/jobs/${jobId}` : null, { poll: pollJob });
+  const [csvJobId, setCsvJobId] = useState<string | null>(null);
+  const csvJob = useApi<Job>(csvJobId ? `/jobs/${csvJobId}` : null, { poll: pollJob });
+  // Re-fetch the catalog once an ingestion job settles by keying the request on it.
+  const settledOf = (j: Job | undefined) => (j && !["queued", "running"].includes(j.status) ? j.id : "");
+  const settled = [settledOf(job.data), settledOf(csvJob.data)].filter(Boolean).join("-");
   const datasets = useApi<Dataset[]>(ws ? `/workspaces/${ws}/datasets?after=${settled}` : null);
   const versions = useApi<DatasetVersion[]>(ws ? `/workspaces/${ws}/dataset-versions?after=${settled}` : null);
   const [err, setErr] = useState<ApiError>();
   const [submitting, setSubmitting] = useState(false);
-  // Which form started the job on show, so its progress appears under that form.
-  const [jobFrom, setJobFrom] = useState<"synthetic" | "csv">("synthetic");
   const [importErr, setImportErr] = useState<ApiError | Error>();
+  // The API's field errors (422), by field, shown at each input as well as in the alert.
+  const fieldErrors = Object.fromEntries(
+    importErr instanceof ApiError && Array.isArray(importErr.details)
+      ? (importErr.details as { loc?: (string | number)[]; msg: string }[]).map((d) => [String((d.loc ?? []).at(-1)), d.msg])
+      : [],
+  ) as Record<string, string>;
+  /** aria attributes tying an import input to its field error, if it has one. */
+  const invalid = (field: string, hint?: string) => ({
+    "aria-invalid": fieldErrors[field] ? true : undefined,
+    "aria-describedby": [hint, fieldErrors[field] ? `csv-${field}-error` : undefined].filter(Boolean).join(" ") || undefined,
+  });
+  const fieldError = (field: string) =>
+    fieldErrors[field] ? (
+      <span id={`csv-${field}-error`} className="mt-0.5 block text-xs text-loss">
+        {fieldErrors[field]}
+      </span>
+    ) : null;
   const [importing, setImporting] = useState(false);
   const importingNow = useRef(false);
 
@@ -61,8 +82,7 @@ export default function DataPage() {
     setImporting(true);
     try {
       const j = await api<Job>(`/workspaces/${ws}/datasets/csv`, { method: "POST", body: form });
-      setJobFrom("csv");
-      setJobId(j.id);
+      setCsvJobId(j.id);
     } catch (x) {
       setImportErr(x as ApiError);
     } finally {
@@ -70,17 +90,16 @@ export default function DataPage() {
       setImporting(false);
     }
   }
-  const busy = submitting || (jobId !== null && !settled);
+  const busy = submitting || (jobId !== null && !settledOf(job.data));
 
-  async function cancel() {
-    if (!job.data) return;
-    setErr(undefined);
+  async function cancel(q: typeof job, report: (e: ApiError) => void) {
+    if (!q.data) return;
     try {
-      await cancelJob(job.data.id);
+      await cancelJob(q.data.id);
     } catch (e) {
-      setErr(e as ApiError);
+      report(e as ApiError);
     }
-    job.reload();
+    q.reload();
   }
 
   async function create(e: FormEvent<HTMLFormElement>) {
@@ -102,7 +121,6 @@ export default function DataPage() {
           seed: Number(f.get("seed")),
         },
       });
-      setJobFrom("synthetic");
       setJobId(j.id);
     } catch (e) {
       setErr(e as ApiError);
@@ -212,10 +230,10 @@ export default function DataPage() {
             <button className="btn btn-primary" disabled={busy || !ws}>
               {busy ? "Generating…" : "Generate dataset version"}
             </button>
-            {jobFrom === "synthetic" && <QueryError q={job} what="the ingestion job's status" />}
-            {jobFrom === "synthetic" && job.data && (
+            <QueryError q={job} what="the ingestion job's status" />
+            {job.data && (
               <div className="pt-2">
-                <JobProgress job={job.data} onCancel={canEdit ? cancel : undefined} />
+                <JobProgress job={job.data} onCancel={canEdit ? () => cancel(job, setErr) : undefined} />
               </div>
             )}
           </form>
@@ -231,30 +249,36 @@ export default function DataPage() {
               <div className="grid grid-cols-2 gap-3">
                 <label>
                   <span className="mb-1 block">Name</span>
-                  <input name="name" required maxLength={120} className="field" />
+                  <input name="name" required maxLength={120} className="field" {...invalid("name")} />
+                  {fieldError("name")}
                 </label>
                 <label>
                   <span className="mb-1 block">Short name</span>
-                  <input name="slug" required pattern="[a-z0-9][a-z0-9_\-]{1,62}" title="Lowercase letters, digits, - and _" aria-describedby="csv-slug-hint" className="field" />
+                  <input name="slug" required pattern="[a-z0-9][a-z0-9_\-]{1,62}" title="Lowercase letters, digits, - and _" className="field" {...invalid("slug", "csv-slug-hint")} />
                   <span id="csv-slug-hint" className="mt-0.5 block text-xs text-ink-3">
                     Lowercase letters, digits, - and _
                   </span>
+                  {fieldError("slug")}
                 </label>
                 <label className="col-span-2">
                   <span className="mb-1 block">Source</span>
-                  <input name="source" required minLength={3} maxLength={300} placeholder="Where the data comes from" className="field" />
+                  <input name="source" required minLength={3} maxLength={300} placeholder="Where the data comes from" className="field" {...invalid("source")} />
+                  {fieldError("source")}
                 </label>
                 <label className="col-span-2">
                   <span className="mb-1 block">Licence</span>
-                  <input name="license" required minLength={3} maxLength={300} placeholder="The terms you may use it under" className="field" />
+                  <input name="license" required minLength={3} maxLength={300} placeholder="The terms you may use it under" className="field" {...invalid("license")} />
+                  {fieldError("license")}
                 </label>
                 <label className="col-span-2">
                   <span className="mb-1 block">Daily bars (CSV)</span>
-                  <input name="bars" type="file" required accept=".csv,text/csv" className="field" />
+                  <input name="bars" type="file" required accept=".csv,text/csv" className="field" {...invalid("bars")} />
+                  {fieldError("bars")}
                 </label>
                 <label className="col-span-2">
                   <span className="mb-1 block">Corporate actions (CSV, optional)</span>
-                  <input name="actions" type="file" accept=".csv,text/csv" className="field" />
+                  <input name="actions" type="file" accept=".csv,text/csv" className="field" {...invalid("actions")} />
+                  {fieldError("actions")}
                 </label>
               </div>
               <ErrorNote
@@ -274,10 +298,10 @@ export default function DataPage() {
               <button className="btn btn-primary" aria-busy={importing} aria-disabled={importing || !ws}>
                 {importing ? "Uploading…" : "Import CSV"}
               </button>
-              {jobFrom === "csv" && <QueryError q={job} what="the import job's status" />}
-              {jobFrom === "csv" && job.data && (
+              <QueryError q={csvJob} what="the import job's status" />
+              {csvJob.data && (
                 <div className="pt-2">
-                  <JobProgress job={job.data} onCancel={canEdit ? cancel : undefined} />
+                  <JobProgress job={csvJob.data} onCancel={canEdit ? () => cancel(csvJob, setImportErr) : undefined} />
                 </div>
               )}
             </form>
