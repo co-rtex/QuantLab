@@ -51,7 +51,7 @@ Owners, file ownership and migration slots: [docs/COORDINATION.md](docs/COORDINA
 | P0 | #50 Massive adapter correctness before live wiring | Agent 3 | — |
 | P1 | ✅ #6 Idempotent retries (#40) | Agent 2 | — |
 | P1 | ✅ #43 Idempotency fingerprint (#47) | Agent 2 | — |
-| P1 | ✅ #51 CSV ambiguous-commit race (#57) · #52 synthetic-route idempotency · #55 lockout/enumeration | Agent 2 | — |
+| P1 | ✅ #51 CSV ambiguous-commit race (#57) · ✅ #52 synthetic-route idempotency (#61) · #55 lockout/enumeration (ADR approved) | Agent 2 | — |
 | P1 | ✅ #7 CSV retry and ambiguous-commit cleanup (#48) | Agent 2 | — |
 | P1 | ✅ #13 Undefined-aware statistics (#29) | Agent 3 | — |
 | P1 | ✅ #14 Deflated Sharpe input consistency (#30) | Agent 3 | — |
@@ -64,7 +64,7 @@ Owners, file ownership and migration slots: [docs/COORDINATION.md](docs/COORDINA
 | P1 | #19 Terraform, validated and never applied | Lead | #3 |
 | P1 | #20 External load test (needs a separate host) | Unassigned | — |
 | P1 | #21 Storage lifecycle on workspace deletion | Unassigned | #9 |
-| P2 | #8 Security hardening batch (traceback locals ✅ #38) | Agent 2 | — |
+| P2 | #8 Security hardening: ✅ #38, ✅ A (#64), ✅ C (#65); B (`/ready`) after #62; small follow-up | Agent 2 | #62 |
 | P2 | #22 Per-worktree isolation hardening | Lead | — |
 | P2 | #23 Frontend completeness and synthetic labels | Unassigned | — |
 | P2 | #24 Benchmark methodology, golden tests | Unassigned | — |

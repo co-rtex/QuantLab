@@ -149,6 +149,12 @@ class Instrument(Base):
     last_date: Mapped[date | None] = mapped_column(Date)
     delisted: Mapped[bool] = mapped_column(Boolean, default=False)
     rows: Mapped[int] = mapped_column(Integer, default=0)
+    # Permanent identity (#9): the instrument this ticker belonged to on its last bar, and
+    # the version's delisting facts for it. Null for versions without identity data.
+    instrument_id: Mapped[str | None] = mapped_column(String(32), index=True)
+    delisting_date: Mapped[date | None] = mapped_column(Date)
+    delisting_reason: Mapped[str | None] = mapped_column(String(32))
+    delisting_return: Mapped[float | None] = mapped_column(Float)
 
 
 class StrategyDefinition(Base):
