@@ -267,9 +267,14 @@ def test_loopback_peers_do_not_wake_the_resolver(proxies, monkeypatch):
     assert len(dns.threads) == calls
 
 
-def test_inline_cold_resolution_runs_on_one_thread_at_a_time(proxies, monkeypatch):
-    """A dead resolver must not tie up every worker thread in getaddrinfo."""
+@pytest.mark.parametrize("environment", ["development", "production"])
+def test_inline_cold_resolution_runs_on_one_thread_at_a_time(proxies, monkeypatch, environment):
+    """A dead resolver must not tie up every worker thread in getaddrinfo. While the web
+    tier is unresolved, production treats its requests as having no address (fail closed,
+    #39); development throttles the peer as itself."""
     from quantlab_api import security
+
+    monkeypatch.setattr(get_settings(), "environment", environment)
 
     dns = FakeDNS({}, delay=0.5)  # every lookup fails slowly
     monkeypatch.setattr(socket, "getaddrinfo", dns)
@@ -286,4 +291,30 @@ def test_inline_cold_resolution_runs_on_one_thread_at_a_time(proxies, monkeypatc
         t.join()
     inline = [n for n in dns.threads if n != "trusted-proxy-resolver"]
     assert len(inline) == 1
-    assert results == ["10.9.0.2"] * 8  # unresolved: the peer is throttled as itself
+    expected = None if environment == "production" else "10.9.0.2"
+    assert results == [expected] * 8
+
+
+def test_production_fails_closed_when_the_web_tier_is_not_trusted(monkeypatch):
+    """#39: if the web tier drops out of the trusted set, its address must not become
+    everyone's rate-limit bucket (the audit's global lockout). Production refuses."""
+    from fastapi.testclient import TestClient
+
+    from quantlab_api import security
+    from quantlab_api.main import app
+
+    monkeypatch.setattr(get_settings(), "trusted_proxies", ["10.0.0.5"])
+    with TestClient(app, client=("10.0.0.6", 4000)) as web:  # recreated: new address
+        register(web, "user@example.com", "Correct-horse-9")
+        creds = {"email": "user@example.com", "password": "Correct-horse-9"}
+        assert web.post("/api/v1/auth/login", json=creds).status_code == 200  # development
+        monkeypatch.setattr(get_settings(), "environment", "production")
+        assert security.rate_limit_address(_request("10.0.0.6", "198.51.100.7")) is None
+        for _ in range(12):  # never a shared 429: every attempt is refused outright
+            r = web.post("/api/v1/auth/login", json=creds)
+            assert r.status_code == 503
+            assert r.json()["error"]["code"] == "edge_required"
+    # The trusted proxy still works in production.
+    with TestClient(app, client=("10.0.0.5", 4000)) as web:
+        ok = web.post("/api/v1/auth/login", json=creds, headers={"X-Forwarded-For": "198.51.100.7"})
+        assert ok.status_code == 200, ok.text

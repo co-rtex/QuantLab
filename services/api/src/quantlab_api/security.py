@@ -308,9 +308,19 @@ def rate_limit_address(request: Request) -> str | None:
     proxy's own address would put every user into one bucket, so that ten failed logins
     anywhere lock everyone out; callers skip the per-address limit instead and rely on
     the per-account limit. IPv6 addresses are returned as their /64 (``_bucket``).
+
+    In production a peer that is not a trusted proxy is also "unknown" (#39): clients only
+    reach the API through the web tier there, so an untrusted peer means the web tier fell
+    out of the trusted set (stale DNS after a recreate, a failed lookup, a wrong
+    ``QUANTLAB_TRUSTED_PROXIES``), and its address would again be everyone's bucket.
+    Callers then fail closed (``routes/auth.py``).
     """
-    address = _forwarded_client(request)[1]
-    return None if address is None else _bucket(address)
+    peer, address = _forwarded_client(request)
+    if address is None:
+        return None
+    if get_settings().environment == "production" and not _in(trusted_proxies.networks(), peer):
+        return None
+    return _bucket(address)
 
 
 def audit(
