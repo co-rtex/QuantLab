@@ -18,6 +18,7 @@ import pandas as pd
 
 from quantlab.analytics.performance import compute_performance, simple_returns
 from quantlab.backtest.engine import BacktestConfig, BacktestError, run_backtest
+from quantlab.research.stats import per_period_sharpe
 from quantlab.strategies.library import create_strategy
 
 Progress = Callable[[float, str], None]
@@ -40,6 +41,7 @@ DEFAULT_GRIDS: dict[str, dict[str, list[Any]]] = {
 def param_grid(
     strategy_key: str, base: dict[str, Any], grid: dict[str, list[Any]] | None
 ) -> list[dict[str, Any]]:
+    """Grid combinations around ``base``; the base itself is always one of them."""
     g = DEFAULT_GRIDS.get(strategy_key, {}) if grid is None else grid
     if not g:
         return [dict(base)]
@@ -52,9 +54,16 @@ def param_grid(
         except ValueError:
             continue  # invalid combination (e.g. fast >= slow)
         combos.append(params)
-    if base and base not in combos:
+    # Compare resolved parameters: ``{}`` (defaults) may equal a grid point, or not.
+    resolved = resolve_params(strategy_key, base)
+    if all(resolve_params(strategy_key, c) != resolved for c in combos):
         combos.append(dict(base))
     return combos
+
+
+def resolve_params(strategy_key: str, params: dict[str, Any]) -> dict[str, Any]:
+    """Parameters with every default filled in, for comparing parameter sets."""
+    return create_strategy(strategy_key, params).params.model_dump()
 
 
 def invested_equity(equity: pd.DataFrame) -> pd.Series:
@@ -270,6 +279,7 @@ def sensitivity(
 ) -> dict[str, Any]:
     """Full-sample metrics across the parameter grid (in-sample by construction)."""
     combos = param_grid(strategy_key, base_params, grid)
+    base_resolved = resolve_params(strategy_key, base_params)
     rows: list[dict[str, Any]] = []
     per_period: list[float] = []
     for i, params in enumerate(combos):
@@ -279,15 +289,18 @@ def sensitivity(
         inv = invested_equity(res.equity)
         bench = res.benchmark.reindex(inv.index) if res.benchmark is not None else None
         m = compute_performance(inv, bench, risk_free_rate=config.risk_free_rate).values
-        r = simple_returns(inv)
-        if r.std(ddof=1) > 0:
-            per_period.append(float(r.mean() / r.std(ddof=1)))
+        # The same window and rf as the reported Sharpe, so the deflation compares like
+        # with like (see stats.deflated_sharpe).
+        sr_p = per_period_sharpe(simple_returns(inv), risk_free_rate=config.risk_free_rate)
+        if sr_p is not None:
+            per_period.append(sr_p)
         rows.append(
             {
                 "params": params,
                 "label": _key(params),
-                "is_base": params == base_params,
+                "is_base": resolve_params(strategy_key, params) == base_resolved,
                 "sharpe": m.get("sharpe"),
+                "sharpe_per_period": sr_p,
                 "cagr": m.get("cagr"),
                 "max_drawdown": m.get("max_drawdown"),
                 "volatility": m.get("volatility"),
