@@ -52,6 +52,12 @@ workspaces would multiply one account's allowance. A replay of an idempotent req
 never refused because of the job it created.
 
 ### Elevated 429s on login
+If one user reports 429 with the right password while others can sign in, someone is
+spending that account's failure budget (`user.login_failed` events for its domain from
+several addresses). Browsers that signed in before keep working (device cookies,
+ADR-0008); ask the user to sign in from one of those. Logging out everywhere also revokes
+those device cookies, so do not use it as a remedy during such an attack.
+
 Throttling is per client address and per account (failed attempts only), shared through
 Redis. Behind the TLS edge the client address is the edge's TCP peer, which the edge
 writes into `X-Forwarded-For`; the web tier forwards it only with a valid edge secret, and
@@ -137,8 +143,14 @@ Behind a CDN or load balancer, the hop that faces the internet must overwrite
 hop's ranges, and use `{client_ip}` instead of `{remote_host}` (see the comments in
 `infra/edge/Caddyfile`). Never trust a header just because it is present.
 
-**Residual risk.** A failed login counts against both the address (10 per minute) and the
-account (30 per minute). A client with as few as three real addresses can therefore keep
-one account's login throttled. IPv6 clients are throttled per /64, so one IPv6 host counts
-once. The edge guarantees only that addresses cannot be forged. Per-device login
-credentials would close this; that is future work.
+**Residual risks.**
+* A failed login counts against both the address (10 per minute) and the account (30 per
+  minute), so a client with as few as three real addresses can hold an account at 429. A
+  browser that has signed in to that account before is exempt: it presents a device cookie
+  and is throttled per device instead (ADR-0008, #55). Only the owner's *new* devices can
+  still be held off. IPv6 clients are throttled per /64.
+* Registration answers 409 for an address that already has an account, so it reveals
+  which addresses are registered: 10 probes per minute per real client address, with no
+  global cap, so about 10·N a minute for an attacker with N addresses (an IPv6 /48 holds
+  65,536 /64 buckets). Each probe that succeeds creates an audited account (ADR-0010).
+  Email verification will close this once a mail adapter exists.

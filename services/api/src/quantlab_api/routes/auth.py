@@ -12,12 +12,16 @@ from quantlab_api.schemas import LoginIn, RegisterIn, TokenOut, UserOut
 from quantlab_api.security import (
     COOKIE_NAME,
     DB,
+    DEVICE_FAILURES,
+    DEVICE_WINDOW,
     CurrentUser,
     audit,
     create_access_token,
     hash_password,
     login_limiter,
     rate_limit_address,
+    set_device_cookie,
+    trusted_device,
     verify_password,
 )
 
@@ -106,11 +110,23 @@ def login(body: LoginIn, request: Request, response: Response, db: DB) -> TokenO
     # out. Production refuses such requests instead (_throttle_address).
     if ip is not None:
         login_limiter.check(f"login:ip:{ip}", limit)
-    acct_key = f"login:fail:{body.email.lower()}"
-    # Reserve atomically before verifying; refunded below if the login succeeds.
-    if not login_limiter.reserve(acct_key, limit * 3):
-        raise ApiError(429, "rate_limited", "Too many failed attempts; try again later")
-    user = db.scalar(select(User).where(User.email == body.email.lower()))
+    email = body.email.lower()
+    user = db.scalar(select(User).where(User.email == email))
+    # A browser that signed in to this account before presents a device cookie: it is
+    # throttled per device, so an attacker who spends the account's budget from a few
+    # addresses cannot lock the owner out of it (#55, ADR-0008). Its own failures are
+    # capped too, and past that cap it falls back to the account budget. Reserve
+    # atomically before verifying; refunded below if the login succeeds.
+    device = trusted_device(request, email, user)
+    budget: tuple[str, int] | None = None
+    if device is not None:
+        dev_key = f"login:dev:{device}"
+        if login_limiter.reserve(dev_key, DEVICE_FAILURES, DEVICE_WINDOW):
+            budget = (dev_key, DEVICE_WINDOW)
+    if budget is None:
+        budget = (f"login:fail:{email}", 60)
+        if not login_limiter.reserve(budget[0], limit * 3):
+            raise ApiError(429, "rate_limited", "Too many failed attempts; try again later")
     if (
         not verify_password(body.password, user.password_hash if user else None)
         or not user
@@ -126,9 +142,10 @@ def login(body: LoginIn, request: Request, response: Response, db: DB) -> TokenO
         )
         db.commit()
         raise ApiError(401, "invalid_credentials", "Invalid email or password")
-    login_limiter.refund(acct_key)
+    login_limiter.refund(*budget)
     audit(db, request, "user.login", user=user, target_type="user", target_id=user.id)
     db.commit()
+    set_device_cookie(response, user, device)
     return _issue(response, user)
 
 
