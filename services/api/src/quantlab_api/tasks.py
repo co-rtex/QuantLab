@@ -671,6 +671,8 @@ def validation_task(ctx: JobContext) -> Finalizer:
         **result,
         "engine_version": ENGINE_VERSION,
         "experiment_engine_version": experiment_engine,
+        # Same engine rules as the experiment; None when the experiment records none.
+        "comparable_engine": experiment_engine == ENGINE_VERSION if experiment_engine else None,
     }
 
     def finalize(db: Session) -> dict[str, Any]:

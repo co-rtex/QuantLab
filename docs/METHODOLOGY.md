@@ -391,11 +391,17 @@ names changed-input re-runs and leaves the check "not assessed" if they are the 
 **Engine versions.**
 * A worker refuses a backtest stamped for another engine version (#152).
 * A validation run re-runs backtests on the worker's current engine, so it records that
-  engine (`engine_version`) beside the experiment's (`experiment_engine_version`) (#155).
-* When they differ, the integrity report's `validation_engine` check warns that the two
-  follow different engine rules and suggests validating a reproduction. A run recorded
-  before #155 is "not assessed".
-* A mismatch is labelled rather than refused. The suite is internally consistent on one
+  engine (`engine_version`) beside the experiment's (`experiment_engine_version`), plus
+  `comparable_engine`: true when they are the same, false when not, and null when either
+  is unrecorded (#155). The research API returns `comparable_engine` with each run, so
+  the web, reports and the assistant can show it without parsing text.
+* **Cross-version validation is allowed but flagged.** When the versions differ, the
+  integrity report's `validation_engine` check warns: "The validation ran on engine X;
+  the experiment was computed on engine Y. These results are not directly comparable
+  under identical engine rules. Reproduce the experiment on engine X and validate the
+  reproduction for a like-for-like comparison." A run recorded before #155 is "not
+  assessed".
+* A mismatch is flagged rather than refused. The suite is internally consistent on one
   engine, and refusing would leave every older experiment unvalidatable until it was
   reproduced.
 

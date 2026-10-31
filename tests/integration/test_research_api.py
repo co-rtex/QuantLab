@@ -44,6 +44,7 @@ def test_integrity_before_and_after_validation(client, seeded):
     assert by["statistical_uncertainty"]["status"] in ("verified", "warning")
     assert by["multiple_testing"]["status"] in ("verified", "warning")
     assert by["validation_engine"]["status"] == "verified"  # same engine as the experiment
+    assert val["comparable_engine"] is True
 
     client.post(f"/api/v1/experiments/{exp_id}/reproduce", headers=h)
     assert run_pending_jobs() == ["completed"]
@@ -146,12 +147,19 @@ def test_validating_an_older_engines_experiment_labels_the_mismatch(client, seed
     val = client.get(f"/api/v1/experiments/{exp_id}/validation", headers=h).json()
     assert val["engine_version"] == ENGINE_VERSION  # the engine it actually ran on
     assert val["result"]["experiment_engine_version"] == "1.3.0"
+    # A flag the web, reports and the assistant can read without parsing text.
+    assert val["comparable_engine"] is False and val["result"]["comparable_engine"] is False
     rep = client.get(f"/api/v1/experiments/{exp_id}/integrity", headers=h).json()
     check = {c["key"]: c for c in rep["checks"]}["validation_engine"]
     assert check["status"] == "warning"
-    assert f"ran on engine {ENGINE_VERSION}" in check["finding"]
-    assert "computed on engine 1.3.0" in check["finding"]
+    assert check["finding"] == (
+        f"The validation ran on engine {ENGINE_VERSION}; the experiment was computed on "
+        "engine 1.3.0. These results are not directly comparable under identical engine "
+        f"rules. Reproduce the experiment on engine {ENGINE_VERSION} and validate the "
+        "reproduction for a like-for-like comparison."
+    )
     assert check["evidence"] == {
         "validation_engine_version": ENGINE_VERSION,
         "experiment_engine_version": "1.3.0",
+        "comparable_engine": False,
     }
