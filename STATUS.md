@@ -1,6 +1,6 @@
 # Status (authoritative handoff)
 
-_Last updated: 2026-10-31 (lead integration cycle 2: 90 PRs merged before this update, per `gh pr list --state merged`; main `1bc2da5`)_
+_Last updated: 2026-10-31 (lead integration cycle 2: 92 PRs merged before this update, per `gh pr list --state merged`; main `3ee609d`)_
 
 ## Where things stand
 All roadmap phases 0–10 are implemented. An independent audit on 2026-10-30
@@ -134,7 +134,7 @@ leases and migration slots: [docs/COORDINATION.md](docs/COORDINATION.md).
   * #116 (lead) the reaper mounts the data volume; it was sweeping an empty `/data`.
   * #119 RDS CA bundle (pinned checksum) for `sslmode=verify-full`.
   * #121 cross-feature point-in-time sweep (#118). It found **#120**: a short halt dropped a
-    security from the ML panel for up to 252 sessions. The fix is #125, in review.
+    security from the ML panel for up to 252 sessions. Fixed by #125 (below).
   * **#122 (P1 security, #115): no pickle in the job queue.** An allowlisted callable only,
     no callbacks or webhooks, and Redis AUTH.
   * #124 default start date on short datasets.
@@ -160,10 +160,18 @@ leases and migration slots: [docs/COORDINATION.md](docs/COORDINATION.md).
     scheduled run (Actions minutes, #17).
   * #140 runbook refreshed for Redis AUTH, the API-only secrets, retry backoff and
     database-time job deadlines.
+  * **#125 (#120) ML features over each instrument's own bars** (ML pipeline version 2).
+    A halt no longer drops a security from the panel. Staleness is described by model
+    inputs (`bars_span_21`, `log1p_max_gap_252`) rather than by excluding rows. An earlier
+    2·L staleness cap was retracted because it excluded thinly traded names that never
+    halted: in the synthetic selection table it kept 0–67% of their rows, while the
+    covariates keep 100%. The table is reproduced by `benchmarks/ml_liquidity_selection.py`.
+    Rows with no trading in 21 bars are excluded and counted. Flat volume is flagged as
+    a model input. Follow-ups: #142, #143, #144.
 * Every merge had an independent read-only lead review: no blockers. Should-fix items are
   tracked in #8, #51, #52 and #55 (Agent 2), #39 (gate), and #41, #50 and #54 (Agent 3).
 
-## Last verified (2026-10-31, main `1bc2da5`)
+## Last verified (2026-10-31, main `3ee609d`)
 Each merge was verified on a trial merge with current main, with pytest output written to a
 file rather than piped:
 * #28, #32, #36, #29, #30, #31: tree identical to main afterwards; 314 passed;
@@ -221,6 +229,10 @@ file rather than piped:
   for the affected files on the combined tree with #136. #138: 974 passed, and its changed
   tests pass with DeprecationWarning as an error. These are test- and docs-only, so no E2E.
 * #139: the blocking audits passed locally (exit 0) and in the PR's own CI run.
+* main@fd58a31 + #125 (byte-identical to main `3ee609d`): **1231 passed**, and the #120
+  strict xfail now passes. Benchmark output agrees with METHODOLOGY's table. Web clean;
+  **E2E 41/41**. An independent rebuild of the probe reproduced the table, and 72aebd7's
+  real panel code reproduced the retracted cap's column.
 * #101 + #103 + #104: 899 passed, E2E 27/27. #105 + #106 (byte-identical to main
   `f7e399f`): **906 passed, E2E 30/30**.
 
@@ -234,9 +246,9 @@ E2E failures this cycle were resource starvation, not regressions:
 Full-stack runs are now serialized machine-wide (`make e2e-serial`).
 
 ## Next steps (issues carry owners and acceptance criteria)
-1. **Agent 2:** no unblocked issue; standing by for reviews and findings.
-2. **Agent 3:** #125 (#120 ML own-bar windows). The staleness rule is being revised so it
-   targets genuine halts, not sparsely traded names, with a selection table in METHODOLOGY.
+1. **Agent 2:** #144 (pipeline version and exclusion counts on the ML results page).
+2. **Agent 3:** #142 (zero-volume stale-close bars are invisible to the staleness inputs),
+   then #143 (ML input hash version from the worker); close-out of #118.
 3. **Lead:** integrate.
 4. **Blocked on the user:**
    * #39 (a host, a second machine, and Caddyfile validation, since the caddy download was
