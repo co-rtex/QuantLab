@@ -44,5 +44,5 @@ emit QUANTLAB_GRAFANA_PORT "$grafana"
 # URLs follow an overridden port (QUANTLAB_PG_PORT=... make up), not just the slot's.
 pg=${QUANTLAB_PG_PORT:-$pg} redis=${QUANTLAB_REDIS_PORT:-$redis} web=${QUANTLAB_WEB_PORT:-$web}
 emit QUANTLAB_DATABASE_URL "postgresql+psycopg://quantlab:quantlab@localhost:$pg/quantlab"
-emit QUANTLAB_REDIS_URL "redis://localhost:$redis/0"
+emit QUANTLAB_REDIS_URL "redis://:${QUANTLAB_REDIS_PASSWORD:-quantlab-dev}@localhost:$redis/0"
 emit E2E_BASE_URL "http://localhost:$web"

@@ -8,6 +8,7 @@ import secrets
 from functools import lru_cache
 from pathlib import Path
 from typing import Literal
+from urllib.parse import urlsplit
 
 from pydantic import Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -73,6 +74,10 @@ def _create_dev_secret(path: Path) -> str:
     finally:
         tmp.unlink(missing_ok=True)
     return value
+
+
+# The published development default in docker-compose.yml; refused in production.
+DEV_REDIS_PASSWORD = "quantlab-dev"  # noqa: S105
 
 
 class Settings(BaseSettings):
@@ -174,6 +179,14 @@ class Settings(BaseSettings):
                 )
             if not self.cookie_secure:
                 raise ValueError("QUANTLAB_COOKIE_SECURE must be true in production")
+            # Redis holds the job queue and the login rate limits: without AUTH, anything
+            # that reaches it can fill the queue or reset the limits (#115).
+            redis_password = urlsplit(self.redis_url).password or ""
+            if len(redis_password) < 16 or redis_password == DEV_REDIS_PASSWORD:
+                raise ValueError(
+                    "QUANTLAB_REDIS_URL must carry a real Redis password (16+ characters) "
+                    "in production: set QUANTLAB_REDIS_PASSWORD"
+                )
             if self.market_data_provider and self.market_data_api_key is None:
                 raise ValueError(
                     "QUANTLAB_MARKET_DATA_API_KEY must be set (non-blank) when "

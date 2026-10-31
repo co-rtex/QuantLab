@@ -4,7 +4,9 @@ name: ${COMPOSE_PROJECT_NAME:-quantlab}
 
 x-app-env: &app-env
   QUANTLAB_DATABASE_URL: postgresql+psycopg://quantlab:quantlab@postgres:5432/quantlab
-  QUANTLAB_REDIS_URL: redis://redis:6379/0
+  # Redis requires AUTH (#115). The default is for local development only; production
+  # refuses a Redis URL without a real password (config.py).
+  QUANTLAB_REDIS_URL: redis://:${QUANTLAB_REDIS_PASSWORD:-quantlab-dev}@redis:6379/0
   QUANTLAB_DATA_DIR: /data
   QUANTLAB_ENVIRONMENT: ${QUANTLAB_ENVIRONMENT:-development}
   QUANTLAB_JWT_SECRET: ${QUANTLAB_JWT_SECRET:-dev-only-insecure-secret-change-me-0123456789}
@@ -32,11 +34,15 @@ services:
 
   redis:
     image: redis:7-alpine
-    command: ["redis-server", "--appendonly", "yes"]
+    # The password comes from the environment at start, never from the image (#115).
+    environment:
+      REDIS_PASSWORD: ${QUANTLAB_REDIS_PASSWORD:-quantlab-dev}
+    command: ["sh", "-c", "exec redis-server --appendonly yes --requirepass \"$$REDIS_PASSWORD\""]
     ports: ["127.0.0.1:${QUANTLAB_REDIS_PORT:-6380}:6379"]
     volumes: [redisdata:/data]
     healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
+      # REDISCLI_AUTH keeps the password out of the probe's command line.
+      test: ["CMD-SHELL", "REDISCLI_AUTH=\"$$REDIS_PASSWORD\" redis-cli ping | grep -q PONG"]
       interval: 2s
       timeout: 3s
       retries: 30

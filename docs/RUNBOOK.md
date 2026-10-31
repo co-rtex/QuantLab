@@ -6,9 +6,26 @@
 |---|---|---|
 | API liveness | `curl localhost:8000/api/v1/health` | `{"status":"ok"}` |
 | API readiness (DB + Redis) | `curl -i localhost:8000/api/v1/ready` | 200, both checks `ok` (503 when degraded) |
-| Workers | `docker compose --profile app ps worker` / `rq info -u $QUANTLAB_REDIS_URL` | workers listening on `quantlab` |
+| Workers | `docker compose --profile app ps worker` / `rq info` as below | workers listening on `quantlab` |
 | Reaper | logs contain `reaper_cycle` lines when it recovers anything | process running |
 | Metrics | `curl -H "Authorization: Bearer $QUANTLAB_METRICS_TOKEN" localhost:8000/metrics` | Prometheus text |
+
+### Inspecting the job queue
+
+The queue holds JSON entries that only `TrustedJob` will run (#115). The `rq` command line
+tools default to pickle and to RQ's base `Job`, so pointed at a Redis someone has tampered
+with they unpickle job meta and results *on your machine*. Always:
+
+```
+export RQ_REDIS_URL="$QUANTLAB_REDIS_URL"       # from the environment, never `-u <url>`:
+                                                # a command line, and its password, shows in `ps`
+export RQ_JOB_CLASS=quantlab_api.jobs.TrustedJob
+rq info -S rq.serializers.JSONSerializer
+rq requeue --all -S rq.serializers.JSONSerializer   # only with both variables set
+```
+
+Never point plain `rq` tools, or rq-dashboard (it reads jobs with the default serializer),
+at this Redis.
 
 ## Observability
 
@@ -134,8 +151,9 @@ Deleting a workspace removes its files after the database commit (#21,
 ## Configuration checklist for production
 
 `QUANTLAB_ENVIRONMENT=production` refuses to start unless `QUANTLAB_JWT_SECRET` is a real
-secret (≥ 32 characters, no placeholder words), `QUANTLAB_COOKIE_SECURE=true`, and
-`QUANTLAB_METRICS_TOKEN` is set. Terminate TLS at the trusted edge (below). Run migrations
+secret (≥ 32 characters, no placeholder words), `QUANTLAB_COOKIE_SECURE=true`,
+`QUANTLAB_METRICS_TOKEN` is set, and the Redis URL carries a real password (16+ characters,
+from `QUANTLAB_REDIS_PASSWORD` in compose; #115). Terminate TLS at the trusted edge (below). Run migrations
 (`alembic -c services/api/alembic.ini upgrade head`) before starting new API versions.
 
 In production, login and registration accept only requests that arrive through the web
@@ -180,6 +198,7 @@ and ten failed logins would lock everyone out. Step 3 checks this.
    ```
    export QUANTLAB_EDGE_SECRET=$(openssl rand -hex 32)   # store it like the JWT secret
    export QUANTLAB_JWT_SECRET=$(openssl rand -hex 32) QUANTLAB_METRICS_TOKEN=$(openssl rand -hex 24)
+   export QUANTLAB_REDIS_PASSWORD=$(openssl rand -hex 24)   # hex: safe inside the Redis URL
    docker compose -f docker-compose.yml -f infra/edge/compose.yml --profile app up -d --build
    ```
    For a public domain also set `QUANTLAB_EDGE_SITE=quantlab.example.com` and

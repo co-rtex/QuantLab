@@ -33,6 +33,8 @@ from typing import Any
 
 from redis import Redis
 from rq import Queue
+from rq.job import Job as RQJob
+from rq.serializers import JSONSerializer
 from sqlalchemy import func, or_, select, text, update
 from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import Session
@@ -94,6 +96,79 @@ def worker_identity() -> str:
 # --------------------------------------------------------------------------- queueing
 _redis: Redis | None = None  # type: ignore[type-arg]
 
+#: The one callable a worker runs from the queue. Everything a job needs is in its
+#: PostgreSQL row (ADR-0002), so the queue entry is only a pointer to it (#115).
+TRUSTED_FUNC = "quantlab_api.jobs.execute_job"
+
+
+class UntrustedJobError(RuntimeError):
+    """A queue entry that is not ``execute_job(<job id>)``: never run."""
+
+
+class TrustedJob(RQJob):
+    """An RQ job that runs nothing but :data:`TRUSTED_FUNC` with one job id (#115).
+
+    RQ's default serializer is pickle, so anyone who could write to Redis could make a
+    worker run arbitrary code while it unpickled a job; the JSON serializer closes that.
+    It does not close the rest: RQ stores the callable *by name* and imports it on the
+    worker, and so it does the success, failure and stopped callbacks, and it delivers
+    any webhooks the entry lists. A JSON entry naming ``os.system``, or failing on purpose
+    with a failure callback, would still run. This class checks the callable and its
+    arguments before RQ resolves anything, never resolves a callback, and never delivers
+    a webhook: the application uses neither.
+    """
+
+    def restore(self, raw_data: Any) -> Any:
+        result = super().restore(raw_data)
+        self.webhooks = []  # never registered by QuantLab: an entry's list is not trusted
+        return result
+
+    @property
+    def func(self) -> Any:
+        self._require_trusted()
+        return super().func
+
+    # Callbacks are imported by name, like the callable: none is ever run.
+    @property
+    def success_callback(self) -> None:
+        return None
+
+    @property
+    def failure_callback(self) -> None:
+        return None
+
+    @property
+    def stopped_callback(self) -> None:
+        return None
+
+    def _require_trusted(self) -> None:
+        args, kwargs = self.args, self.kwargs
+        if (
+            self.func_name != TRUSTED_FUNC
+            or self.instance is not None
+            or kwargs
+            or len(args) != 1
+            or not isinstance(args[0], str)
+            or not _is_uuid(args[0])
+        ):
+            log.error(
+                "untrusted_job_refused", rq_job_id=self.id, func_name=str(self.func_name)[:200]
+            )
+            raise UntrustedJobError(f"refusing to run queue entry {self.id!r}")
+
+
+def _is_uuid(value: str) -> bool:
+    try:
+        uuid.UUID(value)
+    except ValueError:
+        return False
+    return True
+
+
+#: How every queue and worker must talk to Redis: JSON, never pickle, and only trusted
+#: jobs. A worker built without these would unpickle whatever is on the queue.
+RQ_OPTIONS: dict[str, Any] = {"serializer": JSONSerializer, "job_class": TrustedJob}
+
 
 def redis_conn() -> Redis:  # type: ignore[type-arg]
     global _redis
@@ -109,7 +184,7 @@ def set_redis(conn: Redis | None) -> None:  # type: ignore[type-arg]
 
 
 def get_queue() -> Queue:
-    return Queue(get_settings().queue_name, connection=redis_conn())
+    return Queue(get_settings().queue_name, connection=redis_conn(), **RQ_OPTIONS)
 
 
 def enqueue(job: Job, delay_seconds: float = 0.0) -> bool:
