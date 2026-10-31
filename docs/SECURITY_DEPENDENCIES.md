@@ -119,7 +119,8 @@ client, not the service.
 **Note:** `httpx>=0.28` is declared as a *runtime* dependency of `quantlab-api`
 (`services/api/pyproject.toml`), yet no runtime code imports it. Moving it to the dev group,
 and adding `httpx2` there when Starlette requires it, changes `pyproject.toml` and `uv.lock`.
-That needs a lease, so it's proposed on #137, not done here.
+**Deferred** (lead, on #137): not worth the lockfile churn until a Starlette release
+requires `httpx2`. Then do both in one leased change.
 
 ### PyJWT: `InsecureKeyLengthWarning: The HMAC key is 14 bytes long`
 
@@ -140,42 +141,25 @@ refused. PyJWT warns when *encoding* with that key. The service never signs with
   - 31 characters are refused and 32 accepted;
   - every accepted secret is at least 32 bytes.
 
-## CI: proposed hardening (a proposal; `.github/workflows/**` belongs to the lead)
+## CI audits
 
-CI already audits both runtime trees on every push (`.github/workflows/ci.yml`), with two
-gaps:
+Before #137, CI audited both runtime trees on every push (`.github/workflows/ci.yml`), but
+the Python audit never failed the build: it ended with
+`|| echo "::warning::pip-audit reported findings"`. #137 proposed hardening, and the lead
+applied it in #139. The `.github/workflows/**` files belong to the lead:
 
-1. **The Python audit never fails the build.** It ends with
-   `|| echo "::warning::pip-audit reported findings"`. A known runtime vulnerability shows
-   only as a warning.
-2. **No scheduled run.** New advisories land against unchanged lockfiles, and nothing
-   audits until the next push.
+- **Python, runtime:** blocking, with `pip-audit==2.10.1 --strict --no-deps --disable-pip`
+  over `uv export --frozen --all-packages --no-dev --no-emit-workspace`. These are the same
+  80 packages audited above.
+- **Python, dev tools:** report only, over `--all-groups`.
+- **npm, runtime:** blocking at any severity (`npm audit --omit=dev --audit-level=low`).
+- **npm, dev tools:** report only. It warns on GHSA-g3hv-75wg-m249 (accepted above).
 
-Proposed, with the tool pinned for reproducible output. Each accepted finding gets an
-`--ignore-vuln <ID>` that names its entry in this file.
+**Accepted findings:** each one is passed as `--ignore-vuln <ID>`, naming its entry in this
+file.
 
-```yaml
-# python job: replace the existing "Dependency audit" step
-      - name: Dependency audit (runtime, blocking)
-        run: >-
-          uvx pip-audit==2.10.1 --strict --progress-spinner off
-          -r <(uv export --frozen --no-dev --no-hashes --no-emit-workspace)
-      - name: Dependency audit (dev tools, report only)
-        run: >-
-          uvx pip-audit==2.10.1 --progress-spinner off
-          -r <(uv export --frozen --all-groups --no-hashes --no-emit-workspace)
-          || echo "::warning::pip-audit reported findings in dev tools"
-
-# web job: keep the runtime audit blocking, at any severity; report dev tools only
-      - run: npm audit --omit=dev --audit-level=low
-      - name: npm audit (dev tools, report only)
-        run: npm audit || echo "::warning::npm audit reported findings in dev tools (see docs/SECURITY_DEPENDENCIES.md)"
-
-# workflow triggers: audit weekly even when nothing is pushed
-on:
-  schedule:
-    - cron: "17 6 * * 1"
-```
+**Not adopted:** a weekly scheduled audit. Actions minutes are the user's call (#17), so new
+advisories against an unchanged lockfile surface at the next push.
 
 **Trade-off:** a blocking audit can fail CI when PyPI's or npm's advisory service is down.
 Re-running the job is enough. Making it non-blocking would hide real findings.
