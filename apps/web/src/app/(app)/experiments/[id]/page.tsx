@@ -5,7 +5,7 @@ import { useParams, useRouter } from "next/navigation";
 import { useState } from "react";
 import { EquityChart, MonthlyReturns } from "@/components/charts";
 import { PageHeader } from "@/components/Shell";
-import { ErrorNote, JobProgress, Panel, Pending, QueryError, StatusPill, SyntheticTag } from "@/components/ui";
+import { ErrorNote, JobProgress, Panel, Pending, QueryError, StatusPill, SyntheticLabel, syntheticStatus } from "@/components/ui";
 import { AssistantPanel } from "@/components/Assistant";
 import { IntegrityReport, ValidationPanel } from "@/components/Validation";
 import { api, ApiError, newIdempotencyKey, type DatasetVersion, type Experiment, type Job, type Series } from "@/lib/api";
@@ -100,7 +100,7 @@ function EvidenceRibbon({ exp, version, analysis }: { exp: Experiment; version?:
     <section aria-label="Evidence" className="mb-6 rounded-[6px] border border-ink/80 bg-surface">
       <div className="flex flex-wrap items-center gap-2 border-b border-rule px-4 py-2 text-xs">
         <span className="font-semibold text-ink">Evidence</span>
-        {version?.is_synthetic && <SyntheticTag />}
+        <SyntheticLabel status={syntheticStatus(version?.is_synthetic)} />
         <span className="text-ink-2">Results below were computed from exactly these inputs and can be regenerated from the manifest.</span>
       </div>
       <dl className="grid grid-cols-2 gap-x-6 gap-y-2 px-4 py-3 text-sm sm:grid-cols-3 lg:grid-cols-5 2xl:grid-cols-9">
@@ -493,7 +493,7 @@ export default function ExperimentPage() {
 
           <IntegrityReport experimentId={id} refreshKey={`${validationRun}-${repro.data?.comparisons.length ?? 0}`} />
           <ValidationPanel experimentId={id} onComplete={setValidationRun} />
-          <AssistantPanel experimentId={id} />
+          <AssistantPanel experimentId={id} synthetic={syntheticStatus(version.data?.is_synthetic)} />
 
           {a?.factor_exposures && !a.factor_exposures.error && (
             <Panel title="Factor exposures" aside={a.factor_exposures.method}>

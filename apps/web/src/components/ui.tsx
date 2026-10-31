@@ -213,6 +213,34 @@ export function JobProgress({ job, onCancel }: { job: Job; onCancel?: () => void
   );
 }
 
+/** Whether a result's dataset is synthetic. "unknown" until that is positively known. */
+export type SyntheticStatus = "synthetic" | "real" | "unknown";
+
+export function syntheticStatus(isSynthetic: boolean | null | undefined): SyntheticStatus {
+  return isSynthetic === true ? "synthetic" : isSynthetic === false ? "real" : "unknown";
+}
+
+/**
+ * The synthetic label for a result, failing toward a label (#23): only data positively
+ * known to be real carries none. While the dataset cannot be checked (still loading,
+ * failed, or not found) the result says so, instead of reading as real.
+ */
+export function SyntheticLabel({ status, inline = false }: { status: SyntheticStatus; inline?: boolean }) {
+  if (status === "real") return null;
+  const tag =
+    status === "synthetic" ? (
+      <SyntheticTag />
+    ) : (
+      <span
+        className="inline-flex items-center rounded border border-rule bg-surface px-1.5 py-0.5 text-xs font-medium text-ink-2"
+        title="The dataset could not be checked. Treat these results as possibly synthetic."
+      >
+        Synthetic status unknown
+      </span>
+    );
+  return inline ? <span className="ml-1.5 align-middle">{tag}</span> : tag;
+}
+
 export function SyntheticTag() {
   return (
     <span

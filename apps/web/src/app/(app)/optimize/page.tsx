@@ -4,8 +4,9 @@ import { useState, type FormEvent } from "react";
 import { SERIES } from "@/components/charts";
 import { PageHeader } from "@/components/Shell";
 import { ErrorNote, Panel, QueryError, SyntheticTag } from "@/components/ui";
-import { api, ApiError, type DatasetVersion, type Instrument, type Page } from "@/lib/api";
+import { api, ApiError, type DatasetVersion } from "@/lib/api";
 import { num, pct, shortHash } from "@/lib/format";
+import { useInstruments } from "@/lib/instruments";
 import { useApi } from "@/lib/useApi";
 import { useWorkspace } from "@/lib/workspace";
 
@@ -44,7 +45,7 @@ export default function OptimizePage() {
   const [dv, setDv] = useState("");
   const dvId = dv || versions.data?.[0]?.id || null;
   const version = versions.data?.find((v) => v.id === dvId);
-  const inst = useApi<Page<Instrument>>(dvId ? `/dataset-versions/${dvId}/instruments?limit=2000` : null);
+  const inst = useInstruments(dvId);
   const assets = inst.data?.items.filter((i) => i.asset_class !== "index_fund") ?? [];
   const index = inst.data?.items.find((i) => i.asset_class === "index_fund")?.symbol;
   const [res, setRes] = useState<Response>();

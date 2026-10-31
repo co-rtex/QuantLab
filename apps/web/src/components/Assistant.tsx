@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, type FormEvent } from "react";
-import { ErrorNote, Panel } from "@/components/ui";
+import { ErrorNote, Panel, SyntheticLabel, type SyntheticStatus } from "@/components/ui";
 import { api, ApiError } from "@/lib/api";
 
 interface FactRef {
@@ -45,7 +45,7 @@ function Cited({ text }: { text: string }) {
   );
 }
 
-export function AssistantPanel({ experimentId }: { experimentId: string }) {
+export function AssistantPanel({ experimentId, synthetic }: { experimentId: string; synthetic: SyntheticStatus }) {
   const [question, setQuestion] = useState("");
   const [history, setHistory] = useState<{ q: string; a: Reply }[]>([]);
   const [busy, setBusy] = useState(false);
@@ -71,7 +71,15 @@ export function AssistantPanel({ experimentId }: { experimentId: string }) {
   }
 
   return (
-    <Panel title="Ask about this experiment" aside="Answers cite computed results; no investment advice">
+    <Panel
+      title="Ask about this experiment"
+      aside={
+        <span className="flex flex-wrap items-center justify-end gap-2">
+          <SyntheticLabel status={synthetic} />
+          Answers cite computed results; no investment advice
+        </span>
+      }
+    >
       <form onSubmit={onSubmit} className="flex flex-wrap gap-2">
         <label className="min-w-64 flex-1">
           <span className="sr-only">Question</span>
