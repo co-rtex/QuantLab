@@ -92,6 +92,9 @@ def create_ml_run(
         ) from exc
     if set(cfg.models) - set(MODELS):
         raise ApiError(422, "invalid_config", f"models must be among {list(MODELS)}")
+    # Stamp the version this API hashes with; the worker refuses a run whose stamp differs
+    # from the code it runs (#143), so a stored hash always describes the panel computed.
+    cfg = cfg.model_copy(update={"pipeline_version": ML_PIPELINE_VERSION})
     doc = cfg.model_dump(mode="json")
     ihash = hashlib.sha256(
         # The pipeline version too: the same dataset and config give a different panel
