@@ -24,6 +24,7 @@ import numpy as np
 import pandas as pd
 
 from quantlab.data.calendar import trading_days
+from quantlab.data.identity import normalize_history, normalize_master
 from quantlab.data.schema import normalize_actions, normalize_bars
 
 SECTORS = ("Technology", "Financials", "Healthcare", "Energy", "Industrials", "Consumer")
@@ -56,6 +57,30 @@ class SyntheticMarket:
     instruments: pd.DataFrame
     market_regime: pd.Series
     provenance: dict[str, object] = field(default_factory=dict)
+
+    @property
+    def symbol_history(self) -> pd.DataFrame:
+        """Point-in-time ticker history: one ticker per synthetic instrument, valid from
+        its listing until the day after its last bar (open-ended while it trades)."""
+        i = self.instruments
+        return normalize_history(
+            pd.DataFrame(
+                {
+                    "instrument_id": i["instrument_id"],
+                    "symbol": i["symbol"],
+                    "valid_from": i["listed"],
+                    "valid_to": i["delisted"] + pd.Timedelta(days=1),
+                }
+            )
+        )
+
+    @property
+    def master(self) -> pd.DataFrame:
+        """Instrument master (listing and delisting facts); no delisting returns."""
+        i = self.instruments
+        return normalize_master(
+            i.rename(columns={"listed": "listing_date", "delisted": "delisting_date"})
+        )
 
 
 def _symbols(n: int) -> list[str]:
@@ -188,14 +213,18 @@ def generate_market(spec: SyntheticSpec | None = None) -> SyntheticMarket:
                     }
                 )
 
+    delisted = [dates[last[i]] if last[i] < T - 1 else pd.NaT for i in range(n)]
     instruments = pd.DataFrame(
         {
+            "instrument_id": [f"QLSYN{s[3:]}" for s in symbols],
             "symbol": symbols,
             "name": [f"Synthetic Asset {s[3:]}" for s in symbols],
             "sector": [SECTORS[k] for k in sector_of],
             "asset_class": "equity",
             "listed": dates[first],
-            "delisted": [dates[last[i]] if last[i] < T - 1 else pd.NaT for i in range(n)],
+            "delisted": delisted,
+            "delisting_reason": None,  # the generator models no specific cause
+            "delisting_return": np.nan,
             "beta_true": np.round(beta, 4),
             "is_synthetic": True,
         }
@@ -239,12 +268,15 @@ def generate_market(spec: SyntheticSpec | None = None) -> SyntheticMarket:
                 pd.DataFrame(
                     [
                         {
+                            "instrument_id": f"QL{BENCHMARK_SYMBOL}",
                             "symbol": BENCHMARK_SYMBOL,
                             "name": "Synthetic Market Index",
                             "sector": "Index",
                             "asset_class": "index_fund",
                             "listed": dates[0],
                             "delisted": pd.NaT,
+                            "delisting_reason": None,
+                            "delisting_return": np.nan,
                             "beta_true": 1.0,
                             "is_synthetic": True,
                         }

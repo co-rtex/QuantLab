@@ -70,20 +70,38 @@ with persistence and monitoring (see docs/RUNBOOK.md).
 
 ## ADR-0008 Client address handling behind the web proxy
 
-**Context.** The Next.js `/api/*` proxy sits between browsers and the API. Forwarding a
-client-supplied `X-Forwarded-For` would let anyone choose the address used for login
-throttling.
-**Decision (revised 2026-10-30).** The proxy always forwards exactly one address: the
-rightmost `X-Forwarded-For` hop, which Next fills with the socket address when the request
-carries none and which an edge in front appends. The API accepts that header only from
-peers listed in `QUANTLAB_TRUSTED_PROXIES` (IPs, CIDRs or hostnames; compose sets `web`)
-and reads it right to left, skipping trusted hops (`security.client_ip`).
-**Why revised.** The original rule (forward only with `TRUST_FORWARDED_FOR=true`) made
-the API see every browser as the web container, so the 10-per-minute address limit was a
-limit for all users together: an independent audit showed one client's failed logins
-returning 429 to another user's correct password. The flag also never worked, because
-uvicorn was not configured to trust the web tier.
-**Consequences.** When the web tier is exposed directly, a client that sends its own
-`X-Forwarded-For` chooses its address bucket; that evades the per-address limit but cannot
-lock anyone else out, and the per-account failure limit still bounds guessing. Internet
-deployments should put an edge that overwrites the header in front (docs/RUNBOOK.md).
+**Context.** The Next.js `/api/*` proxy sits between browsers and the API, and the API
+throttles logins and registrations per client address. Next keeps a client-supplied
+`X-Forwarded-For` unchanged (it fills the header only when it is absent), and a route
+handler cannot read the socket peer, so the web tier alone cannot tell a real client
+address from a forged one.
+**Decision (revised 2026-10-30, #3).** Only a trusted TLS edge states the client address.
+* The edge (Caddy, `infra/edge/`) overwrites `X-Forwarded-For` with its TCP peer, never
+  appends, strips `Forwarded`/`X-Real-IP`, and adds a shared secret header. It is the only
+  published service; only it and the web tier share a network.
+* The web tier, when `QUANTLAB_EDGE_SECRET` is set, refuses (403 `edge_required`) any
+  request without the secret and forwards the edge's single address. Without the secret
+  (development, no edge) it forwards no address at all.
+* The API accepts the header only from `QUANTLAB_TRUSTED_PROXIES` (compose: `web`),
+  resolved off the request path with last-good retention (`security.TrustedProxies`).
+  A trusted proxy that states no usable address means "unknown" (`security.rate_limit_address`).
+  In production that means the edge is missing, and login and registration fail closed
+  (503 `edge_required`). In development the per-address limit is skipped (the per-account
+  limit still applies) and all registrations share one coarse cap. A shared login bucket
+  would have let ten failed logins lock every user out.
+**Why revised.** The first rule (forward only with `TRUST_FORWARDED_FOR=true`) made the
+API see every browser as the web container, so one client's failed logins returned 429 to
+everyone (audit 2026-10-30). Its replacement (forward the rightmost hop) let a client that
+reaches the web tier choose its address. The earlier claim here that such a client "cannot
+lock anyone else out" was wrong: it could send a victim's address to exhaust the victim's
+bucket, and rotate addresses to spend a victim account's failed-login budget, because the
+account limit is reserved before the password is checked.
+**Consequences.** Public exposure requires three things (docs/RUNBOOK.md, "Exposing a
+deployment"): the edge, `infra/edge/verify.sh` passing, and a Docker host that preserves
+client source addresses. Docker Desktop, rootless Docker and docker-proxy replace them with
+a gateway address. The remote probe in `verify.sh` checks this. IPv6 clients are throttled
+per /64. Without the edge, development has no
+per-address login throttling, which is acceptable only on 127.0.0.1. A client can still delay one account's
+login by spending its failure budget (30 per minute). It needs only about three real
+addresses to do so, because each address allows 10 attempts a minute. Addresses can no
+longer be forged. Per-device login credentials would fix this; that is future work.

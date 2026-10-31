@@ -109,9 +109,39 @@ def bootstrap_ci(
     return out
 
 
-def probabilistic_sharpe(returns: pd.Series, benchmark_sr: float = 0.0) -> float | None:
-    """P(true per-period Sharpe > ``benchmark_sr``) given sample length, skew and kurtosis."""
-    r = returns.dropna().to_numpy(dtype=float)
+def _excess(returns: pd.Series, risk_free_rate: float, periods: int) -> np.ndarray:
+    rf_p = (1 + risk_free_rate) ** (1 / periods) - 1  # same convention as compute_performance
+    return returns.dropna().to_numpy(dtype=float) - rf_p
+
+
+def per_period_sharpe(
+    returns: pd.Series, *, risk_free_rate: float = 0.0, periods: int = 252
+) -> float | None:
+    """Non-annualized Sharpe of excess returns; ``None`` without dispersion.
+
+    This is the statistic the deflated Sharpe ratio compares across trials, and equals
+    ``compute_performance(...)["sharpe"] / sqrt(periods)`` for the same returns.
+    """
+    ex = _excess(returns, risk_free_rate, periods)
+    if len(ex) < 2:
+        return None
+    sd = float(ex.std(ddof=1))
+    return None if sd <= ZERO_DISPERSION else float(ex.mean() / sd)
+
+
+def probabilistic_sharpe(
+    returns: pd.Series,
+    benchmark_sr: float = 0.0,
+    *,
+    risk_free_rate: float = 0.0,
+    periods: int = 252,
+) -> float | None:
+    """P(true per-period excess Sharpe > ``benchmark_sr``) given length, skew and kurtosis.
+
+    Excess returns are over the per-period risk-free rate; skew and kurtosis do not depend
+    on it.
+    """
+    r = _excess(returns, risk_free_rate, periods)
     n = len(r)
     if n < 10 or r.std(ddof=1) <= ZERO_DISPERSION:
         return None
@@ -135,18 +165,29 @@ def expected_max_sharpe(trial_sharpes: list[float]) -> float:
     return math.sqrt(var) * ((1 - EULER_GAMMA) * z1 + EULER_GAMMA * z2)
 
 
-def deflated_sharpe(returns: pd.Series, trial_sharpes: list[float]) -> dict[str, Any]:
+def deflated_sharpe(
+    returns: pd.Series,
+    trial_sharpes: list[float],
+    *,
+    risk_free_rate: float = 0.0,
+    periods: int = 252,
+) -> dict[str, Any]:
     """DSR: the PSR against the Sharpe one would expect from the best of N null trials.
 
-    ``trial_sharpes`` are per-period Sharpe ratios of every variant evaluated on the same
-    data (including the selected one).
+    ``trial_sharpes`` are :func:`per_period_sharpe` values of every variant evaluated on the
+    same data (including the selected one). ``returns`` must be the selected variant's
+    returns over the same window, with the same ``risk_free_rate``, that produced its
+    trial Sharpe; otherwise the comparison with the null maximum is biased.
     """
     sr0 = expected_max_sharpe(trial_sharpes)
+    rf, p = risk_free_rate, periods
     return {
         "trials": len(trial_sharpes),
+        "observations": int(returns.notna().sum()),
+        "selected_sharpe_per_period": per_period_sharpe(returns, risk_free_rate=rf, periods=p),
         "expected_max_sharpe_per_period": sr0,
-        "psr_vs_zero": probabilistic_sharpe(returns, 0.0),
-        "deflated_sharpe": probabilistic_sharpe(returns, sr0),
+        "psr_vs_zero": probabilistic_sharpe(returns, 0.0, risk_free_rate=rf, periods=p),
+        "deflated_sharpe": probabilistic_sharpe(returns, sr0, risk_free_rate=rf, periods=p),
     }
 
 
