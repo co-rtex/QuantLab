@@ -34,6 +34,7 @@ from typing import Any
 from redis import Redis
 from rq import Queue
 from sqlalchemy import func, or_, select, text, update
+from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import Session
 
 from quantlab_api.config import get_settings
@@ -148,16 +149,81 @@ def lock_idempotency_key(db: Session, workspace_id: uuid.UUID, key: str | None) 
     without a key are not serialized.
     """
     if key:
-        advisory_lock(db, f"idempotency:{workspace_id}:{key}")
+        # A waiter holds a pooled connection, so it gives up after a while (#43).
+        advisory_lock(db, f"idempotency:{workspace_id}:{key}", timeout=IDEMPOTENCY_WAIT)
 
 
-def advisory_lock(db: Session, name: str) -> None:
+# How long a request waits for an earlier request with the same Idempotency-Key.
+IDEMPOTENCY_WAIT = "15s"
+LOCK_NOT_AVAILABLE = "55P03"  # PostgreSQL SQLSTATE raised when lock_timeout expires
+
+
+def advisory_lock(db: Session, name: str, *, timeout: str | None = None) -> None:
     """A PostgreSQL advisory lock named ``name``, held until the transaction ends.
 
-    Callers that take several take them in a fixed order (an idempotency key first).
+    Callers that take several take them in a fixed order (an idempotency key first). With
+    ``timeout``, a request that cannot get the lock in time gets 409 and may retry.
     """
-    if db.get_bind().dialect.name == "postgresql":
+    if db.get_bind().dialect.name != "postgresql":
+        return
+    if timeout is None:
         db.execute(text("SELECT pg_advisory_xact_lock(hashtextextended(:k, 0))"), {"k": name})
+        return
+    # set_config(..., true) is SET LOCAL, but takes a bind parameter.
+    db.execute(text("SELECT set_config('lock_timeout', :t, true)"), {"t": timeout})
+    try:
+        db.execute(text("SELECT pg_advisory_xact_lock(hashtextextended(:k, 0))"), {"k": name})
+    except OperationalError as exc:
+        # Only lock_timeout (55P03, lock_not_available) means "someone holds the key".
+        # A cancelled statement, a shutdown or a dropped connection is a real error.
+        if getattr(exc.orig, "sqlstate", None) != LOCK_NOT_AVAILABLE:
+            raise
+        try:
+            db.rollback()  # ends the aborted transaction, and with it the SET LOCAL
+        except Exception as rollback_exc:
+            # The 409 below is still right; the session is discarded with the request.
+            log.warning("rollback_after_lock_timeout_failed", error=type(rollback_exc).__name__)
+        raise ApiError(
+            409, "request_in_progress", "An identical request is still in progress; retry"
+        ) from exc
+    db.execute(text("SET LOCAL lock_timeout = DEFAULT"))
+
+
+def request_fingerprint(endpoint: str, user_id: uuid.UUID, body: Any) -> str:
+    """What the client asked for: the endpoint (with its path ids), the user and the
+    request body. An Idempotency-Key replays only a request with the same fingerprint."""
+    doc = {"endpoint": endpoint, "user": str(user_id), "body": body}
+    return hashlib.sha256(json.dumps(doc, sort_keys=True, default=str).encode()).hexdigest()
+
+
+def replayed_job(
+    db: Session,
+    workspace_id: uuid.UUID,
+    key: str | None,
+    fingerprint: str,
+    legacy_match: Callable[[Job], bool],
+) -> Job | None:
+    """The job an identical earlier request created with this key, or None for a new key.
+
+    Keys are scoped to the workspace: a key another member already used, or one used for a
+    different endpoint, parent, body or name, is 409 ``idempotency_conflict`` (#43). Jobs
+    created before fingerprints were stored are compared with ``legacy_match``. Call after
+    ``lock_idempotency_key``. The fingerprint goes into the new job's payload as
+    ``request_fingerprint``.
+    """
+    if not key:
+        return None
+    prior = db.scalar(
+        select(Job).where(Job.workspace_id == workspace_id, Job.idempotency_key == key)
+    )
+    if prior is None:
+        return None
+    stored = (prior.payload or {}).get("request_fingerprint")
+    if not (stored == fingerprint if stored is not None else legacy_match(prior)):
+        raise ApiError(
+            409, "idempotency_conflict", "Idempotency-Key was already used with a different request"
+        )
+    return prior
 
 
 def submit_job(

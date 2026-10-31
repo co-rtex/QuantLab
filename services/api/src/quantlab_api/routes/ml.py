@@ -14,7 +14,13 @@ from quantlab.ml.pipeline import MODELS, MLConfig
 from quantlab_api import artifacts
 from quantlab_api.config import get_settings
 from quantlab_api.errors import ApiError
-from quantlab_api.jobs import enqueue, lock_idempotency_key, submit_job
+from quantlab_api.jobs import (
+    enqueue,
+    lock_idempotency_key,
+    replayed_job,
+    request_fingerprint,
+    submit_job,
+)
 from quantlab_api.models import Job, MLRun, Role
 from quantlab_api.routes.datasets import load_version
 from quantlab_api.schemas import MAX_OFFSET, JobOut
@@ -64,7 +70,7 @@ def create_ml_run(
     user: CurrentUser,
     db: DB,
     request: Request,
-    idempotency_key: str | None = Header(None, max_length=128),
+    idempotency_key: str | None = Header(None, min_length=1, max_length=128),
 ) -> dict[str, Any]:
     require_workspace(db, user, workspace_id, Role.editor)
     dv, ds = load_version(db, user, body.dataset_version_id)
@@ -85,22 +91,31 @@ def create_ml_run(
     ihash = hashlib.sha256(
         json.dumps({"dataset": dv.version_hash, "config": doc}, sort_keys=True).encode()
     ).hexdigest()
+    fingerprint = request_fingerprint(
+        f"ml.create:{workspace_id}", user.id, body.model_dump(mode="json")
+    )
+
+    def previous(job: Job) -> MLRun | None:
+        # By the payload's run id too: a job from before #40 may never have been linked.
+        run_id = (job.payload or {}).get("ml_run_id")
+        linked = db.scalar(select(MLRun).where(MLRun.job_id == job.id))
+        return linked or (db.get(MLRun, uuid.UUID(run_id)) if run_id else None)
+
+    def legacy_match(job: Job) -> bool:  # jobs from before request fingerprints
+        prev = previous(job)
+        return prev is not None and prev.input_hash == ihash
+
     lock_idempotency_key(db, workspace_id, idempotency_key)
-    if idempotency_key:
-        prior_job = db.scalar(
-            select(Job).where(
-                Job.workspace_id == workspace_id, Job.idempotency_key == idempotency_key
+    prior_job = replayed_job(db, workspace_id, idempotency_key, fingerprint, legacy_match)
+    if prior_job is not None:
+        prior = previous(prior_job)
+        if prior is None:
+            raise ApiError(
+                409,
+                "idempotency_conflict",
+                "Idempotency-Key was already used with a different request",
             )
-        )
-        if prior_job is not None:
-            prior = db.scalar(select(MLRun).where(MLRun.job_id == prior_job.id))
-            if prior is None or prior.input_hash != ihash:
-                raise ApiError(
-                    409,
-                    "idempotency_conflict",
-                    "Idempotency-Key was already used with a different request",
-                )
-            return _out(db, prior)
+        return _out(db, prior)
     run = MLRun(
         workspace_id=workspace_id,
         name=body.name,
@@ -126,7 +141,7 @@ def create_ml_run(
         workspace_id=workspace_id,
         user_id=user.id,
         kind="ml.experiment",
-        payload={"ml_run_id": str(run.id)},
+        payload={"ml_run_id": str(run.id), "request_fingerprint": fingerprint},
         idempotency_key=idempotency_key,
         request_id=getattr(request.state, "request_id", None),
         timeout_seconds=1800,

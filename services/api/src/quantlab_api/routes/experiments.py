@@ -15,7 +15,12 @@ from quantlab.backtest.engine import ENGINE_VERSION, BacktestConfig
 from quantlab_api import artifacts
 from quantlab_api.config import get_settings
 from quantlab_api.errors import ApiError
-from quantlab_api.jobs import lock_idempotency_key, submit_job
+from quantlab_api.jobs import (
+    lock_idempotency_key,
+    replayed_job,
+    request_fingerprint,
+    submit_job,
+)
 from quantlab_api.models import (
     Experiment,
     ExperimentResult,
@@ -143,27 +148,39 @@ def create_experiment(
         created_by=user.id,
         status=JobStatus.queued,
     )
-    lock_idempotency_key(db, workspace_id, idempotency_key)
-    if idempotency_key:
-        prior = db.scalar(
-            select(Job).where(
-                Job.workspace_id == workspace_id, Job.idempotency_key == idempotency_key
-            )
+    endpoint = f"experiments.reproduce:{parent_id}" if parent_id else "experiments.create"
+    fingerprint = request_fingerprint(endpoint, user.id, body.model_dump(mode="json"))
+
+    def previous(job: Job) -> Experiment | None:
+        prior_exp = (job.payload or {}).get("experiment_id")
+        return db.get(Experiment, uuid.UUID(prior_exp)) if prior_exp else None
+
+    def legacy_match(job: Job) -> bool:  # jobs from before request fingerprints
+        # Without a stored fingerprint, compare what the old one left out too: the parent
+        # (create vs reproduce of which run) and who sent it.
+        prev = previous(job)
+        return (
+            prev is not None
+            and prev.input_hash == exp.input_hash
+            and prev.parent_id == parent_id
+            and prev.created_by == user.id
         )
-        if prior is not None:
-            prior_exp = prior.payload.get("experiment_id")
-            prev = db.get(Experiment, uuid.UUID(prior_exp)) if prior_exp else None
-            if prev is None or prev.input_hash != exp.input_hash:
-                raise ApiError(
-                    409,
-                    "idempotency_conflict",
-                    "Idempotency-Key was already used with a different request",
-                )
-            return ExperimentSubmitted(
-                experiment=to_out(prev, _result(db, prev.id)),
-                job=JobOut.model_validate(prior),
-                created=False,
+
+    lock_idempotency_key(db, workspace_id, idempotency_key)
+    prior = replayed_job(db, workspace_id, idempotency_key, fingerprint, legacy_match)
+    if prior is not None:
+        prev = previous(prior)
+        if prev is None:
+            raise ApiError(
+                409,
+                "idempotency_conflict",
+                "Idempotency-Key was already used with a different request",
             )
+        return ExperimentSubmitted(
+            experiment=to_out(prev, _result(db, prev.id)),
+            job=JobOut.model_validate(prior),
+            created=False,
+        )
     db.add(exp)
     db.flush()
     audit(
@@ -182,7 +199,7 @@ def create_experiment(
         workspace_id=workspace_id,
         user_id=user.id,
         kind="backtest",
-        payload={"experiment_id": str(exp.id)},
+        payload={"experiment_id": str(exp.id), "request_fingerprint": fingerprint},
         idempotency_key=idempotency_key,
         request_id=getattr(request.state, "request_id", None) if request else None,
     )
@@ -200,7 +217,7 @@ def submit_experiment(
     user: CurrentUser,
     db: DB,
     request: Request,
-    idempotency_key: str | None = Header(None, max_length=128),
+    idempotency_key: str | None = Header(None, min_length=1, max_length=128),
 ) -> ExperimentSubmitted:
     require_workspace(db, user, workspace_id, Role.editor)
     return create_experiment(db, user, workspace_id, body, request, idempotency_key)
@@ -399,7 +416,7 @@ def reproduce(
     user: CurrentUser,
     db: DB,
     request: Request,
-    idempotency_key: str | None = Header(None, max_length=128),
+    idempotency_key: str | None = Header(None, min_length=1, max_length=128),
 ) -> ExperimentSubmitted:
     exp = load_experiment(db, user, experiment_id, Role.editor)
     body = ExperimentIn(
