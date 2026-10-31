@@ -38,6 +38,19 @@ class FakeDNS:
         return [(socket.AF_INET, socket.SOCK_STREAM, 6, "", (ip, 0))]
 
 
+@pytest.fixture(autouse=True)
+def one_rate_limit_window(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Count every attempt in this module in one rate-limit window.
+
+    The limiter uses fixed windows aligned to the clock. These tests count a series of
+    Argon2-hashed logins or registrations against a per-minute limit, and on a slow runner
+    the minute rolled over mid-series: the expected 429 became a 201 (seen in CI).
+    """
+    from quantlab_api.security import login_limiter
+
+    monkeypatch.setattr(login_limiter, "_bucket", lambda key, window: f"ql:rl:{key}:pinned")
+
+
 @pytest.fixture
 def proxies(monkeypatch: pytest.MonkeyPatch):  # type: ignore[no-untyped-def]
     """A fresh resolver with short timings, installed as the module's instance."""
