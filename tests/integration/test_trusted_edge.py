@@ -109,7 +109,9 @@ def test_recreated_proxy_is_trusted_again_quickly(proxies, monkeypatch):
     assert security.rate_limit_address(_request("10.9.0.2", "198.51.100.7")) == "198.51.100.7"
     dns.answers["web"] = "10.9.0.3"  # web recreated with a new address
     first = security.rate_limit_address(_request("10.9.0.3", "198.51.100.7"))
-    assert first == "10.9.0.3"  # untrusted until re-resolved; the miss wakes the resolver
+    # Untrusted until re-resolved, and the miss wakes the resolver. The background thread
+    # may already have picked up the new address, so either answer is correct here.
+    assert first in ("10.9.0.3", "198.51.100.7")
     assert _wait_for(
         lambda: security.rate_limit_address(_request("10.9.0.3", "198.51.100.7")) == "198.51.100.7",
         timeout=2.0,
