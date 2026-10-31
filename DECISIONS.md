@@ -158,3 +158,58 @@ migration, while nothing deletes jobs today; the guard test makes the invariant 
 at no cost. **Any future job-retention or cleanup feature must first migrate
 `experiment_results.job_id` to nullable with `ON DELETE SET NULL`** (through a migration
 slot, docs/COORDINATION.md), then relax the guard test in the same change.
+
+## ADR-0012 AWS deployment: NLB with PROXY v2 into the edge, EFS for the data directory
+**Context.** #19 asked for infrastructure as code for one cloud, validated but never applied
+(no account or credentials exist). It needed managed PostgreSQL with point-in-time recovery,
+Redis, storage for `QUANTLAB_DATA_DIR`, containers for every tier, a secrets manager, and a
+TLS edge that keeps ADR-0008's guarantee: only a trusted hop states the client address.
+**Decision.** AWS, in `infra/terraform/` (README there):
+* **Provider: AWS.** It has every managed piece needed here, including a load balancer that
+  can state the client address out of band (PROXY v2) and a POSIX file system that
+  containers can mount (EFS). No other provider offered a reason to prefer it. ECS Fargate
+  runs the containers, so there are no hosts to patch.
+* **Edge: client address via PROXY protocol, not a header.** A Network Load Balancer
+  terminates TLS with ACM and sends PROXY v2 to Caddy. Caddy's `proxy_protocol` listener
+  wrapper accepts that header only from the NLB's subnets (`fallback_policy reject`), and
+  its security group admits only the NLB's group, so no other host can claim an address.
+  Caddy then overwrites `X-Forwarded-For` with `{remote_host}`, now the stated client,
+  exactly as in compose. We chose this over the alternative, an ALB that appends
+  `X-Forwarded-For` with Caddy using `{client_ip}` and trusting the ALB's ranges, because:
+  * the trusted address then travels in a header a client can partly write;
+  * correctness would depend on parsing a list right to left and on the exact set of
+    trusted ranges;
+  * with PROXY v2 there is nothing for a client to forge.
+
+  NLB client-IP preservation, the other route the brief allowed, was not used: with IP
+  targets it is an attribute of the target group, it needs the edge to accept traffic from
+  anywhere, and it still leaves the edge to infer the address from the TCP peer. The
+  PROXY header is explicit and checked.
+* **Trusted proxies.** The web tier runs in its own subnets, and the API's
+  `QUANTLAB_TRUSTED_PROXIES` is exactly those CIDRs (the compose equivalent is the `web`
+  host name).
+* **Data directory on EFS, not object storage.** The store publishes versions by an atomic
+  directory rename, writes reports with a hard link, quarantines into `.trash` by rename
+  (#97, which needs `.trash` on the same file system), and keeps sweep markers as file
+  mtimes. S3 has none of these primitives. EFS (NFSv4.1) has all of them on one file
+  system. Every task mounts one access point (uid 10001) over TLS with IAM authorization.
+  S3 holds only off-site exports and load-balancer logs; AWS Backup copies EFS daily.
+* **Secrets without values in state.** Terraform creates Secrets Manager containers and
+  never a version. RDS manages its master password itself. Redis has no AUTH token, since
+  one would sit in state: it carries only delivery ids and caches (ADR-0002), and only the
+  api, worker and reaper groups can reach it. Optional LLM and market-data keys are
+  injected only when enabled, because ECS will not start a task with an empty secret.
+* **Migrations** run as a one-off task per release, never at API start: several API tasks
+  starting together would race.
+**Consequences.**
+* Nothing here has been planned or applied. Applying creates paid resources and needs the
+  user's account and approval. Remote state is documented, not configured. CI for these
+  checks waits on #17.
+* The validation that was done: `terraform validate`, `tflint` and `checkov` (recorded in the
+  README). **The AWS Caddyfile (`infra/terraform/edge/Caddyfile`) is NOT VALIDATED:**
+  downloading Caddy to run `caddy adapt` was denied in the session that wrote it. It must
+  be adapted and tested, including the PROXY header from a real NLB and
+  `infra/edge/verify.sh` against the public name, before the edge image is used.
+* Accepted risks: Redis without AUTH (network isolation only); outbound HTTPS from every
+  private tier through NAT (VPC endpoints would narrow this); cross-region backup copies are
+  not configured.
