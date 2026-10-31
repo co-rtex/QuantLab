@@ -205,6 +205,8 @@ ISSUE_15_FACTS = [
         # Return verbs state a sign whatever the number is bound to.
         "The portfolio gained a 28.3% drawdown [F2].",
         "The strategy made 28.3% at its worst drawdown [F2].",
+        # A number no word was assigned to still speaks about what the sentence names.
+        "Total return was 15.2% and 28.3% [F2] [F3].",
     ],
 )
 def test_issue_15_bypasses_are_rejected(text):
@@ -259,3 +261,21 @@ def test_label_bypasses_reuse_real_figures(facts, variant):
     ]
     for n in numbers:
         assert any(abs(n - m) <= 0.0051 for m in magnitudes), (text, n)
+
+
+def test_numbers_from_text_facts_keep_their_sign():
+    """A figure taken from a text fact (an integrity finding) is checked like any other:
+    quoting the finding is fine, restating its loss as a gain is not."""
+    f = [
+        Fact(
+            "F1",
+            "integrity_stress",
+            "Stress window (warning)",
+            "Worst month was -4.1%.",
+            "text",
+            "i",
+        ),
+    ]
+    assert verify_answer("Stress window (warning): Worst month was -4.1%. [F1]", f)["grounded"]
+    assert verify_answer("The worst month was -4.1% [F1].", f)["grounded"]
+    assert not verify_answer("The strategy gained 4.1% in its worst month [F1].", f)["grounded"]

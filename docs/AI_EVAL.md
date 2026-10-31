@@ -76,9 +76,14 @@ The new rules (`assistant/grounding.py`, `verify_answer`):
 * Each number is bound to what the sentence says it is. A cited fact's own label next to
   it binds it to that fact. A word naming a kind of quantity ("returned", "drawdown",
   "Sharpe", "costs") binds it to facts of that kind. Each word goes to the adjacent
-  number it is closest to, and a number must satisfy every word it gets. So a kind word
-  placed after a number cannot rebind it ("Total return was 28.3% drawdown [F2]" is
-  rejected; a security review found that case in an earlier draft).
+  number it is closest to, and a number must satisfy every word it gets as well as the
+  mention nearest to it. So a kind word placed after a number cannot rebind it ("Total
+  return was 28.3% drawdown [F2]" is rejected), and a number no word was given to still
+  speaks about what the sentence names ("Total return was 15.2% and 28.3% [F2] [F3]" is
+  rejected). Automated security reviews found both cases in earlier drafts.
+* A cited text fact (an integrity finding) quoted in full stands for that fact. Its own
+  numbers are not separate claims. Numbers paraphrased from it keep the sign checks:
+  "gained 4.1%" from a finding that says "-4.1%" is rejected.
 * Signs: return verbs ("returned", "made", "earned", "gained", "profit", "lost") state a
   sign for whatever they govern. Neutral movement verbs ("grew", "fell") state one only
   for returns, P&L and alpha, so a drawdown may "grow".
@@ -100,8 +105,9 @@ whose provider text reached the user rather than the deterministic fallback:
 
 With the new verifier every provider passes 14/14, except the faithful stand-in (13/14,
 unchanged: its keyword matching cites outside the requested topic). The deterministic
-engine passes 14/14 with 100 numeric claims, down from 102: numbers inside a quoted
-fact label, such as the 95 in "VaR (95%)", are no longer counted as claims. The caveat
+engine passes 14/14 with 76 numeric claims, down from 102 (the faithful stand-in: 19,
+down from 30). Numbers inside a quoted fact label (the 95 in "VaR (95%)") or inside a
+quoted text fact are no longer counted as separate claims; they are part of the fact. The caveat
 above still applies: these scores use the product verifier. The independent judge and
 the hosted-model run in #15 remain blocked on `QUANTLAB_ANTHROPIC_API_KEY`.
 

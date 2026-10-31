@@ -605,6 +605,20 @@ def _assign(
     return out
 
 
+def _nearest(start: int, end: int, mentions: list[Mention]) -> Binding | None:
+    """The mention nearest a number in either direction (the earlier one on a tie), or
+    None when the sentence names nothing. A number no word was assigned to ("Total return
+    was 15.2% and 28.3% [F2]") still speaks about what the sentence names."""
+    if not mentions:
+        return None
+
+    def distance(m: Mention) -> tuple[int, int]:
+        return (start - m[1], 0) if m[1] <= start else (m[0] - end, 1)
+
+    nearest = min(mentions, key=distance)
+    return nearest[2], nearest[3]
+
+
 def verify_answer(text: str, facts: list[Fact]) -> dict[str, Any]:
     """Check that every number in ``text`` is supported by a fact cited next to it.
 
@@ -635,6 +649,10 @@ def verify_answer(text: str, facts: list[Fact]) -> dict[str, Any]:
         # labels first, so "Total return minus SYNIDX" is not read as "Total return".
         for i, f in sorted(enumerate(cited), key=lambda t: -len(t[1].label)):
             body = re.sub(re.escape(f.label), f"\x00L{i}\x00", body, flags=re.I)
+        # A cited text fact (an integrity finding) quoted in full is that fact, too.
+        for i, f in enumerate(cited):
+            if isinstance(f.value, str) and f.value:
+                body = body.replace(f.value, f"\x00L{i}\x00")
         body = _CITE.sub(" ", _DATE.sub(" ", body))
         body = re.sub(r"#\d+", " ", body)  # ordinal references such as "Drawdown #1"
         body = re.sub(r"\b\d+(?:\.\d+)?%? (?:bootstrap|confidence)", " ", body)  # "95% ..."
@@ -662,7 +680,8 @@ def verify_answer(text: str, facts: list[Fact]) -> dict[str, Any]:
             # drawdown" asserts a gain of 15.2% only).
             said = {k: any(prev_end <= e <= m.start() for e in v) for k, v in verbs.items()}
             prev_end = m.end()
-            bindings: list[Binding | None] = list(assigned[(m.start(), m.end())]) or [None]
+            bindings: list[Binding | None] = list(assigned[(m.start(), m.end())])
+            bindings.append(_nearest(m.start(), m.end(), mentions))
             if all(_supported(x, cited, b, said) for b in bindings):
                 continue
             unsupported.append(claim)
@@ -696,11 +715,12 @@ def _supported(
         for v, tol in _candidates(f):
             if abs(abs(x) - abs(v)) > tol:
                 continue
-            if isinstance(f.value, str) or v in f.label_numbers:
-                return True  # quoted text, or a number from the label template
+            # Numbers inside a text fact carry their own sign (v is parsed from the text).
             signed = float(f.value) if isinstance(f.value, (int, float)) else v
             if x < 0 and signed > 0:
                 continue  # "-15.2%" for a +15.2% fact
+            if v in f.label_numbers:
+                return True  # a number from the label template ("VaR (95%)")
             # Unknown kinds keep the conservative rule: any verb states the sign.
             signed_kind = kind in _SIGNED_KINDS or kind is None
             gain = said["gain_return"] or (signed_kind and said["gain"])
