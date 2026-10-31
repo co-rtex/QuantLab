@@ -159,7 +159,10 @@ Per session `k`:
 2. Delistings. With an instrument master (`run_backtest(..., instruments=)`), a held
    security is closed on the first session after its `delisting_date` at
    `last close x (1 + delisting_return)` (a `delisting` ledger entry, which may be worth
-   0), or at its last close when the return is unknown. It cannot be bought again.
+   0), or at its last close when the return is unknown. From its delisting date it is not
+   offered to the strategy, and corporate actions dated after it are not applied (the
+   delisting return includes post-delisting distributions). A halt before the delisting
+   does not trigger the missing-bars rule for a security the master delists.
    The delisting date is public on the day, so acting on the next session uses no
    future data; the delisting return (final value relative to the last close, as in
    CRSP's DLRET) is booked at that point, which is standard practice even though the
@@ -297,9 +300,12 @@ solving.
   delistings to demonstrate the effect.
 * Without a delisting return, a delisting exits at the last close, which is optimistic
   for bankruptcies. The same applies to ML labels: an asset that delists inside the label
-  horizon exits at its last close, unless the instrument master supplies a delisting
-  return, which is then compounded onto every label that reaches the delisting
-  (`quantlab.ml.pipeline.build_panel(..., instruments=)`). No configured vendor documents
+  horizon exits at its last close. With an instrument master
+  (`quantlab.ml.pipeline.build_panel(..., instruments=)`), the exit is the last close on
+  or before the delisting date, the security is not sampled after it, and a known
+  delisting return is compounded only onto labels whose horizon reaches the first session
+  after the delisting date, so no label includes a return that is not public by its
+  `label_available_at`. No configured vendor documents
   delisting returns (docs/MARKET_DATA_PROVIDERS.md), so until one is licensed they are
   unknown (NaN) and the optimistic exit applies.
 * Dividends are credited at the ex-date rather than the pay date.

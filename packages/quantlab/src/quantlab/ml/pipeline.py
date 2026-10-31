@@ -33,6 +33,7 @@ from sklearn.pipeline import make_pipeline
 from sklearn.preprocessing import StandardScaler
 
 from quantlab.data.adjust import PointInTimeAdjuster, total_returns
+from quantlab.data.identity import normalize_master
 from quantlab.data.schema import wide
 
 FEATURES = [
@@ -127,21 +128,34 @@ def build_panel(
     # inside the horizon that is the return to delisting (the engine liquidates at the last
     # close). Using adj.shift(-h) alone made the label NaN and the row was dropped, so the
     # panel only contained assets that survived to t+h: selection on future information.
-    fwd = adj.ffill().shift(-h) / adj - 1
-    # Exiting at the last close is optimistic (performance delistings often lose much
-    # more), so a known delisting return compounds onto every label that reaches it, as in
-    # the engine. Without one the optimistic exit remains (documented in METHODOLOGY).
+    # With an instrument master, a security exits at its delisting exactly as in the
+    # engine: its exit price is the last close on or before the delisting date (bars after
+    # it, an OTC tail say, are ignored and it is not sampled after it), and a known
+    # delisting return applies only to labels whose horizon reaches the first session
+    # after the delisting date, the moment the engine books it. So no label includes a
+    # return that is not public by its label_available_at. Without a return the
+    # optimistic last-close exit remains (documented in METHODOLOGY).
+    exit_px = adj
+    booked: list[tuple[str, int, float]] = []
     if instruments is not None and len(instruments):
-        rets = instruments.set_index("instrument_id")["delisting_return"].dropna()
-        positions = np.arange(len(adj))
-        for sym, r in rets.items():
-            if sym not in adj.columns:
-                continue
-            bars_at = np.flatnonzero(adj[sym].notna().to_numpy())
-            if not len(bars_at):
-                continue
-            reaches = positions + h > bars_at[-1]
-            fwd.loc[reaches, sym] = (1 + fwd.loc[reaches, sym]) * (1 + r) - 1
+        master = normalize_master(instruments)
+        master = master[
+            master["delisting_date"].notna() & master["instrument_id"].isin(adj.columns)
+        ]
+        if len(master):
+            exit_px = adj.copy()
+            for row in master.itertuples():
+                when = pd.Timestamp(row.delisting_date)
+                exit_px.loc[exit_px.index > when, row.instrument_id] = np.nan
+                if pd.notna(row.delisting_return):
+                    first_after = int(adj.index.searchsorted(when, side="right"))
+                    booked.append((row.instrument_id, first_after, float(row.delisting_return)))
+    fwd = exit_px.ffill().shift(-h) / adj - 1
+    positions = np.arange(len(adj))
+    for sym, first_after, r in booked:
+        reaches = positions + h >= first_after
+        fwd.loc[reaches, sym] = (1 + fwd.loc[reaches, sym]) * (1 + r) - 1
+    close = exit_px
     dates = close.index[252 :: cfg.sample_every]
     dates = dates[dates <= close.index[-1 - h]] if len(close) > h else dates[:0]
     frames = []

@@ -55,8 +55,19 @@ def test_every_strategy_reconciles_and_respects_constraints(market, key):
     res.ledger.check_invariants()
 
 
+def _ticker_master(market, ret: float) -> pd.DataFrame:
+    """The synthetic master re-keyed by ticker (the engine's series key here)."""
+    m = market.master
+    sym = market.instruments.set_index("instrument_id")["symbol"]
+    return m.assign(
+        instrument_id=m["instrument_id"].map(sym),
+        delisting_return=np.where(m["delisting_date"].notna(), ret, np.nan),
+    )
+
+
+@pytest.mark.parametrize("with_master", [False, True])
 @pytest.mark.parametrize("key", sorted(REGISTRY))
-def test_equity_curve_rebuilt_independently_from_the_transaction_log(market, key):
+def test_equity_curve_rebuilt_independently_from_the_transaction_log(market, key, with_master):
     """Re-derive cash, holdings and equity from the ledger log and raw closes only.
 
     This does not reuse anything the engine computed while simulating (its marks, its
@@ -64,7 +75,8 @@ def test_equity_curve_rebuilt_independently_from_the_transaction_log(market, key
     the engine loop shows up as a mismatch here.
     """
     cfg = BacktestConfig(benchmark="SYNIDX", rebalance="weekly", commission_min=1.0)
-    res = run_backtest(market.bars, market.actions, create_strategy(key), cfg)
+    master = _ticker_master(market, -0.5) if with_master else None
+    res = run_backtest(market.bars, market.actions, create_strategy(key), cfg, instruments=master)
     close = market.bars.pivot(index="date", columns="symbol", values="close").ffill()
     by_date: dict[pd.Timestamp, list] = {}
     for tx in res.ledger.transactions:
@@ -81,6 +93,11 @@ def test_equity_curve_rebuilt_independently_from_the_transaction_log(market, key
                 cash += qty.get(tx.symbol, 0.0) * tx.price
             elif tx.kind == "split":
                 qty[tx.symbol] = qty.get(tx.symbol, 0.0) * tx.price
+            elif tx.kind == "delisting":
+                cash += qty.get(tx.symbol, 0.0) * tx.price  # final value per share held
+                qty[tx.symbol] = 0.0
+            else:
+                raise AssertionError(f"unhandled transaction kind {tx.kind}")
         rebuilt.append(cash + sum(q * close.at[d, s] for s, q in qty.items() if abs(q) > 1e-9))
     np.testing.assert_allclose(res.equity["equity"].to_numpy(), rebuilt, rtol=1e-9)
     # Costs recorded on trades explain the gap between gross and net equity exactly.
@@ -88,7 +105,8 @@ def test_equity_curve_rebuilt_independently_from_the_transaction_log(market, key
         assert res.trades["commission"].sum() == pytest.approx(
             res.equity["cum_commission"].iloc[-1]
         )
-        assert (res.trades["commission"][res.trades["note"] != "delisting"] >= 1.0 - 1e-12).all()
+        delisting = res.trades["note"].fillna("").str.startswith("delisting")
+        assert (res.trades["commission"][~delisting] >= 1.0 - 1e-12).all()
 
 
 @pytest.mark.parametrize("key", sorted(REGISTRY))

@@ -306,6 +306,9 @@ def _verify(tx: Transaction, held: float) -> None:
         raise LedgerError(bad + "does not restate the shares held")
     elif tx.kind == "delisting" and (
         tx.price < 0
+        or tx.commission != 0
+        or tx.slippage != 0
+        or abs(tx.quantity) < EPS
         or not _close(tx.quantity, -held)
         or not _close(tx.cash_delta, -tx.quantity * tx.price)
     ):
