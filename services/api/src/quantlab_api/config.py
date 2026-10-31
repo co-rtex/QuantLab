@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
+import contextlib
 import os
 import secrets
-import time
 from functools import lru_cache
 from pathlib import Path
 from typing import Literal
@@ -20,23 +20,48 @@ def _shared_dev_secret(data_dir: Path) -> SecretStr:
 
     A random per-process key breaks as soon as the API runs more than one worker
     (``uvicorn --workers 4``): a token signed by one worker is rejected by the others, so
-    roughly three requests in four fail. The first process creates the file atomically
-    (O_EXCL, mode 0600); the others, and later restarts, read it.
+    roughly three requests in four fail. The first process writes the key to a private
+    temporary file and links it into place (``os.link`` fails if the name exists), so no
+    process ever reads a half-written key; the others, and later restarts, read it.
+
+    The key lives in ``data_dir`` and so travels with its backups. Delete the file to rotate
+    it (everyone is signed out). A file readable by others is refused, not repaired: the key
+    may already have been read.
     """
     path = data_dir / DEV_SECRET_FILE
     path.parent.mkdir(parents=True, exist_ok=True)
+    for _ in range(5):
+        try:
+            mode = path.stat().st_mode
+        except FileNotFoundError:
+            _create_dev_secret(path)
+            continue
+        if mode & 0o077:
+            raise RuntimeError(
+                f"{path} is readable by other users (mode {mode & 0o777:o}), so the signing "
+                "key may be known. Delete it to rotate the key (signs everyone out)."
+            )
+        value = path.read_text().strip()
+        if value:
+            return SecretStr(value)
+        # Only a crash in the old, non-atomic writer could leave an empty file.
+        path.unlink(missing_ok=True)
+    raise RuntimeError(f"could not create {path}")
+
+
+def _create_dev_secret(path: Path) -> None:
+    tmp = path.with_name(f"{path.name}.{os.getpid()}.{secrets.token_hex(4)}.tmp")
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
     try:
-        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-    except FileExistsError:
-        for _ in range(50):  # another process may be between create and write
-            value = path.read_text().strip()
-            if value:
-                return SecretStr(value)
-            time.sleep(0.02)
-        raise RuntimeError(f"{path} is empty; delete it and restart") from None
-    with os.fdopen(fd, "w") as f:
-        f.write(secrets.token_urlsafe(48))
-    return SecretStr(path.read_text().strip())
+        with os.fdopen(fd, "w") as f:
+            f.write(secrets.token_urlsafe(48))
+            f.flush()
+            os.fsync(f.fileno())
+        # Atomic: fails if another process got there first, and then its key is used.
+        with contextlib.suppress(FileExistsError):
+            os.link(tmp, path)
+    finally:
+        tmp.unlink(missing_ok=True)
 
 
 class Settings(BaseSettings):

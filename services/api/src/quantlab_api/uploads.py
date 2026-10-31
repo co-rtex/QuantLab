@@ -10,6 +10,11 @@ through ``read_multipart``.
 File parts go straight to their destination path, never to the system temp directory,
 and each file's limit is enforced as bytes arrive, so an oversized file stops being read
 at its limit. Only the declared fields are accepted, each at most once.
+
+Unused file inputs: a file part with an empty filename and no content, or an empty text
+value for a file field, is treated as absent, as FastAPI did. A file part with an empty
+filename but some content is kept. Text fields must be UTF-8 without NUL characters
+(PostgreSQL cannot store NUL in text; it used to surface as a 500).
 """
 
 from __future__ import annotations
@@ -53,8 +58,15 @@ class _Part:
     out: BinaryIO | None = None
 
 
+# Longest part name echoed back in an error: names come from the client, and a part's
+# headers may be up to MAX_PART_HEADER_BYTES long.
+MAX_ECHOED_NAME = 64
+
+
 def invalid(name: str, msg: str, kind: str) -> RequestValidationError:
     """A 422 in the same shape FastAPI gives for body validation errors."""
+    if len(name) > MAX_ECHOED_NAME:
+        name = name[:MAX_ECHOED_NAME] + "…"
     return RequestValidationError([{"loc": ("body", name), "msg": msg, "type": kind}])
 
 
@@ -162,9 +174,12 @@ class _Reader:
             self.ops.append(("close", p, b""))
             return
         try:
-            self.fields[p.name] = p.data.decode("utf-8")
+            value = p.data.decode("utf-8")
         except UnicodeDecodeError:
             raise invalid(p.name, "Value is not valid UTF-8", "string_unicode") from None
+        if "\x00" in value:
+            raise invalid(p.name, "Value must not contain NUL characters", "string_pattern")
+        self.fields[p.name] = value
 
     def on_end(self) -> None:
         self.ended = True

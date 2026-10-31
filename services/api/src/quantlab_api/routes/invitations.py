@@ -10,7 +10,7 @@ import uuid
 from datetime import UTC, datetime
 
 from fastapi import APIRouter, Request, Response
-from sqlalchemy import func, or_, select, update
+from sqlalchemy import delete, func, or_, select, update
 from sqlalchemy.orm import Session
 
 from quantlab_api import invitations as inv_mod
@@ -81,6 +81,14 @@ def create_invitation(
     inviter = lock_members(db, workspace_id, {user.id}).get(user.id)
     if inviter is None or inviter.role != Role.owner:
         raise ApiError(403, "forbidden", "Requires owner role")
+    # Expired invitations can never be answered; drop them rather than keep them forever.
+    db.execute(
+        delete(Invitation).where(
+            Invitation.workspace_id == workspace_id,
+            Invitation.status == "pending",
+            Invitation.expires_at <= now,
+        )
+    )
     db.execute(
         update(Invitation)
         .where(

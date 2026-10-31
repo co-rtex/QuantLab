@@ -225,6 +225,27 @@ def test_unset_dev_secret_is_shared_by_every_worker_process(tmp_path):
     assert len(set(keys)) == 1 and len(keys[0]) >= 32
     assert _dev_key(str(tmp_path)) == keys[0]
     assert (tmp_path / ".jwt-dev-secret").stat().st_mode & 0o077 == 0
+    # The key is written to a temporary file and linked into place; none are left over.
+    assert sorted(p.name for p in tmp_path.iterdir()) == [".jwt-dev-secret"]
+
+
+def test_an_empty_dev_secret_file_from_a_crash_is_replaced(tmp_path):
+    """The old writer created the file and then wrote it, so a crash in between left an
+    empty file that stopped every later start ("is empty; delete it and restart")."""
+    path = tmp_path / ".jwt-dev-secret"
+    path.touch(mode=0o600)
+    key = _dev_key(str(tmp_path))
+    assert len(key) >= 32 and path.read_text().strip() == key
+
+
+def test_a_dev_secret_readable_by_others_is_refused(tmp_path):
+    import pytest
+
+    path = tmp_path / ".jwt-dev-secret"
+    path.write_text("k" * 64)
+    path.chmod(0o644)
+    with pytest.raises(RuntimeError, match="readable by other users"):
+        _dev_key(str(tmp_path))
 
 
 def test_account_throttle_counts_failures_only_and_spares_real_user(client, monkeypatch):
