@@ -1,6 +1,6 @@
 # Status (authoritative handoff)
 
-_Last updated: 2026-10-31 (lead integration cycle 2: 92 PRs merged before this update, per `gh pr list --state merged`; main `3ee609d`)_
+_Last updated: 2026-10-31 (lead integration cycle 2: 98 PRs merged before this update, per `gh pr list --state merged`; main `82f1cd3`)_
 
 ## Where things stand
 All roadmap phases 0–10 are implemented. An independent audit on 2026-10-30
@@ -25,7 +25,7 @@ leases and migration slots: [docs/COORDINATION.md](docs/COORDINATION.md).
 | Area | State |
 |---|---|
 | Market data | Synthetic and CSV providers, NYSE calendar, PIT adjustment, quality checks, content-addressed Parquet versions, DuckDB + Redis retrieval, resumable ingestion |
-| Simulation | Event-driven engine v1.1.0 (next-session fills, costs, pro-rata partial fills, PIT delisting), 9 strategies, ledger with replay invariants |
+| Simulation | Event-driven engine v1.4.0 (next-session fills, no fills on zero-volume bars, costs, pro-rata partial fills, PIT delisting), 9 strategies, ledger with replay invariants |
 | Analytics | Performance (undefined-aware), VaR/ES, drawdowns, attribution, factor exposures (Newey-West), Monte Carlo, stress, optimizers |
 | Research | Walk-forward, sensitivity, cost sweeps, bootstrap CIs, PSR/DSR, regimes, engine-level leakage check, Research Integrity Report, ML pipeline with purged CV |
 | Product | Auth, workspaces and roles, experiments, comparison, reproduction, portfolios, construction, ML, grounded assistant, HTML/Markdown reports |
@@ -168,10 +168,25 @@ leases and migration slots: [docs/COORDINATION.md](docs/COORDINATION.md).
     covariates keep 100%. The table is reproduced by `benchmarks/ml_liquidity_selection.py`.
     Rows with no trading in 21 bars are excluded and counted. Flat volume is flagged as
     a model input. Follow-ups: #142, #143, #144.
+  * #146 and #151: the ML results page shows the pipeline version and the exclusion counts
+    by key, for v2 and v3 results. A missing value reads "not recorded", never 0 (#144).
+  * #148 the worker refuses an ML run submitted for a different pipeline version (#143).
+  * **#147 (#142) ML pipeline v3: a zero-volume bar is no bar.** It is never a decision
+    row or a label price, and windows and the staleness inputs skip it. Corporate actions
+    dated on such a bar are placed on the next traded bar, and a split with a repeated
+    unadjusted close no longer creates a fake +100% return. The dropped bars, and
+    dividends after a name's last trade, are counted.
+  * **#150 (#149, P1) the backtest engine no longer fills at zero-volume closes** (engine
+    1.4.0). In the review fixture, a halted name that reopened 30% lower ended at 700 under
+    the fix; the old engine let a backtest sell during the halt and kept 1000. Held
+    positions ride through the halt, and stale-mark exposure is reported. The integrity
+    report fails only when nothing in the universe could be traded (volume recorded as 0)
+    and otherwise warns. Follow-up: #152 (the worker should check the engine version).
+  * #118 closed: every criterion of the cross-feature PIT sweep is covered by a named test.
 * Every merge had an independent read-only lead review: no blockers. Should-fix items are
   tracked in #8, #51, #52 and #55 (Agent 2), #39 (gate), and #41, #50 and #54 (Agent 3).
 
-## Last verified (2026-10-31, main `3ee609d`)
+## Last verified (2026-10-31, main `82f1cd3`)
 Each merge was verified on a trial merge with current main, with pytest output written to a
 file rather than piped:
 * #28, #32, #36, #29, #30, #31: tree identical to main afterwards; 314 passed;
@@ -233,6 +248,14 @@ file rather than piped:
   strict xfail now passes. Benchmark output agrees with METHODOLOGY's table. Web clean;
   **E2E 41/41**. An independent rebuild of the probe reproduced the table, and 72aebd7's
   real panel code reproduced the retracted cap's column.
+* #146: web clean, E2E 42/42. #148: **1235 passed**, E2E 41/41. #151: E2E 44/44.
+* #147 on main@d70ebc7 (byte-identical to main `e53348b`): **1244 passed**; the benchmark
+  shows 0 panel rows on zero-volume bars; **E2E 44/44**. Two independent reviews: the
+  corporate actions and the delisting return were checked by hand.
+* #150 on main@e53348b (byte-identical to main `82f1cd3`): **1264 passed**; no golden
+  changed (no fixture has volume 0); **E2E 44/44**. Two independent reviews with probe
+  scripts. The second found the first revision force-sold held names on zero-volume
+  rebalance days, and that was fixed before merge.
 * #101 + #103 + #104: 899 passed, E2E 27/27. #105 + #106 (byte-identical to main
   `f7e399f`): **906 passed, E2E 30/30**.
 
@@ -246,9 +269,8 @@ E2E failures this cycle were resource starvation, not regressions:
 Full-stack runs are now serialized machine-wide (`make e2e-serial`).
 
 ## Next steps (issues carry owners and acceptance criteria)
-1. **Agent 2:** #144 (pipeline version and exclusion counts on the ML results page).
-2. **Agent 3:** #142 (zero-volume stale-close bars are invisible to the staleness inputs),
-   then #143 (ML input hash version from the worker); close-out of #118.
+1. **Agent 2:** no unblocked issue; standing by for reviews.
+2. **Agent 3:** #152 (the worker checks the submitted engine version, mirroring #143).
 3. **Lead:** integrate.
 4. **Blocked on the user:**
    * #39 (a host, a second machine, and Caddyfile validation, since the caddy download was
