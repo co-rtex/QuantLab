@@ -60,6 +60,15 @@ function ParamField({ name, prop, value, onChange }: { name: string; prop: JsonS
   return null; // complex params (e.g. explicit weights) use defaults in the builder
 }
 
+interface SavedStrategy {
+  id: string;
+  name: string;
+  strategy_key: string;
+  params: Record<string, unknown>;
+  description: string;
+  created_at: string;
+}
+
 function Builder() {
   const router = useRouter();
   const params = useSearchParams();
@@ -72,6 +81,54 @@ function Builder() {
   const inst = useInstruments(dvId);
   const [key, setKey] = useState(params.get("strategy") ?? "momentum");
   const [values, setValues] = useState<Record<string, unknown>>({});
+  // Saved strategies (#23): a named strategy and parameters, to start experiments from.
+  const saved = useApi<SavedStrategy[]>(ws ? `/workspaces/${ws}/strategies` : null);
+  const [savedId, setSavedId] = useState("");
+  const [saveName, setSaveName] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [savedMsg, setSavedMsg] = useState<string>();
+  const canEdit = workspace?.role === "owner" || workspace?.role === "editor";
+
+  function load(id: string) {
+    setSavedId(id);
+    const s = saved.data?.find((x) => x.id === id);
+    if (!s) return;
+    setKey(s.strategy_key);
+    setValues({ ...s.params });
+    setSavedMsg(`Loaded ${s.name}. Change anything before running it.`);
+  }
+
+  async function saveStrategy() {
+    const name = saveName.trim();
+    if (!ws || !name || saving) return;
+    setErr(undefined);
+    setSaving(true);
+    try {
+      const params = Object.fromEntries(Object.entries(values).filter(([, v]) => v !== undefined));
+      const s = await api<SavedStrategy>(`/workspaces/${ws}/strategies`, { method: "POST", json: { name, strategy_key: key, params, description: "" } });
+      saved.reload();
+      setSavedId(s.id);
+      setSaveName("");
+      setSavedMsg(`Saved as ${s.name}.`);
+    } catch (e) {
+      setErr(e as ApiError);
+    }
+    setSaving(false);
+  }
+
+  async function deleteSaved() {
+    const s = saved.data?.find((x) => x.id === savedId);
+    if (!ws || !s || !window.confirm(`Delete the saved strategy ${s.name}? Experiments already run from it are kept.`)) return;
+    setErr(undefined);
+    try {
+      await api(`/workspaces/${ws}/strategies/${s.id}`, { method: "DELETE" });
+      setSavedId("");
+      saved.reload();
+      setSavedMsg(`Deleted ${s.name}.`);
+    } catch (e) {
+      setErr(e as ApiError);
+    }
+  }
   const [err, setErr] = useState<ApiError>();
   const [busy, setBusy] = useState(false);
   const entry = catalog.data?.find((c) => c.key === key);
@@ -138,6 +195,55 @@ function Builder() {
       <div className="space-y-6">
         <QueryError q={inst} what="the instrument list" />
         <Panel title="Strategy">
+          <div className="mb-4 space-y-2 rounded border border-rule p-3">
+            <QueryError q={saved} what="saved strategies" />
+            <div className="flex flex-wrap items-end gap-2">
+              <label className="min-w-56 flex-1">
+                <span className="mb-1 block">Start from a saved strategy</span>
+                <select className="field" value={savedId} onChange={(e) => load(e.target.value)} disabled={!saved.data?.length}>
+                  <option value="">{saved.data?.length ? "Choose one" : "None saved yet"}</option>
+                  {saved.data?.map((s) => (
+                    <option key={s.id} value={s.id}>
+                      {s.name} · {catalog.data?.find((c) => c.key === s.strategy_key)?.name ?? s.strategy_key}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              {canEdit && savedId && (
+                <button type="button" className="btn btn-quiet" onClick={deleteSaved}>
+                  Delete saved strategy
+                </button>
+              )}
+            </div>
+            {canEdit && (
+              <div className="flex flex-wrap items-end gap-2">
+                <label className="min-w-56 flex-1">
+                  <span className="mb-1 block">Save this strategy and its parameters as</span>
+                  <input
+                    className="field"
+                    value={saveName}
+                    maxLength={120}
+                    onChange={(e) => setSaveName(e.target.value)}
+                    onKeyDown={(e) => {
+                      // Inside the backtest form: Enter saves, it does not run the backtest.
+                      if (e.key === "Enter") {
+                        e.preventDefault();
+                        void saveStrategy();
+                      }
+                    }}
+                  />
+                </label>
+                <button type="button" className="btn btn-quiet" onClick={saveStrategy} aria-busy={saving} aria-disabled={saving || !saveName.trim()}>
+                  {saving ? "Saving…" : "Save strategy"}
+                </button>
+              </div>
+            )}
+            {savedMsg && (
+              <p role="status" className="text-xs text-ink-2">
+                {savedMsg}
+              </p>
+            )}
+          </div>
           <fieldset>
             <legend className="sr-only">Strategy</legend>
             <div className="grid gap-2 sm:grid-cols-2">
