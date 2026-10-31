@@ -236,10 +236,16 @@ interface Comparison {
   input_differences?: { input: string; original: unknown; reproduction: unknown }[];
 }
 
+// Inputs can be parameter objects or universe lists (#88): show them as JSON, cut short.
+function inputValue(v: unknown, max = 60): string {
+  const s = typeof v === "string" || typeof v === "number" ? String(v) : (JSON.stringify(v) ?? String(v));
+  return s.length > max ? `${s.slice(0, max - 1)}…` : s;
+}
+
 function differences(c: Comparison): string {
   const d = c.input_differences ?? [];
   if (!d.length) return "different inputs";
-  return "different inputs: " + d.map((x) => `${x.input.replaceAll("_", " ")} ${String(x.original)} → ${String(x.reproduction)}`).join(", ");
+  return "different inputs: " + d.map((x) => `${x.input.replaceAll("_", " ")} ${inputValue(x.original)} → ${inputValue(x.reproduction)}`).join(", ");
 }
 
 export default function ExperimentPage() {
