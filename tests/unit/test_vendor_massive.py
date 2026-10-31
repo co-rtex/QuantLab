@@ -289,33 +289,21 @@ def test_rate_limit_backoff_honours_retry_after(fake):
 
 
 def test_a_failure_mid_pagination_is_retried_without_losing_pages(fake):
-    p, _ = _provider(fake)
     fake.page_size = 2
-    calls = {"n": 0}
-    original = fake.route
-
-    def flaky(path: str, q: dict[str, str]) -> dict:
-        calls["n"] += 1
-        return original(path, q)
-
-    fake.route = flaky  # type: ignore[method-assign]
-    fake.faults["cursor-never"] = []
-    # Fail exactly the second page once.
-    real_call = fake.__call__
-
-    state = {"failed": False}
+    failed: list[str] = []
 
     def transport(url: str, timeout: float) -> HttpResponse:
-        if "cursor=2" in url and not state["failed"]:
-            state["failed"] = True
-            fake.requests.append(url)
+        if "cursor=2" in url and not failed:  # the second page fails once
+            failed.append(url)
             return HttpResponse(502, {}, b"")
-        return real_call(url, timeout)
+        return fake(url, timeout)
 
+    p, _ = _provider(fake)
     p.api.transport = transport
     bars = p.fetch_bars("NEWA", "2024-01-10", "2024-01-19")
-    assert len(bars) == len([d for d in SESSIONS if "2024-01-10" <= str(d.date()) <= "2024-01-19"])
-    assert state["failed"]
+    expected = [d for d in SESSIONS if "2024-01-10" <= str(d.date()) <= "2024-01-19"]
+    assert list(bars["date"]) == expected  # every page, once, in order
+    assert failed
 
 
 def test_retries_are_bounded_and_errors_never_contain_the_key(fake):
@@ -341,6 +329,39 @@ def test_missing_key_and_plain_http_are_refused():
         JsonApi(BASE_URL, "")
     with pytest.raises(PermanentProviderError):
         urllib_transport("http://api.massive.com/v3/reference/tickers", 1.0)
+
+
+def test_redirects_are_never_followed():
+    # The key travels in the query string, so following a 3xx would hand it to the
+    # redirect target. Exercise the real urllib opener against a loopback server.
+    import http.server
+    import threading
+    import urllib.error
+
+    from quantlab.data.vendors import http as vendor_http
+
+    hits: list[str] = []
+
+    class Handler(http.server.BaseHTTPRequestHandler):
+        def do_GET(self) -> None:
+            hits.append(self.path)
+            self.send_response(302)
+            self.send_header("Location", "/elsewhere")
+            self.end_headers()
+
+        def log_message(self, *args: object) -> None:
+            pass
+
+    server = http.server.HTTPServer(("127.0.0.1", 0), Handler)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    try:
+        url = f"http://127.0.0.1:{server.server_port}/v3/x?apiKey={KEY}"
+        with pytest.raises(urllib.error.HTTPError) as exc:
+            vendor_http._OPENER.open(url, timeout=5)
+        assert exc.value.code == 302
+        assert hits == [f"/v3/x?apiKey={KEY}"]  # /elsewhere was never requested
+    finally:
+        server.shutdown()
 
 
 def test_rate_limiter_is_consulted_for_every_request(fake):
@@ -398,10 +419,10 @@ def test_rate_limiter_is_consulted_for_every_request(fake):
 def test_malformed_vendor_payloads_are_rejected(fake, fragment, edit, message):
     fake.overrides[fragment] = edit
     p, _ = _provider(fake)
+    fetch = p.fetch_actions if "/stocks/" in fragment else p.fetch_bars
+    ticker = "OLDA" if "dividends" in fragment else "NEWA"
     with pytest.raises(VendorSchemaError, match=message):
-        p.fetch_bars("NEWA", "2024-01-10", "2024-01-31")
-        p.fetch_actions("NEWA", "2024-01-02", "2024-01-31")
-        p.fetch_actions("OLDA", "2024-01-02", "2024-01-31")
+        fetch(ticker, "2024-01-02", "2024-01-31")
 
 
 def test_next_url_to_another_host_is_refused_and_gets_no_key(fake):
@@ -420,3 +441,51 @@ def test_describe_never_exposes_the_key_and_states_verification(fake):
     d = p.describe()
     assert KEY not in json.dumps(d) and KEY not in repr(p.api)
     assert d["is_synthetic"] is False and d["live_verified"] is False
+
+
+# ------------------------------------------------------- ingestion and #10 gates
+def test_ingestion_by_instrument_resumes_and_passes_the_gates(fake):
+    from quantlab.data.providers import IngestionCheckpoint, ingest
+    from quantlab.data.quality import enforce_gates
+
+    p, _ = _provider(fake)
+    _, history, _ = _identity(p)
+    keyed = p.by_instrument(history)
+    ids = keyed.symbols()
+    first = ingest(keyed, ids, "2024-01-02", "2024-01-12")
+    assert sorted(first.symbols_ingested) == ids
+    n_requests = len(fake.requests)
+    second = ingest(
+        keyed,
+        ids,
+        "2024-01-02",
+        "2024-01-31",
+        existing_bars=first.bars,
+        existing_actions=first.actions,
+        checkpoint=first.checkpoint,
+    )
+    # Resumed from the checkpoint: no request reaches back before 2024-01-13.
+    later = fake.requests[n_requests:]
+    assert not [u for u in later if "/range/1/day/2024-01-0" in u]
+    assert second.duplicates_dropped == 0
+    full, _ = p.fetch_instrument(history, "BBGSYN000001", "2024-01-02", "2024-01-31")
+    got = second.bars[second.bars["symbol"] == "BBGSYN000001"].reset_index(drop=True)
+    pd.testing.assert_frame_equal(got, full)
+    assert isinstance(second.checkpoint, IngestionCheckpoint)
+    enforce_gates(assess_quality(second.bars, second.actions))  # clean fixtures pass
+
+
+def test_malformed_vendor_actions_block_ingestion(fake):
+    from quantlab.data.providers import ingest
+    from quantlab.data.quality import QualityGateError, enforce_gates
+
+    # The vendor reports 4-for-1 for what the prices show is a 2-for-1 split.
+    fake.overrides["/stocks/v1/splits"] = lambda b: {
+        **b,
+        "results": [{**r, "split_to": 4} for r in b["results"]],
+    }
+    p, _ = _provider(fake)
+    _, history, _ = _identity(p)
+    res = ingest(p.by_instrument(history), ["BBGSYN000001"], "2024-01-02", "2024-01-31")
+    with pytest.raises(QualityGateError, match="split_price_mismatch"):
+        enforce_gates(assess_quality(res.bars, res.actions))

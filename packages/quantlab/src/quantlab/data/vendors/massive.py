@@ -280,37 +280,59 @@ class MassiveProvider:
         except ValueError as exc:  # SchemaError: e.g. a non-positive amount
             raise VendorSchemaError(f"actions[{symbol}]: {exc}") from exc
 
-    def fetch_instrument(
+    def _intervals(
         self, history: pd.DataFrame, instrument_id: str, start: pd.Timestamp, end: pd.Timestamp
-    ) -> tuple[pd.DataFrame, pd.DataFrame]:
-        """Bars and actions of one security, keyed by its id, across all its tickers.
-
-        Each ticker is requested only inside its own validity interval.
-        """
+    ) -> list[tuple[str, pd.Timestamp, pd.Timestamp]]:
+        """(ticker, first day, last day) of each ticker of the security inside [start, end]."""
         rows = history[history["instrument_id"] == instrument_id]
         if rows.empty:
             raise PermanentProviderError(f"unknown instrument {instrument_id}")
         s, e = pd.Timestamp(start).normalize(), pd.Timestamp(end).normalize()
-        bars, actions = [], []
+        out = []
         for _, iv in rows.iterrows():
             lo = max(s, iv["valid_from"])
             hi = e if pd.isna(iv["valid_to"]) else min(e, iv["valid_to"] - pd.Timedelta(days=1))
-            if lo > hi:
-                continue
-            bars.append(self.fetch_bars(iv["symbol"], lo, hi))
-            actions.append(self.fetch_actions(iv["symbol"], lo, hi))
-        b = (
-            normalize_bars(pd.concat(bars, ignore_index=True))
-            if bars
-            else normalize_bars(
-                pd.DataFrame(columns=["symbol", "date", "open", "high", "low", "close", "volume"])
-            )
-        )
-        a = pd.concat(actions, ignore_index=True) if actions else normalize_actions(None)
+            if lo <= hi:
+                out.append((str(iv["symbol"]), lo, hi))
+        return out
+
+    def fetch_instrument_bars(
+        self, history: pd.DataFrame, instrument_id: str, start: pd.Timestamp, end: pd.Timestamp
+    ) -> pd.DataFrame:
+        """Bars of one security across all its tickers, keyed by its id.
+
+        Each ticker is requested only inside its own validity interval.
+        """
+        parts = [
+            self.fetch_bars(t, lo, hi)
+            for t, lo, hi in self._intervals(history, instrument_id, start, end)
+        ]
+        cols = ["symbol", "date", "open", "high", "low", "close", "volume"]
+        bars = pd.concat(parts, ignore_index=True) if parts else pd.DataFrame(columns=cols)
+        return normalize_bars(bars.assign(symbol=instrument_id))
+
+    def fetch_instrument_actions(
+        self, history: pd.DataFrame, instrument_id: str, start: pd.Timestamp, end: pd.Timestamp
+    ) -> pd.DataFrame:
+        """Corporate actions of one security across all its tickers, keyed by its id."""
+        parts = [
+            self.fetch_actions(t, lo, hi)
+            for t, lo, hi in self._intervals(history, instrument_id, start, end)
+        ]
+        acts = pd.concat(parts, ignore_index=True) if parts else pd.DataFrame()
+        return normalize_actions(acts.assign(symbol=instrument_id) if len(acts) else None)
+
+    def fetch_instrument(
+        self, history: pd.DataFrame, instrument_id: str, start: pd.Timestamp, end: pd.Timestamp
+    ) -> tuple[pd.DataFrame, pd.DataFrame]:
         return (
-            normalize_bars(b.assign(symbol=instrument_id)),
-            normalize_actions(a.assign(symbol=instrument_id) if len(a) else None),
+            self.fetch_instrument_bars(history, instrument_id, start, end),
+            self.fetch_instrument_actions(history, instrument_id, start, end),
         )
+
+    def by_instrument(self, history: pd.DataFrame) -> InstrumentKeyedProvider:
+        """This provider as a ``MarketDataProvider`` whose symbols are permanent ids."""
+        return InstrumentKeyedProvider(self, history)
 
     def describe(self) -> dict[str, Any]:
         return {
@@ -324,3 +346,29 @@ class MassiveProvider:
             "live_verified": False,
             "notes": "Daily aggregates include extended-hours trades; reconcile before use.",
         }
+
+
+class InstrumentKeyedProvider:
+    """A ``MarketDataProvider`` view keyed by instrument id, for ``providers.ingest``.
+
+    ``ingest`` then checkpoints, resumes and de-duplicates per permanent id, so a rename
+    in the middle of a backfill neither restarts nor splits the security's history.
+    """
+
+    def __init__(self, inner: MassiveProvider, history: pd.DataFrame) -> None:
+        self.inner = inner
+        self.history = history
+        self.name = f"{inner.name}:by-instrument"
+        self.is_synthetic = inner.is_synthetic
+
+    def symbols(self) -> list[str]:
+        return sorted(self.history["instrument_id"].unique())
+
+    def fetch_bars(self, symbol: str, start: pd.Timestamp, end: pd.Timestamp) -> pd.DataFrame:
+        return self.inner.fetch_instrument_bars(self.history, symbol, start, end)
+
+    def fetch_actions(self, symbol: str, start: pd.Timestamp, end: pd.Timestamp) -> pd.DataFrame:
+        return self.inner.fetch_instrument_actions(self.history, symbol, start, end)
+
+    def describe(self) -> dict[str, Any]:
+        return {**self.inner.describe(), "keyed_by": "instrument_id"}

@@ -91,6 +91,36 @@ Sources:
 [12] https://massive.com/docs/rest/stocks/aggregates/custom-bars.md ·
 [13] https://massive.com/docs/rest/stocks/corporate-actions/splits.md
 
+## What is implemented (`quantlab.data.vendors`)
+
+* `http.JsonApi`:
+  * HTTPS only; redirects are never followed (the key is in the query string).
+  * `next_url` must stay on the vendor's host.
+  * Retries 429, 5xx and network errors with exponential backoff and jitter, honouring
+    `Retry-After` as a floor.
+  * 401/403 is `VendorAuthError` and is not retried.
+  * A non-JSON or mis-shaped body is `VendorSchemaError`.
+  * Uses the existing `TokenBucket` limiter. Set its rate from the purchased plan's
+    documented limit; plan limits were not verified here.
+  * The key is redacted from every error and from `repr`.
+* `massive.MassiveProvider`:
+  * The security master, ticker events and the identity built from them: `share_class_figi`
+    becomes the `instrument_id`; listing date, delisting reason and delisting return stay
+    unknown because the vendor does not document them.
+  * Raw daily bars and actions per ticker, with field-by-field validation.
+  * Per-security fetches that request each ticker only inside its validity interval.
+  * `by_instrument(history)`: a `MarketDataProvider` keyed by id, so the existing
+    resumable `ingest()` checkpoints per security. Its output then goes through the #10
+    ingestion gates.
+* **Tests** (`tests/unit/test_vendor_massive.py`) run against a scripted fake that serves
+  *synthetic* data in the documented response shapes. They cover renames, delisting,
+  ticker reuse, pagination, a failed page mid-backfill, 429/5xx/401, bounded retries,
+  malformed payloads, an off-host `next_url`, a real redirect on a loopback server,
+  limiter pacing, resumed ingestion and a misreported split ratio blocking ingestion.
+  **No test touches the network, and live behaviour is unverified.**
+* **Not wired yet:** a `MASSIVE_API_KEY` setting and a dataset job. Both need leases from
+  the lead (`config.py`, `tasks.py`).
+
 ## Licensing rules for this repository
 
 * No vendor data is committed. Fixtures are synthetic, labelled synthetic, and mimic the

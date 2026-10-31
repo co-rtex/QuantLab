@@ -56,13 +56,30 @@ class HttpResponse:
 Transport = Callable[[str, float], HttpResponse]
 
 
+class _RefuseRedirects(urllib.request.HTTPRedirectHandler):
+    """Never follow a redirect: the API key is in the URL and would go to the new host.
+
+    Returning None makes urllib surface the 3xx as an ``HTTPError``, which becomes a
+    permanent error below.
+    """
+
+    def redirect_request(self, *args: Any, **kwargs: Any) -> None:
+        return None
+
+
+_OPENER = urllib.request.build_opener(_RefuseRedirects)
+
+
 def urllib_transport(url: str, timeout: float) -> HttpResponse:
-    """Plain HTTPS GET with the standard library. Network errors become transient errors."""
+    """Plain HTTPS GET with the standard library, never following redirects.
+
+    Network errors become transient errors.
+    """
     if not url.startswith("https://"):
         raise PermanentProviderError("vendor URLs must use https")
     req = urllib.request.Request(url, headers={"Accept": "application/json"})  # noqa: S310
     try:
-        with urllib.request.urlopen(req, timeout=timeout) as resp:  # noqa: S310 - https only
+        with _OPENER.open(req, timeout=timeout) as resp:  # https only, no redirects
             return HttpResponse(resp.status, dict(resp.headers), resp.read())
     except urllib.error.HTTPError as exc:
         return HttpResponse(exc.code, dict(exc.headers or {}), exc.read() or b"")
