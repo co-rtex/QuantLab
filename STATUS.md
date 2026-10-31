@@ -1,6 +1,6 @@
 # Status (authoritative handoff)
 
-_Last updated: 2026-10-31 (lead integration cycle 2: 53 PRs merged before this update, per `gh pr list --state merged`; main `379abd5`)_
+_Last updated: 2026-10-31 (lead integration cycle 2: 62 PRs merged before this update, per `gh pr list --state merged`; main `f7e399f`)_
 
 ## Where things stand
 All roadmap phases 0–10 are implemented. An independent audit on 2026-10-30
@@ -115,10 +115,20 @@ leases and migration slots: [docs/COORDINATION.md](docs/COORDINATION.md).
   * #95 vendor-neutral provider plumbing, **inert by default** (#11).
     `hide_input_in_errors` also closed a pre-existing secret echo in settings errors.
   * #94 verifier false rejects (#79), after four review rounds.
+  * #97 storage lifecycle on workspace deletion (#21): locked GC, quarantine to `.trash`,
+    and the sweep refuses when the DB looks empty (restore safety).
+  * #99 the real cause of #16: a `useApi` poll stopped on a transient error before the
+    first load. **#16 complete.**
+  * #100 tri-state synthetic labels everywhere, failing safe to "unknown" (#23 slice 1).
+  * #101 stable catalog paging. #103 per-workspace report storage (#96,
+    confidentiality).
+  * #104 no stale data across resource changes (#23 slice 2). #105 workspace rename,
+    delete and member removal (#23 slice 3a).
+  * #106 an authoritative `is_synthetic` on result rows (#102).
 * Every merge had an independent read-only lead review: no blockers. Should-fix items are
   tracked in #8, #51, #52 and #55 (Agent 2), #39 (gate), and #41, #50 and #54 (Agent 3).
 
-## Last verified (2026-10-31, main `379abd5`)
+## Last verified (2026-10-31, main `f7e399f`)
 Each merge was verified on a trial merge with current main, with pytest output written to a
 file rather than piped:
 * #28, #32, #36, #29, #30, #31: tree identical to main afterwards; 314 passed;
@@ -160,6 +170,10 @@ file rather than piped:
 * #94: 871 passed. Serial E2E 20/21: `workflow.spec` failed at the validation regime panel
   at **load about 3**, then passed 3/3 alone (an A/B including main). **#16 is a real
   intermittent validation-panel race**, not only contention; it's reassigned to Agent 2.
+* #97: 892 passed, E2E 21/21. #99: E2E 23/23 (plus 5 consecutive full runs by Agent 2).
+  #100: E2E 26/26.
+* #101 + #103 + #104: 899 passed, E2E 27/27. #105 + #106 (byte-identical to main
+  `f7e399f`): **906 passed, E2E 30/30**.
 
 CI is green on every merged head. CI doesn't run Playwright (#17).
 
@@ -171,17 +185,22 @@ E2E failures this cycle were resource starvation, not regressions:
 Full-stack runs are now serialized machine-wide (`make e2e-serial`).
 
 ## Next steps (issues carry owners and acceptance criteria)
-1. **Agent 2:** #16 (the validation-panel race: reproduce, fix, spec), then #23 (frontend
-   completeness).
-2. **Agent 3:**
-   * #97 (#21 storage lifecycle: quarantine, refusal, an hourly sweep; one small fix left);
-   * #96 (per-workspace report storage; gated before any report-writing route).
-3. **Lead:**
-   * integrate;
-   * #17 needs the user's OK on Actions minutes;
-   * #19 waits on #39.
-4. **Unassigned:** #20 (needs a load host), the benchmark half of #24 (needs a quiet
-   machine).
+1. **Agent 2:**
+   * #107 (cancel workflows; two small fixes);
+   * the rest of #23 (saved strategies, CSV import, E2E for failure, session expiry and
+     logout);
+   * switch `useSynthetic` to the row field from #106;
+   * then #19 Terraform (validated, never applied; the edge must preserve client IPs).
+2. **Agent 3:** #24 harness and methodology (no published figures until a quiet window).
+3. **Lead:** integrate.
+4. **Blocked on the user:**
+   * #39 (a host and a second machine);
+   * #17 (Actions minutes);
+   * #11 and #12 live (vendor, licence and key);
+   * #15 hosted eval (LLM key);
+   * #20 (load host);
+   * #55 option A (product decision);
+   * a quiet window for #24 figures.
 
 ## Blockers
 No LLM API key, market-data API key or cloud credentials (docs/BLOCKERS.md).

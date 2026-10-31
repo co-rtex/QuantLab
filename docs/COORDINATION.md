@@ -31,7 +31,7 @@ Work items are issues labelled `owner:*`, `P0`/`P1`/`P2`, `status:*` and `area:*
 | `packages/quantlab/src/quantlab/data/**`, `services/api/src/quantlab_api/marketdata.py` | Agent 3 |
 | `packages/quantlab/src/quantlab/{backtest,analytics,research,ml,portfolio,optimize,strategies}/**` | Agent 3 |
 | `docs/METHODOLOGY.md` | Agent 3 |
-| `benchmarks/**` | Agent 3 for the market-data part of #24 (leased) |
+| `benchmarks/**` | Agent 3 for #24 (harness and methodology; no published figures until a quiet window) |
 | `services/api/src/quantlab_api/observability.py`, `db.py`, `apps/web/playwright.config.ts` | Lead |
 | `packages/quantlab/src/quantlab/assistant/**`, `tests/unit/test_assistant.py`, the verifier section of `docs/AI_EVAL.md` | Agent 2 for #15 (leased) |
 | `apps/web/src/lib/useApi.ts`, `apps/web/src/lib/workspace.tsx`, `apps/web/src/components/**`, `apps/web/src/app/(app)/**`, new E2E specs | Agent 2 for #18 (leased) |
@@ -46,10 +46,10 @@ follow-up docs commit. A lease ends when the PR that used it merges or closes.
 | Shared file | Current holder | For |
 |---|---|---|
 | `services/api/src/quantlab_api/models.py` | — | (#87 merged) |
-| `services/api/src/quantlab_api/schemas.py` | — | (#62 merged) |
-| `services/api/src/quantlab_api/config.py` | Agent 3 | #21 storage-sweep settings (#11 merged) |
-| `services/api/src/quantlab_api/jobs.py` | Agent 3 | #21 `sweep_uploads` plus a `sweep_orphans` call in `reap()` |
-| `services/api/src/quantlab_api/tasks.py` | Agent 3 | #21 advisory lock in `register_version` (#11 merged) |
+| `services/api/src/quantlab_api/schemas.py` | — | (#106 merged) |
+| `services/api/src/quantlab_api/config.py` | — | (#97 merged) |
+| `services/api/src/quantlab_api/jobs.py` | — | (#97, #103 merged) |
+| `services/api/src/quantlab_api/tasks.py` | — | (#97 merged) |
 | `services/api/alembic/env.py` | — | (#37 merged) |
 | `scripts/case_study.py` | — | (Agent 2's invitation fix merged in #37) |
 | `services/api/src/quantlab_api/main.py` | — | (#75 merged) |
