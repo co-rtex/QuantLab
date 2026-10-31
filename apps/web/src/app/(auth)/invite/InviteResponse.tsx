@@ -98,7 +98,7 @@ export function InviteResponse() {
   const [state, setState] = useState<State>({ kind: "loading" });
   const [busy, setBusy] = useState(false);
   const box = useRef<HTMLDivElement>(null);
-  const [retried, setRetried] = useState(false);
+  const retried = useRef(false); // Try again was pressed and its answer has not arrived
 
   const check = useCallback(async () => {
     const token = readToken();
@@ -131,12 +131,15 @@ export function InviteResponse() {
   }, [check]);
 
   // "Try again" disappears with the error; keep focus in the answer instead of the body.
+  // Once per retry, and only if focus was lost: a user who has moved on keeps their place.
   useEffect(() => {
-    if (retried && state.kind !== "loading") box.current?.focus();
-  }, [retried, state.kind]);
+    if (!retried.current || state.kind === "loading") return;
+    retried.current = false;
+    if (document.activeElement === document.body || document.activeElement === null) box.current?.focus();
+  }, [state.kind]);
 
   function again() {
-    setRetried(true);
+    retried.current = true;
     setState({ kind: "loading" });
     void check();
   }
