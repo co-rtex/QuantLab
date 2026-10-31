@@ -96,6 +96,8 @@ def current_user(request: Request, db: Annotated[Session, Depends(get_db)]) -> U
     if user is None or not user.is_active or claims.get("ver") != user.token_version:
         raise ApiError(401, "invalid_token", "Invalid credentials")
     request.state.user_id = str(user.id)
+    # For long requests that re-check the session after reading their body.
+    request.state.token_version = user.token_version
     return user
 
 
