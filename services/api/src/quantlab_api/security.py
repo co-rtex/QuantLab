@@ -3,9 +3,13 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import hashlib
+import hmac
 import ipaddress
+import json
 import os
+import secrets
 import socket
 import threading
 import time
@@ -14,7 +18,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Annotated, Any
 
 import jwt
-from fastapi import Depends, Request
+from fastapi import Depends, Request, Response
 from pwdlib import PasswordHash
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -437,3 +441,100 @@ class RateLimiter:
 
 
 login_limiter = RateLimiter()
+
+
+# ------------------------------------------------------------------- device cookies
+# A browser that has signed in to an account before keeps a signed "device cookie". A
+# login that presents one for the submitted email is throttled per device instead of by
+# the account-wide failure budget, so an attacker who spends that budget from several
+# addresses cannot lock the owner out of a browser they already use (ADR-0008, #55).
+# The cookie is used only to choose a throttling budget, never to authenticate.
+
+DEVICE_COOKIE = "quantlab_device"
+# Over TLS the name carries the __Secure- prefix (browsers then require Secure). Not
+# __Host-: that prefix requires Path=/, and this cookie is scoped to the auth routes.
+DEVICE_COOKIE_SECURE = "__Secure-quantlab_device"
+DEVICE_COOKIE_PATH = "/api/v1/auth"
+DEVICE_MAX_AGE = 90 * 24 * 3600
+# Failures one device may make (per hour) before it loses its exemption.
+DEVICE_FAILURES = 10
+DEVICE_WINDOW = 3600
+_DEVICE_CONTEXT = b"quantlab/device-cookie/v1"
+
+
+def _device_key() -> bytes:
+    """HKDF-SHA256 (RFC 5869) of the JWT signing key, with its own context label: the
+    device cookie never shares a key with the session tokens."""
+    ikm = get_settings().signing_key.encode()
+    prk = hmac.new(b"quantlab-hkdf-salt", ikm, hashlib.sha256).digest()
+    return hmac.new(prk, _DEVICE_CONTEXT + b"\x01", hashlib.sha256).digest()
+
+
+def _b64(data: bytes) -> str:
+    return base64.urlsafe_b64encode(data).rstrip(b"=").decode()
+
+
+def _unb64(text: str) -> bytes:
+    return base64.urlsafe_b64decode(text + "=" * (-len(text) % 4))
+
+
+def _email_hash(email: str) -> str:
+    return hashlib.sha256(email.strip().lower().encode()).hexdigest()
+
+
+def device_cookie_name() -> str:
+    return DEVICE_COOKIE_SECURE if get_settings().cookie_secure else DEVICE_COOKIE
+
+
+def device_token(user: User, device_id: str, now: float | None = None) -> str:
+    payload = {
+        "d": device_id,
+        "e": _email_hash(user.email),
+        "t": int(time.time() if now is None else now),
+        "v": user.token_version,
+    }
+    body = _b64(json.dumps(payload, separators=(",", ":"), sort_keys=True).encode())
+    sig = _b64(hmac.new(_device_key(), body.encode(), hashlib.sha256).digest())
+    return f"{body}.{sig}"
+
+
+def trusted_device(request: Request, email: str, user: User | None) -> str | None:
+    """The device id of a valid device cookie for this account, else None.
+
+    Valid means: the signature verifies (constant-time), it was issued for this email,
+    it is younger than DEVICE_MAX_AGE, and the account's token version has not changed
+    since (logging out everywhere revokes every device).
+    """
+    raw = request.cookies.get(device_cookie_name())
+    if not raw or user is None or "." not in raw:
+        return None
+    body, _, sig = raw.partition(".")
+    try:
+        expected = hmac.new(_device_key(), body.encode(), hashlib.sha256).digest()
+        if not hmac.compare_digest(expected, _unb64(sig)):
+            return None
+        claims = json.loads(_unb64(body))
+        device_id, issued = str(claims["d"]), int(claims["t"])
+        email_hash, version = str(claims["e"]), int(claims["v"])
+    except (ValueError, KeyError, TypeError):
+        return None
+    if not hmac.compare_digest(email_hash, _email_hash(email)):
+        return None
+    age = time.time() - issued
+    # Not issued in the future (beyond clock skew), not older than the maximum age.
+    if age < -60 or age > DEVICE_MAX_AGE or version != user.token_version:
+        return None
+    return device_id
+
+
+def set_device_cookie(response: Response, user: User, device_id: str | None) -> None:
+    """Issue (or refresh) the device cookie after a successful login."""
+    response.set_cookie(
+        device_cookie_name(),
+        device_token(user, device_id or secrets.token_hex(16)),
+        max_age=DEVICE_MAX_AGE,
+        httponly=True,
+        secure=get_settings().cookie_secure,
+        samesite="strict",
+        path=DEVICE_COOKIE_PATH,
+    )
