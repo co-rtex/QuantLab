@@ -39,6 +39,7 @@ export default function SettingsPage() {
   const { workspace, user, refresh, setWorkspaceId } = useWorkspace();
   const ws = workspace?.id;
   const isOwner = workspace?.role === "owner";
+  const canEdit = isOwner || workspace?.role === "editor";
   const members = useApi<Member[]>(ws ? `/workspaces/${ws}/members` : null);
   const audit = useApi<Page<AuditEvent>>(ws && isOwner ? `/workspaces/${ws}/audit?limit=30` : null);
   const invitations = useApi<Invitation[]>(ws && isOwner ? `/workspaces/${ws}/invitations` : null);
@@ -46,6 +47,8 @@ export default function SettingsPage() {
   const [link, setLink] = useState<{ email: string; url: string }>();
   const [err, setErr] = useState<ApiError>();
   const [msg, setMsg] = useState<string>();
+  const [removing, setRemoving] = useState<string>(); // member awaiting confirmation
+  const [confirmName, setConfirmName] = useState("");
 
   async function invite(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();
@@ -89,6 +92,57 @@ export default function SettingsPage() {
     members.reload();
   }
 
+  /** After leaving or deleting the current workspace, select one that is still there. */
+  async function selectRemaining() {
+    const left = await api<{ id: string }[]>("/workspaces");
+    await refresh();
+    if (left[0]) setWorkspaceId(left[0].id);
+  }
+
+  async function removeMember(m: Member) {
+    setErr(undefined);
+    setRemoving(undefined);
+    try {
+      await api(`/workspaces/${ws}/members/${m.user_id}`, { method: "DELETE" });
+      if (m.user_id === user?.id) {
+        await selectRemaining();
+        setMsg(`You left ${workspace?.name}.`);
+        return;
+      }
+      setMsg(`${m.display_name} was removed from ${workspace?.name}.`);
+    } catch (x) {
+      setErr(x as ApiError);
+    }
+    members.reload();
+  }
+
+  async function rename(e: FormEvent<HTMLFormElement>) {
+    e.preventDefault();
+    setErr(undefined);
+    const name = String(new FormData(e.currentTarget).get("name") ?? "").trim();
+    try {
+      await api(`/workspaces/${ws}`, { method: "PATCH", json: { name, description: workspace?.description ?? "" } });
+      await refresh();
+      setMsg(`Workspace renamed to ${name}.`);
+    } catch (x) {
+      setErr(x as ApiError);
+    }
+  }
+
+  async function deleteWorkspace(e: FormEvent<HTMLFormElement>) {
+    e.preventDefault();
+    if (!workspace || confirmName !== workspace.name) return;
+    setErr(undefined);
+    try {
+      await api(`/workspaces/${ws}`, { method: "DELETE" });
+      setConfirmName("");
+      await selectRemaining();
+      setMsg(`Workspace ${workspace.name} was deleted, with its data, experiments and portfolios.`);
+    } catch (x) {
+      setErr(x as ApiError);
+    }
+  }
+
   async function createWorkspace(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();
     const f = new FormData(e.currentTarget);
@@ -127,6 +181,7 @@ export default function SettingsPage() {
                 <th>Name</th>
                 <th>Email</th>
                 <th>Role</th>
+                {isOwner && <th className="sr-only">Actions</th>}
               </tr>
             </thead>
             <tbody>
@@ -150,6 +205,24 @@ export default function SettingsPage() {
                       m.role
                     )}
                   </td>
+                  {isOwner && (
+                    <td className="r whitespace-nowrap">
+                      {removing === m.user_id ? (
+                        <span className="inline-flex gap-1">
+                          <button type="button" className="btn btn-quiet py-0.5 text-loss" onClick={() => removeMember(m)}>
+                            {m.user_id === user?.id ? "Leave workspace" : `Remove ${m.display_name}`}
+                          </button>
+                          <button type="button" className="btn btn-quiet py-0.5" onClick={() => setRemoving(undefined)}>
+                            Keep
+                          </button>
+                        </span>
+                      ) : (
+                        <button type="button" className="btn btn-quiet py-0.5" aria-label={`Remove ${m.display_name}`} onClick={() => setRemoving(m.user_id)}>
+                          Remove
+                        </button>
+                      )}
+                    </td>
+                  )}
                 </tr>
               ))}
             </tbody>
@@ -238,6 +311,31 @@ export default function SettingsPage() {
               Sign out on all devices
             </button>
           </Panel>
+          {workspace && canEdit && (
+            <Panel title="This workspace">
+              <form onSubmit={rename} className="flex gap-2 text-sm" key={workspace.id}>
+                <label className="flex-1">
+                  <span className="mb-1 block">Name</span>
+                  <input name="name" required maxLength={120} defaultValue={workspace.name} className="field" />
+                </label>
+                <button className="btn btn-quiet self-end">Rename</button>
+              </form>
+              {isOwner && (
+                <form onSubmit={deleteWorkspace} className="mt-5 space-y-2 border-t border-rule pt-4 text-sm">
+                  <p className="text-ink-2">
+                    Deleting the workspace removes its datasets, experiments, ML runs and portfolios for every member. It cannot be undone.
+                  </p>
+                  <label className="block">
+                    <span className="mb-1 block">Type {workspace.name} to confirm</span>
+                    <input value={confirmName} onChange={(e) => setConfirmName(e.target.value)} className="field" autoComplete="off" />
+                  </label>
+                  <button className="btn btn-quiet text-loss" disabled={confirmName !== workspace.name}>
+                    Delete workspace
+                  </button>
+                </form>
+              )}
+            </Panel>
+          )}
           <Panel title="New workspace">
             <form onSubmit={createWorkspace} className="flex gap-2 text-sm">
               <label className="flex-1">
