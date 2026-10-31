@@ -134,12 +134,12 @@ stack peaks around 1.7 GB, and three full stacks at once caused API OOM kills
 * For pytest, run `make up` (Postgres + Redis only, under 100 MB).
 * Full-stack runs are **serialized**. Use `make e2e-serial`: it takes the lock in
   `scripts/fullstack-lock.sh`, which every worktree of this repository shares through
-  git's common directory. A separate clone has its own lock, so stop its stacks first. It runs `app-up` with `QUANTLAB_API_WORKERS=2`, Playwright with one worker
-  (`E2E_WORKERS=n` to override), then `down`. Memory sweeps and probes that start an app stack
-  go through `scripts/fullstack-lock.sh run ...` as well. The host has 8 GB of RAM, and
-  on 2026-10-31 two concurrent stacks took it to critically low memory. `scripts/fullstack-lock.sh status` shows
-  the holder. A manual `make app-up` must be wrapped in
-  `scripts/fullstack-lock.sh run ...` too.
+  git's common directory. A separate clone has its own lock, so stop its stacks first.
+  It runs `app-up` with `QUANTLAB_API_WORKERS=2`, Playwright with one worker
+  (`E2E_WORKERS=n` to override), then `down`. `scripts/fullstack-lock.sh status` shows
+  the holder. A manual `make app-up`, a memory sweep, or a probe that starts an app stack
+  must be wrapped in `scripts/fullstack-lock.sh run ...` too. The host has 8 GB of RAM,
+  and on 2026-10-31 two concurrent stacks took it to critically low memory.
 * Playwright defaults to one worker. With 4 parallel spec files, each registration's
   Argon2id hash (64 MiB × 4 lanes, about 170 ms uncontended) queued behind the others,
   and registrations took 25 s.
