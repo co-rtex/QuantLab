@@ -106,7 +106,21 @@ no open lot are not counted as round trips.
 Parameter selection (walk-forward in-sample scoring) and the sensitivity grid score each
 run from the session before its first holding, so strategies with long look-backs are not
 penalised for warm-up time spent in cash. Reported experiment statistics still cover the
-whole requested window, as that is what the account experienced.
+whole requested window, as that is what the account experienced. The selected parameter
+set is always one of the grid points; parameter sets are compared with every default
+filled in.
+
+**Probabilistic and deflated Sharpe** (`quantlab.research.stats`, Bailey and López de
+Prado). The statistic is the per-period Sharpe of excess returns,
+`mean(r - rf_p) / std(r - rf_p)`, which is the annualized Sharpe divided by `sqrt(252)`.
+`PSR(SR*) = Φ((SR - SR*) sqrt(n - 1) / sqrt(1 - γ3 SR + (γ4 - 1)/4 SR²))`, where γ3 and
+γ4 are the sample skewness and (non-excess) kurtosis. The DSR is the PSR against
+`SR* = E[max SR]` of the N grid trials under the null. Every trial Sharpe *and* the
+selected strategy's PSR/DSR use the same inputs: each run's invested window (as above)
+and the configured risk-free rate. Before #14 the selected strategy used its full window,
+including warm-up cash, with no risk-free rate, which overstated both probabilities.
+`psr_vs_zero` is the probability that the true excess Sharpe is positive. The output
+records `observations` and `selected_sharpe_per_period`, so the inputs can be audited.
 
 Regime analysis classifies each day using trailing benchmark volatility and trend, with
 volatility cut points taken from expanding quantiles, so no day's regime depends on later
