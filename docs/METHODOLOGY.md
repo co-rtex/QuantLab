@@ -451,11 +451,21 @@ solving.
   A bar whose volume is unknown (NaN) still has a close and is kept as a bar everywhere,
   including the staleness inputs. Only the volume features of the 21 windows containing it
   are undefined, so those rows are incomplete and left out.
-  `panel.excluded_rows.zero_volume_bars` counts the zero-volume bars of listed names on
-  dates that make the panel. `dates_below_10_with_zero_volume` counts dates skipped for
-  fewer than ten names that would have reached ten counting those bars. It is an upper
-  bound on what the rule cost, because such a bar's features could have been incomplete
-  anyway.
+
+  `panel.excluded_rows` reports what the rule removes:
+  * `zero_volume_bars` counts the zero-volume bars of listed names on dates that make
+    the panel.
+  * `dates_below_10_with_zero_volume` counts dates skipped for fewer than ten names that
+    would have had ten counting that date's own zero-volume bars. It does not count the
+    longer warm-up: removed bars delay a name's 252nd bar, so a name printing zero volume
+    early enters the panel later. For example, 3 of 12 names printing zero volume on
+    sessions 0–29 move the panel's start from session 252 to 282, and the counter reads 0.
+  * `dividends_after_last_trade` counts, over the whole dataset, dividends dated in a
+    zero-volume tail (after a name's last bar with volume). With no later bar to apply
+    them on, ML never books them. **The backtest engine does pay them**, because it keeps
+    zero-volume bars as printed bars and holds through them (its fill rule for such bars
+    is #149). So the label of a row whose horizon reaches such a tail misses the dividend
+    that a backtest holding the name would receive.
 * **Staleness is described, not excluded.** Trade-time windows can reach far back in
   calendar time, after a halt or for a thinly traded name. Two model inputs say how far,
   where s is a bar's position on the session calendar:

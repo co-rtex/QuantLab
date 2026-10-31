@@ -20,6 +20,7 @@ from quantlab.ml.pipeline import (
 SESSIONS = trading_days("2020-01-02", "2021-12-31")[:330]
 HALT = (290, 291, 292)
 NONE = normalize_actions(None)
+KEYS = {"zero_volume_bars", "dates_below_10_with_zero_volume", "dividends_after_last_trade"}
 
 
 def _bars(
@@ -172,7 +173,7 @@ def test_a_long_halt_is_described_by_the_covariates_not_excluded():
     dense = panel[panel["symbol"] != "S00"]
     assert (dense["max_gap_252"] == 0).all() and (dense["bars_span_21"] == 1).all()
     # Nothing is excluded for staleness: only zero-volume bars are, and counted.
-    assert set(panel.attrs["excluded"]) == {"zero_volume_bars", "dates_below_10_with_zero_volume"}
+    assert set(panel.attrs["excluded"]) == KEYS
 
 
 def test_thin_trading_is_kept_and_told_apart_from_a_halt():
@@ -221,7 +222,7 @@ def test_results_report_the_excluded_rows():
         MLConfig(horizon=5, sample_every=1, folds=2, min_train_dates=6, models=("majority",)),
     )
     ex = out["panel"]["excluded_rows"]
-    assert set(ex) == {"zero_volume_bars", "dates_below_10_with_zero_volume"}
+    assert set(ex) == KEYS
     assert ex["zero_volume_bars"] > 0
 
 
@@ -336,3 +337,43 @@ def test_an_unknown_volume_is_still_a_bar():
     rows = set(panel.loc[panel["symbol"] == "S02", "date"])
     assert not rows & set(window) and SESSIONS[279] in rows and SESSIONS[301] in rows
     assert panel.attrs["excluded"]["zero_volume_bars"] == 0  # unknown is not zero
+
+
+def test_a_longer_warm_up_is_not_counted_as_a_zero_volume_date():
+    # #147 re-review: 3 of 12 names print zero volume on sessions 0-29, so their 253rd own
+    # bar (mom_252_21's warm-up) comes 30 sessions later. Dates 252-281 have 9 names and
+    # are skipped, but no zero-volume bar is on them, so the counter reads 0 (documented).
+    bars = _bars(halted=None)
+    early = bars["symbol"].isin(["S00", "S01", "S02"]) & (bars["date"] < SESSIONS[30])
+    bars.loc[early, "volume"] = 0.0
+    panel = build_panel(bars, NONE, MLConfig(horizon=5, sample_every=1))
+    assert panel["date"].min() == SESSIONS[282]
+    assert panel.attrs["excluded"]["dates_below_10_with_zero_volume"] == 0
+
+
+def _dividend(sym: str, at: int, value: float = 0.5) -> pd.DataFrame:
+    row = {"symbol": sym, "ex_date": SESSIONS[at], "kind": "dividend", "value": value}
+    return normalize_actions(pd.DataFrame([row]))
+
+
+@pytest.mark.parametrize(
+    ("sym", "ex", "lost"),
+    [
+        ("S00", 310, 1),  # inside S00's zero-volume tail from session 300: never applied
+        ("S00", 250, 0),  # on a traded bar
+        ("S01", 310, 0),  # S01 trades to the end
+    ],
+)
+def test_dividends_in_a_zero_volume_tail_are_counted(sym, ex, lost):
+    # #147 re-review NB2: ML cannot apply such a dividend; the engine pays it (#149).
+    bars = _bars(halted=None)
+    bars.loc[(bars["symbol"] == "S00") & (bars["date"] >= SESSIONS[300]), "volume"] = 0.0
+    panel = build_panel(bars, _dividend(sym, ex), MLConfig(horizon=5, sample_every=1))
+    assert panel.attrs["excluded"]["dividends_after_last_trade"] == lost
+
+
+def test_a_dividend_inside_a_zero_volume_halt_is_applied_on_the_reopen_not_counted():
+    halt = _halt(40, at=260)
+    stale = _zero_volume_halt(_bars(halt=halt), halt)
+    panel = build_panel(stale, _dividend("S00", halt[5]), MLConfig(horizon=5, sample_every=1))
+    assert panel.attrs["excluded"]["dividends_after_last_trade"] == 0

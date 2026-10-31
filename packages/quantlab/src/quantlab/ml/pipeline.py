@@ -36,7 +36,7 @@ from sklearn.metrics import brier_score_loss, log_loss, roc_auc_score
 from sklearn.pipeline import make_pipeline
 from sklearn.preprocessing import StandardScaler
 
-from quantlab.data.adjust import PointInTimeAdjuster, total_returns
+from quantlab.data.adjust import PointInTimeAdjuster, place_actions, total_returns
 from quantlab.data.identity import normalize_master
 from quantlab.data.schema import wide
 
@@ -170,14 +170,15 @@ def compute_features(
     bars: pd.DataFrame, actions: pd.DataFrame, exclude: tuple[str, ...] = ("SYNIDX",)
 ) -> tuple[dict[str, pd.DataFrame], pd.DataFrame]:
     """Date x symbol feature matrices plus fully adjusted closes (see ``_features``)."""
-    feats, _, adj = _features(bars, actions, exclude)
+    feats, _, adj, _ = _features(bars, actions, exclude)
     return feats, adj
 
 
 def _features(
     bars: pd.DataFrame, actions: pd.DataFrame, exclude: tuple[str, ...]
-) -> tuple[dict[str, pd.DataFrame], pd.DataFrame, pd.DataFrame]:
-    """Features, the removed zero-volume bars and fully adjusted closes, date x symbol.
+) -> tuple[dict[str, pd.DataFrame], pd.DataFrame, pd.DataFrame, int]:
+    """Features, the removed zero-volume bars, fully adjusted closes (date x symbol) and
+    the number of dividends lost with a zero-volume tail.
 
     A bar with zero volume (a stale close a vendor keeps printing through a halt, or for a
     name that rarely trades) is no bar (#142). It is removed before anything is computed,
@@ -185,6 +186,9 @@ def _features(
     price, windows skip it, the staleness inputs count it as a gap, and a corporate action
     dated on it applies on the next bar, as it would across a gap. A bar with an unknown
     (NaN) volume still has a close and is kept. The session calendar is that of all bars.
+    A dividend dated in a zero-volume tail (after the last bar with volume) has no later
+    bar, so it is never applied here; the backtest engine, which keeps such bars as
+    printed bars, pays it. Those dividends are counted.
 
     Fully adjusted levels are safe here because only *ratios* of prices dated on or before
     ``t`` are used: corporate actions after ``t`` scale both sides equally and cancel.
@@ -208,7 +212,18 @@ def _features(
     close = wide(bars, "close").reindex(index=calendar.index, columns=calendar.columns)
     vol = wide(bars, "volume").reindex(index=close.index, columns=close.columns)
     acts = actions[actions["symbol"].isin(close.columns)]
-    adj = close * PointInTimeAdjuster(close, acts).multiplier(None)
+    adjuster = PointInTimeAdjuster(close, acts)
+    adj = close * adjuster.multiplier(None)
+    # Both placements sort the actions the same way, so they compare row by row.
+    printed_after = place_actions(calendar, acts)["placement"].eq("after_history").to_numpy()
+    placed = adjuster.placed
+    lost_dividends = int(
+        (
+            placed["kind"].eq("dividend").to_numpy()
+            & placed["placement"].eq("after_history").to_numpy()
+            & ~printed_after
+        ).sum()
+    )
     # The first bar after a gap carries the return over the whole gap (total_returns).
     rets = total_returns(bars, acts).reindex(index=close.index, columns=close.columns)
     has = close.notna().to_numpy()
@@ -231,7 +246,7 @@ def _features(
         columns=close.columns,
     )
     own = _own_bar_features(compress(adj), compress(rets), compress(vol), compress(session))
-    return {name: expand(f) for name, f in own.items()}, zero_volume, adj
+    return {name: expand(f) for name, f in own.items()}, zero_volume, adj, lost_dividends
 
 
 def build_panel(
@@ -250,7 +265,7 @@ def build_panel(
     returns are applied to labels whose horizon reaches the first session after the
     security's delisting date.
     """
-    feats, zero_volume, adj = _features(bars, actions, cfg.exclude)
+    feats, zero_volume, adj, lost_dividends = _features(bars, actions, cfg.exclude)
     close = adj
     h = cfg.horizon
     # The label runs to the last close at or before t+h. For an asset that stops trading
@@ -292,7 +307,11 @@ def build_panel(
     frames = []
     # Zero-volume bars of listed names on a sampled date: not decision rows (#142).
     stale = zero_volume & listed
-    excluded = {"zero_volume_bars": 0, "dates_below_10_with_zero_volume": 0}
+    excluded = {
+        "zero_volume_bars": 0,
+        "dates_below_10_with_zero_volume": 0,
+        "dividends_after_last_trade": lost_dividends,
+    }
     for d in dates:
         k = close.index.get_loc(d)
         row = pd.DataFrame({name: f.loc[d] for name, f in feats.items()})  # incl. the flag
@@ -300,9 +319,9 @@ def build_panel(
         row = row[close.loc[d].notna()].dropna()
         n_stale = int(stale.loc[d].sum())
         if len(row) < 10:
-            # A date too thin for a cross-section is skipped whole; say when it had enough
-            # names counting its zero-volume bars (an upper bound: such a bar's features
-            # could have been incomplete anyway).
+            # A date too thin for a cross-section is skipped whole; count it when it would
+            # have had ten names counting that date's own zero-volume bars. A longer
+            # warm-up (removed bars delay a name's 252nd bar) is not counted.
             if len(row) + n_stale >= 10:
                 excluded["dates_below_10_with_zero_volume"] += 1
             continue
@@ -502,9 +521,9 @@ def run_ml_experiment(
         "panel": {
             "rows": len(panel),
             "volume_flat_rows": int(panel["volume_flat_21"].sum()),
-            # Rows left out for a stated reason, among those otherwise kept: no volume at
-            # all in the last 21 bars. Stale windows are not excluded; see bars_span_21
-            # and max_gap_252.
+            # What was left out for a stated reason: zero-volume bars (no bars, #142), the
+            # dates they took below ten names, and dividends lost with a zero-volume tail.
+            # Stale windows are not excluded; see bars_span_21 and max_gap_252.
             "excluded_rows": dict(panel.attrs.get("excluded", {})),
             "dates": int(panel["date"].nunique()),
             "symbols": int(panel["symbol"].nunique()),
