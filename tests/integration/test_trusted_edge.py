@@ -186,3 +186,49 @@ def test_spoofed_header_from_a_direct_client_is_ignored(monkeypatch):
             for i in range(5)
         ]
     assert codes == [401, 401, 401, 429, 429]  # rotating fake addresses does not help
+
+
+def test_production_refuses_requests_without_a_client_address(monkeypatch):
+    """Production behind a proxy that states no address (edge missing) fails closed."""
+    from fastapi.testclient import TestClient
+
+    from quantlab_api.main import app
+
+    monkeypatch.setattr(get_settings(), "trusted_proxies", ["10.0.0.5"])
+    with TestClient(app, client=("10.0.0.5", 4000)) as web:
+        register(web, "user@example.com", "Correct-horse-9")
+        monkeypatch.setattr(get_settings(), "environment", "production")
+        creds = {"email": "user@example.com", "password": "Correct-horse-9"}
+        login = web.post("/api/v1/auth/login", json=creds)
+        reg = web.post(
+            "/api/v1/auth/register",
+            json={"email": "n@example.com", "password": "Correct-horse-9", "display_name": "n"},
+        )
+        assert (login.status_code, reg.status_code) == (503, 503)
+        assert login.json()["error"]["code"] == "edge_required"
+        # With the edge's address the same deployment works.
+        ok = web.post(
+            "/api/v1/auth/login", json=creds, headers={"X-Forwarded-For": "198.51.100.20"}
+        )
+        assert ok.status_code == 200, ok.text
+
+
+def test_development_caps_anonymous_registrations_without_locking_logins(monkeypatch):
+    from fastapi.testclient import TestClient
+
+    from quantlab_api.main import app
+
+    monkeypatch.setattr(get_settings(), "trusted_proxies", ["10.0.0.5"])
+    monkeypatch.setattr(get_settings(), "rate_limit_login_per_minute", 1)
+    with TestClient(app, client=("10.0.0.5", 4000)) as web:
+        for i in range(10):
+            register(web, f"r{i}@example.com")
+        extra = web.post(
+            "/api/v1/auth/register",
+            json={"email": "r10@example.com", "password": "Correct-horse-9", "display_name": "r"},
+        )
+        assert extra.status_code == 429
+        ok = web.post(
+            "/api/v1/auth/login", json={"email": "r0@example.com", "password": "Correct-horse-9"}
+        )
+        assert ok.status_code == 200, ok.text

@@ -84,8 +84,11 @@ address from a forged one.
   (development, no edge) it forwards no address at all.
 * The API accepts the header only from `QUANTLAB_TRUSTED_PROXIES` (compose: `web`),
   resolved off the request path with last-good retention (`security.TrustedProxies`).
-  A trusted proxy that states no usable address means "unknown": the per-address limit
-  is skipped and the per-account limit applies (`security.rate_limit_address`).
+  A trusted proxy that states no usable address means "unknown" (`security.rate_limit_address`).
+  In production that means the edge is missing, and login and registration fail closed
+  (503 `edge_required`). In development the per-address limit is skipped (the per-account
+  limit still applies) and all registrations share one coarse cap. A shared login bucket
+  would have let ten failed logins lock every user out.
 **Why revised.** The first rule (forward only with `TRUST_FORWARDED_FOR=true`) made the
 API see every browser as the web container, so one client's failed logins returned 429 to
 everyone (audit 2026-10-30). Its replacement (forward the rightmost hop) let a client that
@@ -94,8 +97,8 @@ lock anyone else out" was wrong: it could send a victim's address to exhaust the
 bucket, and rotate addresses to spend a victim account's failed-login budget, because the
 account limit is reserved before the password is checked.
 **Consequences.** Public exposure requires the edge and `infra/edge/verify.sh` passing
-(docs/RUNBOOK.md, "Exposing a deployment"). Without the edge there is no per-address
-throttling, which is acceptable only on 127.0.0.1. A client with many real addresses can
+(docs/RUNBOOK.md, "Exposing a deployment"). Without the edge, development has no
+per-address login throttling, which is acceptable only on 127.0.0.1. A client with many real addresses can
 still delay one account's login by spending its failure budget; addresses can no longer
 be forged, so this needs a real botnet, and the fix (per-device login credentials) is
 future work.
