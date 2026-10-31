@@ -546,7 +546,11 @@ def test_m3_downgrade_refuses_to_drop_a_reused_tickers_rows(client, seeded):
     cfg.set_main_option("sqlalchemy.url", BASE_URL)
     with pytest.raises(RuntimeError, match="ticker reuse"):
         command.downgrade(cfg, "9a4c6e2f1b37")
+    from alembic.script import ScriptDirectory
+
     eng = create_engine(BASE_URL)
     with eng.connect() as conn:
-        assert MigrationContext.configure(conn).get_current_revision() == "b5e1d7c3a924"
+        # The refused downgrade rolled back: still at head (whatever later migrations add).
+        head = ScriptDirectory.from_config(cfg).get_current_head()
+        assert MigrationContext.configure(conn).get_current_revision() == head
     eng.dispose()
