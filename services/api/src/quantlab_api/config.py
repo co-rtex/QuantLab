@@ -122,6 +122,13 @@ class Settings(BaseSettings):
     market_data_license: str | None = None  # recorded in every version's provenance
     market_data_plan: str | None = None
     market_data_requests_per_minute: float | None = Field(None, gt=0)
+    # Orphan sweep (#21). It quarantines rather than deletes, refuses a cycle that would
+    # remove more than this share of what is on disk (or anything when the database has no
+    # rows: a restore in progress, the wrong database), and can be switched off.
+    storage_sweep: bool = True
+    storage_sweep_interval_seconds: int = Field(3600, ge=60)
+    storage_sweep_max_fraction: float = Field(0.25, gt=0, le=1)
+    storage_trash_retention_seconds: int = Field(7 * 24 * 3600, ge=3600)
 
     @field_validator(
         "metrics_token", "anthropic_api_key", "jwt_secret", "market_data_api_key", mode="before"

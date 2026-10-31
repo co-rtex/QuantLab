@@ -27,6 +27,13 @@ def _settings():
     return get_settings()
 
 
+@pytest.fixture(autouse=True)
+def _own_data_dir(tmp_path, monkeypatch):
+    """A data directory for this test alone. The session's shared one holds files of
+    earlier tests whose rows were truncated, which the sweep rightly refuses to touch."""
+    monkeypatch.setattr(_settings(), "data_dir", tmp_path / "data")
+
+
 def _version(client, h, dv_id: str) -> dict:
     return client.get(f"/api/v1/dataset-versions/{dv_id}", headers=h).json()
 
@@ -110,16 +117,21 @@ def test_a_crash_after_the_commit_leaves_only_garbage_the_sweep_collects(
 
     s = _two_workspaces_sharing_a_version(client, seeded)
     a_h, a_ws, _ = s["a"]
+    b_h, b_ws, b_dv = s["b"]
+    kept = _settings().artifacts_dir / "experiments" / _experiment(client, b_h, b_ws, b_dv)
     monkeypatch.setattr(storage, "collect", lambda g: {})  # "crash" before any deletion
     assert client.delete(f"/api/v1/workspaces/{a_ws}", headers=a_h).status_code == 204
     assert s["own"].exists() and s["experiment"].exists()  # garbage, not dangling rows
     assert storage.sweep_orphans()["versions"] == 0  # younger than the grace period
     assert s["own"].exists()
-    swept = storage.sweep_orphans(min_age_seconds=0)
-    assert swept["versions"] >= 1 and swept["experiments"] >= 1
+    swept = storage.sweep_orphans(min_age_seconds=0, throttle=False)
+    assert swept["versions"] == 1 and swept["experiments"] == 1
     assert not s["own"].exists() and not s["experiment"].exists()
-    assert s["shared"].exists()  # never a directory that is still referenced
-    b_h, _, b_dv = s["b"]
+    assert s["shared"].exists() and kept.exists()  # never anything still referenced
+    trash = _settings().data_dir / ".trash"
+    assert any(trash.rglob("manifest.json"))  # quarantined, not yet deleted
+    assert storage.purge_trash(retention_seconds=0) >= 1
+    assert not any(trash.rglob("manifest.json"))
     assert (
         client.get(f"/api/v1/dataset-versions/{b_dv}/bars/SYN001", headers=b_h).status_code == 200
     )
@@ -139,9 +151,102 @@ def test_the_grace_period_bounds_every_write_and_young_temporaries_are_kept(clie
     old.mkdir()
     two_days_ago = time.time() - 2 * 86400
     os.utime(old, (two_days_ago, two_days_ago))
-    storage.sweep_orphans()
+    reports_tmp = root / "_reports" / ("0" * 64) / ".tmp-report"
+    reports_tmp.parent.mkdir(parents=True)
+    reports_tmp.write_text("{")
+    os.utime(reports_tmp, (two_days_ago, two_days_ago))
+    leftover = _settings().artifacts_dir / "experiments" / f"{uuid.uuid4()}.old-1a2b3c4d"
+    leftover.mkdir(parents=True)
+    os.utime(leftover, (two_days_ago, two_days_ago))
+    storage.sweep_orphans(throttle=False)
     assert young.exists() and not old.exists()
+    assert not reports_tmp.exists() and not leftover.exists()
     young.rmdir()
+
+
+# ------------------------------------------------- #97 review: never a mass deletion
+def _old_everything(root) -> None:
+    """As restored files keep their original mtimes."""
+    week_ago = time.time() - 7 * 86400
+    for p in [root, *root.rglob("*")]:
+        os.utime(p, (week_ago, week_ago))
+
+
+def test_a_restore_in_progress_deletes_nothing(client, seeded):
+    """pg_restore -c drops and reloads the tables: for a while the database has no rows
+    while the disk is full of old files. The sweep must refuse, not empty the store."""
+    from sqlalchemy import text
+
+    from quantlab_api import storage
+    from quantlab_api.db import SessionLocal
+    from tests.integration.conftest import TABLES
+
+    h, ws, dv = seeded["headers"], seeded["ws"], seeded["dv"]
+    exp_dir = _settings().artifacts_dir / "experiments" / _experiment(client, h, ws, dv)
+    version_dir = _vdir("demo", _version(client, h, dv)["version_hash"])
+    _old_everything(_settings().data_dir)
+    with SessionLocal() as db:
+        db.execute(text("TRUNCATE " + ", ".join(TABLES) + " RESTART IDENTITY CASCADE"))
+        db.commit()
+    swept = storage.sweep_orphans(throttle=False)
+    assert swept["versions"] == 0 and swept["experiments"] == 0
+    assert version_dir.exists() and exp_dir.exists()
+
+
+def test_a_cycle_that_would_remove_most_of_the_store_is_refused(client, seeded):
+    import shutil
+
+    from quantlab_api import storage
+
+    h, dv = seeded["headers"], seeded["dv"]
+    real = _vdir("demo", _version(client, h, dv)["version_hash"])
+    fakes = [real.parent / f"{k:064x}" for k in range(1, 5)]
+    for f in fakes:  # four unreferenced copies against one referenced version
+        shutil.copytree(real, f)
+    _old_everything(_settings().data_dir)
+    assert storage.sweep_orphans(throttle=False)["versions"] == 0
+    assert all(f.exists() for f in fakes) and real.exists()
+    forced = storage.sweep_orphans(min_age_seconds=0, force=True)
+    assert forced["versions"] == 4 and real.exists()
+
+
+def test_the_sweep_can_be_disabled_and_is_throttled(client, seeded, monkeypatch):
+    from quantlab_api import storage
+
+    monkeypatch.setattr(_settings(), "storage_sweep", False)
+    assert storage.sweep_orphans().get("skipped") is True
+    monkeypatch.setattr(_settings(), "storage_sweep", True)
+    assert "skipped" not in storage.sweep_orphans()  # first run in this data directory
+    assert storage.sweep_orphans().get("skipped") is True  # within the interval
+
+
+def test_concurrent_renames_do_not_abort_a_cycle(client, seeded, monkeypatch):
+    from pathlib import Path
+
+    from quantlab.data.store import DatasetStore
+
+    store = DatasetStore(_settings().datasets_dir)
+    real_iterdir = Path.iterdir
+
+    def vanishing(self):
+        if self.parent == store.root:  # a slug directory renamed away mid-walk
+            raise FileNotFoundError(self)
+        return real_iterdir(self)
+
+    monkeypatch.setattr(Path, "iterdir", vanishing)
+    assert list(store.versions_on_disk()) == []
+    assert store.stale_temporaries(0) == []
+
+
+def test_collect_never_raises_after_the_commit(monkeypatch):
+    from quantlab_api import storage
+
+    def broken():
+        raise OSError(5, "I/O error")
+
+    monkeypatch.setattr(storage, "get_settings", broken)
+    assert storage.collect(storage.Garbage(experiments={str(uuid.uuid4())}))["versions"] == 0
+    assert not storage._inside(_settings().data_dir / "uploads", _settings().data_dir / "uploads")
 
 
 def _race_once(i: int, owner_ws: uuid.UUID, other_ws: uuid.UUID, user: uuid.UUID) -> None:
@@ -171,11 +276,11 @@ def _race_once(i: int, owner_ws: uuid.UUID, other_ws: uuid.UUID, user: uuid.UUID
         db.commit()
         version, a_id, b_id = dv.version_hash, dv.id, db_.id
     store = DatasetStore(_settings().datasets_dir)
-    slow = DatasetStore.remove_version
+    slow = storage._quarantine
 
-    def slow_remove(self, *a, **k):
+    def slow_remove(*a, **k):
         time.sleep(0.05)  # widen the window between the reference check and the delete
-        return slow(self, *a, **k)
+        return slow(*a, **k)
 
     barrier = threading.Barrier(2)
     errors: list[BaseException] = []
@@ -201,7 +306,7 @@ def _race_once(i: int, owner_ws: uuid.UUID, other_ws: uuid.UUID, user: uuid.UUID
         except BaseException as exc:
             errors.append(exc)
 
-    DatasetStore.remove_version = slow_remove  # type: ignore[method-assign]
+    storage._quarantine = slow_remove  # type: ignore[assignment]
     try:
         threads = [threading.Thread(target=gc), threading.Thread(target=writer)]
         for t in threads:
@@ -209,7 +314,7 @@ def _race_once(i: int, owner_ws: uuid.UUID, other_ws: uuid.UUID, user: uuid.UUID
         for t in threads:
             t.join(30)
     finally:
-        DatasetStore.remove_version = slow  # type: ignore[method-assign]
+        storage._quarantine = slow  # type: ignore[assignment]
     assert not errors, errors
     with SessionLocal() as db:
         rows = db.query(DatasetVersion).filter(DatasetVersion.dataset_id == b_id).all()

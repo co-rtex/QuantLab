@@ -22,7 +22,6 @@ import hashlib
 import json
 import os
 import re
-import secrets
 import shutil
 import tempfile
 import time
@@ -138,45 +137,56 @@ class DatasetStore:
             None if master is None else normalize_master(master),
         )
 
-    def remove_version(self, slug: str, version: str) -> bool:
-        """Delete a version's files and its reports. Returns whether anything was removed.
+    def version_paths(self, slug: str, version: str) -> list[tuple[Path, str]]:
+        """The version's directory and its reports, with a label for each.
 
-        The caller decides that nothing references the version (``quantlab_api.storage``
-        does so under a lock). The directory is first renamed away in one step, so a reader
-        or ``write`` never sees a half-deleted version under its name: ``write`` treats an
-        existing directory as already written.
+        For a caller that removes them (``quantlab_api.storage`` quarantines them in one
+        rename each, under a lock, after deciding nothing references the version). A
+        rename never leaves a half-deleted version visible under its name, which ``write``
+        would treat as already written.
         """
-        removed = False
-        for path in (self._dir(slug, version), self.root / slug / REPORTS_DIR / version):
-            if not path.exists():
-                continue
-            trash = path.with_name(f".tmp-del-{path.name}-{secrets.token_hex(4)}")
-            os.rename(path, trash)
-            shutil.rmtree(trash, ignore_errors=True)
-            removed = True
+        return [
+            (self._dir(slug, version), f"datasets/{slug}/{version}"),
+            (self.root / slug / REPORTS_DIR / version, f"datasets/{slug}/_reports/{version}"),
+        ]
+
+    def prune_slug(self, slug: str) -> None:
+        """Remove the slug's directories if they are now empty."""
         slug_dir = self.root / slug
         for d in (slug_dir / REPORTS_DIR, slug_dir):
             with contextlib.suppress(OSError):
-                d.rmdir()  # only if now empty
-        return removed
+                d.rmdir()  # only if empty
 
     def versions_on_disk(self) -> Iterator[tuple[str, str, Path]]:
-        """(slug, version, directory) of every published version under the root."""
-        for slug_dir in sorted(p for p in self.root.iterdir() if p.is_dir()):
-            if slug_dir.name.startswith("."):
+        """(slug, version, directory) of every published version under the root.
+
+        Directories renamed or removed concurrently are skipped, never raised.
+        """
+        for slug_dir in _listing(self.root):
+            if slug_dir.name.startswith(".") or not slug_dir.is_dir():
                 continue
-            for d in sorted(slug_dir.iterdir()):
-                if d.is_dir() and _VERSION.fullmatch(d.name):
+            for d in _listing(slug_dir):
+                if _VERSION.fullmatch(d.name) and d.is_dir():
                     yield slug_dir.name, d.name, d
 
     def stale_temporaries(self, older_than_seconds: float) -> list[Path]:
-        """Leftovers of interrupted writes or deletions (``.tmp-*``) older than the age."""
+        """Leftovers of interrupted writes (``.tmp-*``) older than the age.
+
+        Covers version writes (``<slug>/.tmp-*``) and report writes
+        (``<slug>/_reports/<version>/.tmp-*``); anything that vanishes meanwhile is skipped.
+        """
         cutoff = time.time() - older_than_seconds
         out = []
-        for slug_dir in (p for p in self.root.iterdir() if p.is_dir()):
-            for d in [*slug_dir.glob(".tmp-*"), *(slug_dir / REPORTS_DIR).glob(".tmp-*")]:
-                if d.stat().st_mtime < cutoff:
-                    out.append(d)
+        for slug_dir in _listing(self.root):
+            if slug_dir.name.startswith("."):
+                continue
+            found = [*_glob(slug_dir, ".tmp-*"), *_glob(slug_dir, f"{REPORTS_DIR}/*/.tmp-*")]
+            for d in found:
+                try:
+                    if d.stat().st_mtime < cutoff:
+                        out.append(d)
+                except FileNotFoundError:
+                    continue
         return sorted(out)
 
     def write(
@@ -391,3 +401,18 @@ class DatasetStore:
             return False
         bars, actions = self.load_bars(dv), self.load_actions(dv)
         return content_hash(bars, actions, history, master) == dv.version
+
+
+def _listing(root: Path) -> list[Path]:
+    """``root``'s entries, or none if it vanished (a concurrent rename or removal)."""
+    try:
+        return sorted(root.iterdir())
+    except (FileNotFoundError, NotADirectoryError):
+        return []
+
+
+def _glob(root: Path, pattern: str) -> list[Path]:
+    try:
+        return sorted(root.glob(pattern))
+    except FileNotFoundError:
+        return []
