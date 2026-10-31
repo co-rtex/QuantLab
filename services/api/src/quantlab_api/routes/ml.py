@@ -11,7 +11,7 @@ from pydantic import BaseModel, Field, ValidationError
 from sqlalchemy import select
 
 from quantlab.ml.pipeline import MODELS, MLConfig
-from quantlab_api import artifacts
+from quantlab_api import artifacts, provenance
 from quantlab_api.config import get_settings
 from quantlab_api.errors import ApiError
 from quantlab_api.jobs import (
@@ -35,12 +35,17 @@ class MLRunIn(BaseModel):
     config: dict[str, Any] = Field(default_factory=dict)
 
 
-def _out(db: DB, run: MLRun, full: bool = True) -> dict[str, Any]:
+def _out(
+    db: DB, run: MLRun, full: bool = True, synthetic: dict[uuid.UUID, bool | None] | None = None
+) -> dict[str, Any]:
     job = db.get(Job, run.job_id) if run.job_id else None
+    flags = synthetic or provenance.synthetic_flags(db, [run.dataset_version_id])
     out: dict[str, Any] = {
         "id": str(run.id),
         "name": run.name,
         "dataset_version_id": str(run.dataset_version_id),
+        # Additive (#102): from the dataset version; None when it is missing.
+        "is_synthetic": flags.get(run.dataset_version_id),
         "config": run.config,
         "status": run.status.value,
         "input_hash": run.input_hash,
@@ -163,7 +168,8 @@ def list_ml_runs(
         .order_by(MLRun.created_at.desc())
         .limit(limit)
     ).all()
-    return [_out(db, r, full=False) for r in rows]
+    flags = provenance.synthetic_flags(db, (r.dataset_version_id for r in rows))
+    return [_out(db, r, full=False, synthetic=flags) for r in rows]
 
 
 @router.get("/ml-runs/{run_id}")

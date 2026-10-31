@@ -24,6 +24,7 @@ from quantlab.analytics.summary import jsonable
 from quantlab.data.adjust import total_returns
 from quantlab.portfolio.ledger import LedgerError
 from quantlab.portfolio.valuation import Entry, summary, time_weighted_returns, value_portfolio
+from quantlab_api import provenance
 from quantlab_api.errors import ApiError
 from quantlab_api.models import Instrument, Portfolio, PortfolioTransaction, Role
 from quantlab_api.routes.datasets import load_version
@@ -174,12 +175,15 @@ def list_portfolios(workspace_id: uuid.UUID, user: CurrentUser, db: DB) -> list[
         .group_by(Portfolio.id)
         .order_by(Portfolio.created_at.desc())
     ).all()
+    flags = provenance.synthetic_flags(db, (p.dataset_version_id for p, _ in rows))
     return [
         {
             "id": str(p.id),
             "name": p.name,
             "benchmark": p.benchmark,
             "dataset_version_id": str(p.dataset_version_id),
+            # Additive (#102): from the dataset version; None when it is missing.
+            "is_synthetic": flags[p.dataset_version_id],
             "transactions": n,
             "created_at": p.created_at,
         }
@@ -195,6 +199,7 @@ def get_portfolio(portfolio_id: uuid.UUID, user: CurrentUser, db: DB) -> dict[st
         "name": p.name,
         "benchmark": p.benchmark,
         "dataset_version_id": str(p.dataset_version_id),
+        "is_synthetic": provenance.is_synthetic(db, p.dataset_version_id),  # additive (#102)
         "transactions": [_tx_out(t) for t in p.transactions],
     }
 
