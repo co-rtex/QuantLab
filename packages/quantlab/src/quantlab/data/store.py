@@ -16,6 +16,7 @@ version directory is never rewritten once written.
 
 from __future__ import annotations
 
+import errno
 import hashlib
 import json
 import os
@@ -48,6 +49,8 @@ from quantlab.data.schema import (
 
 FORMAT_VERSION = 1
 ROW_GROUP_ROWS = 50_000
+# link() errors meaning the filesystem has no hard links (some network and FUSE mounts).
+_NO_HARD_LINKS = {errno.EPERM, errno.EOPNOTSUPP, errno.ENOTSUP, errno.EXDEV, errno.EMLINK}
 REPORTS_DIR = "_reports"
 REPORT_NAME = re.compile(r"[a-z0-9][a-z0-9_-]{0,63}")
 
@@ -241,12 +244,29 @@ class DatasetStore:
         path = target / f"{name}.json"
         if path.exists() and not replace:
             raise FileExistsError(f"report {name!r} already exists for {dv.short}")
+        text = json.dumps(payload, indent=2, allow_nan=False)
         target.mkdir(parents=True, exist_ok=True)
         fd, tmp = tempfile.mkstemp(prefix=".tmp-", dir=target)
         try:
             with os.fdopen(fd, "w") as fh:
-                json.dump(payload, fh, indent=2, allow_nan=False)
-            os.replace(tmp, path)  # atomic
+                fh.write(text)
+            if replace:
+                os.replace(tmp, path)  # atomic
+            else:
+                # link() fails if the name exists, so two concurrent writers cannot both
+                # pass the existence check above and overwrite each other.
+                try:
+                    os.link(tmp, path)
+                except FileExistsError:
+                    raise
+                except OSError as exc:
+                    if exc.errno not in _NO_HARD_LINKS:
+                        raise
+                    # A filesystem without hard links: an exclusive create still refuses
+                    # an existing name, though a reader may briefly see a partial file.
+                    with open(path, "x") as out:
+                        out.write(text)
+                Path(tmp).unlink()
         except BaseException:
             Path(tmp).unlink(missing_ok=True)
             raise
