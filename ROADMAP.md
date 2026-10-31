@@ -47,7 +47,7 @@ Owners, file ownership and migration slots: [docs/COORDINATION.md](docs/COORDINA
 | P0 | ✅ #9 Permanent instrument identity: part A (#31), B (#49), C (#62); follow-ups #59, #66, #63 | Agent 3 | — |
 | P0 | ✅ #10 Corporate-action validation gates (#27) | Agent 3 | — |
 | P0 | #12 Reconciliation report: ✅ library (#34), ✅ API (#62); cross-vendor blocked on #11; follow-ups #54 | Agent 3 | #11 |
-| P0 | #11 Vendor adapter: ✅ fixture-only contract (#33); **#50 before live wiring**; live part blocked on credentials | Agent 3 | — |
+| P0 | #11 Vendor adapter: ✅ contract (#33), ✅ correctness (#73), ✅ inert plumbing (#95); live use blocked on the user's vendor, licence and key | Agent 3 | user |
 | P0 | ✅ #50 Massive adapter correctness before live wiring (#73) | Agent 3 | — |
 | P1 | ✅ #6 Idempotent retries (#40) | Agent 2 | — |
 | P1 | ✅ #43 Idempotency fingerprint (#47) | Agent 2 | — |
@@ -57,7 +57,7 @@ Owners, file ownership and migration slots: [docs/COORDINATION.md](docs/COORDINA
 | P1 | ✅ #14 Deflated Sharpe input consistency (#30) | Agent 3 | — |
 | P1 | ✅ #35 Research-correctness suite (#36) | Agent 3 | — |
 | P2 | #41 Review follow-ups for #29, #30, #31, #36 | Agent 3 | — |
-| P1 | #16 E2E flake: root cause is the 90 s budget for chained jobs under load; fix #53 | Lead | — → #17 |
+| P1 | #16 E2E flake: #53 fixed the budget; an intermittent validation-panel race remains | Agent 2 | — → #17 |
 | P1 | #17 Playwright E2E in CI | Lead | #16 |
 | P1 | #15 Assistant: ✅ verifier (#74); hosted eval blocked on key; false rejects #79 | Agent 2 | key |
 | P1 | ✅ #18 Frontend error surfacing (#83) | Agent 2 | — |
