@@ -103,17 +103,43 @@ def test_creating_an_invitation_never_reads_the_users_table(client, team):
 
 
 def test_invite_timing_does_not_depend_on_registration(client, team, no_invite_limits):
-    for i in range(15):
-        register(client, f"known{i}@example.com")
-    samples: dict[str, list[float]] = {"known": [], "unknown": []}
-    for i in range(15):  # interleaved, so both groups share any drift
-        for group in ("known", "unknown"):
-            t0 = time.perf_counter()
-            r = _invite(client, team["owner"], team["ws"], f"{group}{i}@example.com")
-            samples[group].append((time.perf_counter() - t0) * 1000)
-            assert r.status_code == 201
-    known, unknown = (statistics.median(samples[g]) for g in ("known", "unknown"))
-    assert abs(known - unknown) < max(5.0, 0.25 * min(known, unknown)), (known, unknown)
+    """Inviting a registered address takes no longer than inviting an unknown one.
+
+    Each pair invites one address of each kind back to back, alternating which goes
+    first, and the test compares the median of the per-pair differences (#80). Comparing
+    each group's own median let CPU contention from other processes, and the fixed
+    first-in-pair position, open a 5 ms gap with no side channel behind it. A borderline
+    result takes as many pairs again and decides on all of them: a real side channel is in
+    every pair, while contention rarely is. The structural guarantee is the identical SQL
+    sequence asserted above; this test catches a timing difference from anything else (a
+    delay, a round trip to another service).
+    """
+    batch = 40
+    gaps: list[float] = []  # known minus unknown, per pair, in ms
+    durations: list[float] = []
+
+    def sample(first: int) -> None:
+        for i in range(first, first + batch):
+            register(client, f"known{i}@example.com")
+        for i in range(first, first + batch):
+            ms: dict[str, float] = {}
+            for group in ("known", "unknown") if i % 2 == 0 else ("unknown", "known"):
+                t0 = time.perf_counter()
+                r = _invite(client, team["owner"], team["ws"], f"{group}{i}@example.com")
+                ms[group] = (time.perf_counter() - t0) * 1000
+                assert r.status_code == 201
+            gaps.append(ms["known"] - ms["unknown"])
+            durations.extend(ms.values())
+
+    def gap_and_limit() -> tuple[float, float]:
+        return statistics.median(gaps), max(5.0, 0.25 * statistics.median(durations))
+
+    sample(0)
+    gap, limit = gap_and_limit()
+    if abs(gap) >= limit:
+        sample(batch)
+        gap, limit = gap_and_limit()
+    assert abs(gap) < limit, (gap, limit, len(gaps), sorted(gaps))
 
 
 # ----------------------------------------------------------------------- consent

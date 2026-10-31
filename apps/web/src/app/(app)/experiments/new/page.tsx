@@ -3,7 +3,7 @@
 import { useRouter, useSearchParams } from "next/navigation";
 import { Suspense, useMemo, useState, type FormEvent } from "react";
 import { PageHeader } from "@/components/Shell";
-import { ErrorNote, Panel, Skeleton } from "@/components/ui";
+import { ErrorNote, Panel, QueryError, Skeleton } from "@/components/ui";
 import {
   api,
   ApiError,
@@ -117,6 +117,16 @@ function Builder() {
   }
 
   if (catalog.loading || versions.loading) return <Skeleton h="h-96" />;
+  // Without the strategy catalog or the dataset versions there is nothing to configure.
+  if (!catalog.data || !versions.data) {
+    if (!catalog.error && !versions.error) return <Skeleton h="h-96" />;
+    return (
+      <>
+        <QueryError q={catalog} what="the strategy catalog" />
+        <QueryError q={versions} what="dataset versions" />
+      </>
+    );
+  }
   if (versions.data?.length === 0) {
     return <ErrorNote error={new Error("Add a dataset version under Market data before creating an experiment.")} />;
   }
@@ -125,6 +135,7 @@ function Builder() {
   return (
     <form onSubmit={submit} className="grid gap-6 text-sm xl:grid-cols-[3fr_2fr]">
       <div className="space-y-6">
+        <QueryError q={inst} what="the instrument list" />
         <Panel title="Strategy">
           <fieldset>
             <legend className="sr-only">Strategy</legend>

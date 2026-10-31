@@ -5,7 +5,7 @@ import { useParams, useRouter } from "next/navigation";
 import { useState } from "react";
 import { EquityChart, MonthlyReturns } from "@/components/charts";
 import { PageHeader } from "@/components/Shell";
-import { ErrorNote, JobProgress, Panel, Skeleton, StatusPill, SyntheticTag } from "@/components/ui";
+import { ErrorNote, JobProgress, Panel, Pending, QueryError, StatusPill, SyntheticTag } from "@/components/ui";
 import { AssistantPanel } from "@/components/Assistant";
 import { IntegrityReport, ValidationPanel } from "@/components/Validation";
 import { api, ApiError, newIdempotencyKey, type DatasetVersion, type Experiment, type Job, type Series } from "@/lib/api";
@@ -123,6 +123,7 @@ function Trades({ id }: { id: string }) {
   const t = useApi<{ items: Trade[]; total: number }>(`/experiments/${id}/trades?${qs}`);
   return (
     <Panel title="Trade blotter" aside={t.data ? `${t.data.total.toLocaleString()} fills` : undefined}>
+      <QueryError q={t} what="trades" />
       <label className="mb-3 block w-48">
         <span className="sr-only">Filter by symbol</span>
         <input className="field" placeholder="Filter by symbol" value={symbol} onChange={(e) => { setSymbol(e.target.value.toUpperCase()); setOffset(0); }} />
@@ -192,6 +193,7 @@ function Holdings({ id, dates }: { id: string; dates: string[] }) {
         </label>
       }
     >
+      <QueryError q={p} what="holdings" />
       {p.data?.items.length === 0 ? (
         <p className="text-sm text-ink-2">Fully in cash on this date.</p>
       ) : (
@@ -252,15 +254,20 @@ export default function ExperimentPage() {
     exp.reload();
   }
   async function downloadManifest() {
-    const m = await api<unknown>(`/experiments/${id}/manifest`);
+    let m: unknown;
+    try {
+      m = await api<unknown>(`/experiments/${id}/manifest`);
+    } catch (e) {
+      setActionErr(e as ApiError);
+      return;
+    }
     const url = URL.createObjectURL(new Blob([JSON.stringify(m, null, 2)], { type: "application/json" }));
     const a = Object.assign(document.createElement("a"), { href: url, download: `quantlab-experiment-${id}.json` });
     a.click();
     URL.revokeObjectURL(url);
   }
 
-  if (exp.error) return <ErrorNote error={exp.error} />;
-  if (!exp.data) return <Skeleton h="h-96" />;
+  if (!exp.data) return <Pending q={exp} h="h-96" what="this experiment" />;
   const e = exp.data;
   const a = analysis.data;
   const eq = equity.data;
@@ -310,6 +317,11 @@ export default function ExperimentPage() {
         }
       />
       <ErrorNote error={actionErr} />
+      <QueryError q={exp} what="experiment status" />
+      {/* An experiment can outlive its job record; a 404 here means no job, not a failure. */}
+      {job.error?.status !== 404 && <QueryError q={job} what="run status" />}
+      <QueryError q={version} what="dataset details" />
+      <QueryError q={repro} what="reproducibility checks" />
       <EvidenceRibbon exp={e} version={version.data} analysis={a} />
 
       {!done && job.data && ACTIVE.has(e.status) && (
@@ -332,7 +344,7 @@ export default function ExperimentPage() {
                   benchmarkLabel={`${benchLabel} (total return)`}
                 />
               ) : (
-                <Skeleton h="h-96" />
+                <Pending q={equity} h="h-96" what="the equity curve" />
               )}
             </Panel>
             <Panel title="Performance">
@@ -364,7 +376,7 @@ export default function ExperimentPage() {
                   </tbody>
                 </table>
               ) : (
-                <Skeleton />
+                <Pending q={analysis} what="performance analysis" />
               )}
               {a && (
                 <dl className="mt-4 grid grid-cols-2 gap-x-4 gap-y-2 text-sm">

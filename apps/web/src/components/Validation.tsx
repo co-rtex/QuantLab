@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import { Legend, SERIES } from "@/components/charts";
-import { ErrorNote, JobProgress, Panel, Skeleton, StatusPill } from "@/components/ui";
+import { ErrorNote, JobProgress, Panel, Pending, QueryError, StatusPill } from "@/components/ui";
 import { api, ApiError, newIdempotencyKey, type Job } from "@/lib/api";
 import { num, pct, signClass } from "@/lib/format";
 import { useApi } from "@/lib/useApi";
@@ -57,11 +57,11 @@ const LABEL: Record<Check["status"], string> = { verified: "Verified", warning: 
 
 export function IntegrityReport({ experimentId, refreshKey }: { experimentId: string; refreshKey: string }) {
   const rep = useApi<Report>(`/experiments/${experimentId}/integrity?v=${refreshKey}`);
-  if (rep.error) return <ErrorNote error={rep.error} />;
-  if (!rep.data) return <Skeleton />;
+  if (!rep.data) return <Pending q={rep} what="the integrity report" />;
   const checks = [...rep.data.checks].sort((a, b) => ORDER.indexOf(a.status) - ORDER.indexOf(b.status));
   return (
     <Panel title="Research integrity report" aside="How this result was produced, and what remains uncertain">
+      <QueryError q={rep} what="the integrity report" />
       <dl className="mb-4 flex flex-wrap gap-x-6 gap-y-1 text-sm">
         {ORDER.map((s) => (
           <div key={s} className="flex items-center gap-2">
@@ -149,6 +149,8 @@ export function ValidationPanel({ experimentId, onComplete }: { experimentId: st
       }
     >
       <ErrorNote error={err} />
+      {/* 404 means the suite has not been run, which the panel explains below. */}
+      {!notRun && <QueryError q={run} what="validation results" />}
       {notRun && (
         <p className="max-w-prose text-sm text-ink-2">
           The suite re-runs this strategy many times: a walk-forward test that chooses parameters on past data and evaluates them on the

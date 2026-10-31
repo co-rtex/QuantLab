@@ -127,8 +127,15 @@ def build_integrity_report(ev: dict[str, Any]) -> dict[str, Any]:
     )
 
     # 3. universe and survivorship
-    delisted = set(ds.get("delisted_symbols") or [])
-    universe = set(_get(analysis, "meta", "universe") or cfg.get("universe") or [])
+    # Compare instruments when both sides carry ids: a reused ticker names two companies,
+    # and the displayed universe labels them "T [id]". Otherwise tickers; never a mix.
+    universe_ids = _get(analysis, "meta", "universe_instrument_ids")
+    delisted_ids = ds.get("delisted_instrument_ids")
+    if universe_ids is not None and delisted_ids is not None:
+        delisted, universe = set(delisted_ids), set(universe_ids)
+    else:
+        delisted = set(ds.get("delisted_symbols") or [])
+        universe = set(_get(analysis, "meta", "universe") or cfg.get("universe") or [])
     if not universe:
         checks.append(
             Check(

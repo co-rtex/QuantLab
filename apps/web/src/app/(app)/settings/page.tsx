@@ -3,7 +3,7 @@
 import { useRouter } from "next/navigation";
 import { useState, type FormEvent } from "react";
 import { PageHeader } from "@/components/Shell";
-import { ErrorNote, Panel } from "@/components/ui";
+import { ErrorNote, Panel, QueryError } from "@/components/ui";
 import { api, ApiError, type Page } from "@/lib/api";
 import { dateTime } from "@/lib/format";
 import { useApi } from "@/lib/useApi";
@@ -120,6 +120,7 @@ export default function SettingsPage() {
       </div>
       <div className="grid gap-6 xl:grid-cols-2">
         <Panel title="Members">
+          <QueryError q={members} what="members" />
           <table className="data">
             <thead>
               <tr>
@@ -181,6 +182,11 @@ export default function SettingsPage() {
                   Copy
                 </button>
               </div>
+            </div>
+          )}
+          {isOwner && (
+            <div className="mt-4">
+              <QueryError q={invitations} what="pending invitations" />
             </div>
           )}
           {isOwner && invitations.data && invitations.data.length > 0 && (
@@ -245,6 +251,7 @@ export default function SettingsPage() {
       </div>
       {isOwner && (
         <Panel title="Audit log" className="mt-6" aside="Sensitive actions in this workspace">
+          <QueryError q={audit} what="the audit log" />
           <div className="overflow-x-auto" tabIndex={0}>
             <table className="data num">
               <thead>

@@ -378,3 +378,34 @@ def test_input_differences_compare_like_the_hash():
     assert [d["input"] for d in diffs] == ["strategy_params", "config.a"]
     assert diffs[1] == {"input": "config.a", "original": None, "reproduction": "<absent>"}
     assert input_differences(run({"n": 1}, {"a": 2}), run({"n": 1}, {"a": 2})) == []
+
+
+def _universe_check(universe, ids, delisted, delisted_ids):
+    ev = _evidence()
+    meta = {"sessions": 1300, "universe": universe}
+    if ids is not None:
+        meta["universe_instrument_ids"] = ids
+    ev["analysis"] = {"meta": meta}
+    ev["dataset"] = {**ev["dataset"], "delisted_symbols": delisted}
+    if delisted_ids is not None:
+        ev["dataset"]["delisted_instrument_ids"] = delisted_ids
+    by = {c["key"]: c for c in build_integrity_report(ev)["checks"]}
+    return by["universe"]
+
+
+def test_survivorship_compares_instruments_when_both_sides_carry_ids():
+    # Two holders of OLD are labelled "OLD [id]"; the delisted one is in the universe.
+    labels = ["OLD [I1]", "OLD [I2]", "B"]
+    check = _universe_check(labels, ["I1", "I2", "IB"], ["OLD"], ["I1"])
+    assert check["status"] == "verified" and check["evidence"]["delisted_included"] == 1
+    # Ticker-only, the same labels would miss it.
+    assert _universe_check(labels, None, ["OLD"], None)["status"] == "warning"
+    # The delisted holder left out of the universe is still a warning by id.
+    assert _universe_check(["OLD", "B"], ["I2", "IB"], ["OLD"], ["I1"])["status"] == "warning"
+
+
+def test_survivorship_never_mixes_ids_and_tickers():
+    # Only one side has ids: the ticker comparison runs, as before.
+    assert _universe_check(["C", "B"], ["IC", "IB"], ["C"], None)["status"] == "verified"
+    assert _universe_check(["C", "B"], None, ["C"], ["IC"])["status"] == "verified"
+    assert _universe_check(["A", "B"], None, ["C"], ["IC"])["status"] == "warning"
