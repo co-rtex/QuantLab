@@ -554,8 +554,14 @@ def build_integrity_report(ev: dict[str, Any]) -> dict[str, Any]:
                 "Reproducibility",
                 "unassessed",
                 f"{_plural(len(changed), 're-run')} used different inputs"
-                + (f" ({'; '.join(names)})" if names else "")
-                + ", so they do not test reproducibility. Re-run on the same engine to check it.",
+                + (
+                    f" ({'; '.join(names)})"
+                    if names
+                    else " (the stored inputs differ only in form, e.g. a missing key vs null)"
+                )
+                + ", so they do not test reproducibility: only re-runs with the same inputs "
+                "are assessed. Reproduce the re-run itself to check it on the current engine; "
+                "its own report then shows the result.",
                 {"reproductions": changed},
             )
         )

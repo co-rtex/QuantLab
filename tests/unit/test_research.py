@@ -349,3 +349,32 @@ def test_a_rerun_on_another_engine_is_named_not_failed():
     assert _repro_check([{"status": "completed", "fingerprint_match": False}])["status"] == (
         "failed"
     )
+
+
+def test_the_changed_input_finding_is_actionable_and_never_empty():
+    unnamed = {"status": "completed", "same_inputs": False, "fingerprint_match": False}
+    check = _repro_check([{**unnamed, "input_differences": []}])
+    assert check["status"] == "unassessed"
+    assert "only re-runs with the same inputs are assessed" in check["finding"]
+    assert "Reproduce the re-run itself" in check["finding"]
+    assert "differ only in form" in check["finding"]  # no names: still says why
+
+
+def test_input_differences_compare_like_the_hash():
+    from types import SimpleNamespace
+
+    from quantlab_api.routes.experiments import input_differences
+
+    def run(params, config):
+        return SimpleNamespace(
+            engine_version="1.3.0",
+            dataset_version_id="d",
+            strategy_key="momentum",
+            strategy_params=params,
+            config=config,
+        )
+
+    diffs = input_differences(run({"n": 1}, {"a": None}), run({"n": 1.0}, {}))
+    assert [d["input"] for d in diffs] == ["strategy_params", "config.a"]
+    assert diffs[1] == {"input": "config.a", "original": None, "reproduction": "<absent>"}
+    assert input_differences(run({"n": 1}, {"a": 2}), run({"n": 1}, {"a": 2})) == []

@@ -485,8 +485,11 @@ def input_differences(original: Experiment, rerun: Experiment) -> list[dict[str,
     """
     out: list[dict[str, Any]] = []
 
+    def canonical(v: Any) -> str:  # compared as the hash sees them: 1 and 1.0 differ
+        return json.dumps(v, sort_keys=True, default=str)
+
     def diff(name: str, a: Any, b: Any) -> None:
-        if a != b:
+        if canonical(a) != canonical(b):
             out.append({"input": name, "original": a, "reproduction": b})
 
     diff("engine_version", original.engine_version, rerun.engine_version)
@@ -495,7 +498,8 @@ def input_differences(original: Experiment, rerun: Experiment) -> list[dict[str,
     diff("strategy_params", original.strategy_params, rerun.strategy_params)
     a, b = original.config or {}, rerun.config or {}
     for k in sorted(set(a) | set(b)):
-        diff(f"config.{k}", a.get(k), b.get(k))
+        # A missing key and an explicit null hash differently, so they are named too.
+        diff(f"config.{k}", a.get(k, "<absent>"), b.get(k, "<absent>"))
     return out
 
 
