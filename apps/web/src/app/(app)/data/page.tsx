@@ -4,7 +4,7 @@ import Link from "next/link";
 import { useState, type FormEvent } from "react";
 import { PageHeader } from "@/components/Shell";
 import { ErrorNote, JobProgress, Panel, QueryError, Skeleton, StatusPill, SyntheticTag } from "@/components/ui";
-import { api, ApiError, newIdempotencyKey, type Dataset, type DatasetVersion, type Job } from "@/lib/api";
+import { api, ApiError, cancelJob, newIdempotencyKey, type Dataset, type DatasetVersion, type Job } from "@/lib/api";
 import { compact, dateTime, shortHash } from "@/lib/format";
 import { useApi } from "@/lib/useApi";
 import { useWorkspace } from "@/lib/workspace";
@@ -23,6 +23,17 @@ export default function DataPage() {
   const [err, setErr] = useState<ApiError>();
   const [submitting, setSubmitting] = useState(false);
   const busy = submitting || (jobId !== null && !settled);
+
+  async function cancel() {
+    if (!job.data) return;
+    setErr(undefined);
+    try {
+      await cancelJob(job.data.id);
+    } catch (e) {
+      setErr(e as ApiError);
+    }
+    job.reload();
+  }
 
   async function create(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();
@@ -154,7 +165,7 @@ export default function DataPage() {
             <QueryError q={job} what="the ingestion job's status" />
             {job.data && (
               <div className="pt-2">
-                <JobProgress job={job.data} />
+                <JobProgress job={job.data} onCancel={cancel} />
               </div>
             )}
           </form>

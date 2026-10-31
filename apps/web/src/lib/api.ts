@@ -32,6 +32,11 @@ export async function api<T>(path: string, init: RequestInit & { json?: unknown 
   return data as T;
 }
 
+/** Ask the API to stop a queued or running job; the worker stops at its next checkpoint. */
+export function cancelJob(id: string): Promise<Job> {
+  return api<Job>(`/jobs/${id}/cancel`, { method: "POST" });
+}
+
 export function newIdempotencyKey(): string {
   return crypto.randomUUID();
 }

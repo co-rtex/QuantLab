@@ -3,7 +3,7 @@
 import { useState } from "react";
 import { Legend, SERIES } from "@/components/charts";
 import { ErrorNote, JobProgress, Panel, Pending, QueryError, StatusPill } from "@/components/ui";
-import { api, ApiError, newIdempotencyKey, type Job } from "@/lib/api";
+import { api, ApiError, cancelJob, newIdempotencyKey, type Job } from "@/lib/api";
 import { num, pct, signClass } from "@/lib/format";
 import { useApi } from "@/lib/useApi";
 import { CartesianGrid, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
@@ -158,7 +158,16 @@ export function ValidationPanel({ experimentId, onComplete }: { experimentId: st
           regime breakdown and an empirical look-ahead check. Results feed the integrity report.
         </p>
       )}
-      {active && run.data?.job && <JobProgress job={run.data.job} />}
+      {active && run.data?.job && (
+        <JobProgress
+          job={run.data.job}
+          onCancel={async () => {
+            setErr(undefined);
+            await cancelJob(run.data!.job!.id).catch((e) => setErr(e as ApiError));
+            run.reload();
+          }}
+        />
+      )}
       {r && (
         <div className="space-y-6">
           <section>

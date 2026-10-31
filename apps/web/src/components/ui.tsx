@@ -195,6 +195,7 @@ export function JobProgress({ job, onCancel }: { job: Job; onCancel?: () => void
       <div
         className="h-1.5 overflow-hidden rounded bg-sunken"
         role="progressbar"
+        aria-label="Job progress"
         aria-valuemin={0}
         aria-valuemax={100}
         aria-valuenow={Math.round(job.progress * 100)}
