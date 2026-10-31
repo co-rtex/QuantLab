@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useState } from "react";
 import { PageHeader } from "@/components/Shell";
-import { ErrorNote, Panel, Skeleton, StatusPill } from "@/components/ui";
+import { Panel, QueryError, Skeleton, StatusPill } from "@/components/ui";
 import type { Experiment, Page } from "@/lib/api";
 import { dateTime, multiple, num, pct, signClass, strategyLabel } from "@/lib/format";
 import { useApi } from "@/lib/useApi";
@@ -55,11 +55,10 @@ export default function ExperimentsPage() {
             </select>
           </label>
         </div>
+        <QueryError q={exps} what="experiments" />
         {exps.loading && !exps.data ? (
           <Skeleton />
-        ) : exps.error ? (
-          <ErrorNote error={exps.error} />
-        ) : exps.data?.total === 0 ? (
+        ) : exps.error && !exps.data ? null : exps.data?.total === 0 ? (
           <p className="py-6 text-sm text-ink-2">No experiments match. Adjust the filters or create a new experiment.</p>
         ) : (
           <>

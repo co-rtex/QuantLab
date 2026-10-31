@@ -5,7 +5,7 @@ import { useParams } from "next/navigation";
 import { useState, type FormEvent } from "react";
 import { EquityChart } from "@/components/charts";
 import { PageHeader } from "@/components/Shell";
-import { ErrorNote, Panel, Skeleton, SyntheticTag } from "@/components/ui";
+import { ErrorNote, Panel, QueryError, Skeleton, SyntheticTag } from "@/components/ui";
 import { api, ApiError } from "@/lib/api";
 import { money, num, pct, signClass } from "@/lib/format";
 import { useApi } from "@/lib/useApi";
@@ -70,7 +70,7 @@ export default function PortfolioPage() {
     }
   }
 
-  if (p.error) return <ErrorNote error={p.error} />;
+  if (p.error && !p.data) return <QueryError q={p} what="this portfolio" />;
   const val = v.data;
   return (
     <>
@@ -80,7 +80,8 @@ export default function PortfolioPage() {
         </Link>
       </p>
       <PageHeader title={p.data?.name ?? "Portfolio"} lede="Returns are time-weighted, so deposits and withdrawals do not count as performance." actions={val?.portfolio.is_synthetic ? <SyntheticTag /> : undefined} />
-      {v.error && <ErrorNote error={v.error} />}
+      <QueryError q={p} what="this portfolio" />
+      <QueryError q={v} what="the valuation" />
       {val && (
         <dl className="mb-6 grid grid-cols-2 gap-x-8 gap-y-2 rounded border border-rule bg-surface px-4 py-3 text-sm sm:grid-cols-4">
           {[
@@ -101,7 +102,7 @@ export default function PortfolioPage() {
           {val ? (
             <EquityChart dates={val.series.dates} equity={val.series.index} benchmark={val.series.benchmark ?? undefined} drawdown={val.series.drawdown} benchmarkLabel={val.portfolio.benchmark ?? "Benchmark"} />
           ) : (
-            <Skeleton h="h-80" />
+            !v.error && <Skeleton h="h-80" /> // the error is shown above the summary
           )}
         </Panel>
         <Panel title="Record a transaction">

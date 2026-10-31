@@ -5,7 +5,7 @@ import { useParams } from "next/navigation";
 import { useState } from "react";
 import { PriceChart } from "@/components/charts";
 import { PageHeader } from "@/components/Shell";
-import { ErrorNote, Panel, Skeleton, StatusPill, SyntheticTag } from "@/components/ui";
+import { Panel, Pending, QueryError, Skeleton, StatusPill, SyntheticTag } from "@/components/ui";
 import type { DatasetVersion, Instrument, Page } from "@/lib/api";
 import { compact, pct } from "@/lib/format";
 import { useApi } from "@/lib/useApi";
@@ -29,8 +29,7 @@ export default function VersionPage() {
   const active = symbol ?? inst.data?.items.find((i) => i.asset_class !== "index_fund")?.symbol ?? null;
   const bars = useApi<Bars>(active ? `/dataset-versions/${versionId}/bars/${active}?adjusted=${adjusted}` : null);
 
-  if (v.error) return <ErrorNote error={v.error} />;
-  if (!v.data) return <Skeleton h="h-96" />;
+  if (!v.data) return <Pending q={v} h="h-96" what="this dataset version" />;
   const d = v.data;
   const prov = (d.provenance ?? {}) as Record<string, unknown>;
 
@@ -76,7 +75,7 @@ export default function VersionPage() {
           {bars.loading && !bars.data ? (
             <Skeleton h="h-80" />
           ) : bars.error ? (
-            <ErrorNote error={bars.error} />
+            <QueryError q={bars} what="price history" />
           ) : bars.data ? (
             <>
               <PriceChart dates={bars.data.dates} close={bars.data.close} volume={bars.data.volume} label={bars.data.symbol} />
@@ -90,6 +89,7 @@ export default function VersionPage() {
           ) : null}
         </Panel>
         <Panel title="Instruments" aside={inst.data ? `${inst.data.total} total` : undefined}>
+          <QueryError q={inst} what="instruments" />
           <label className="mb-3 block">
             <span className="sr-only">Filter symbols</span>
             <input className="field" placeholder="Filter by symbol prefix" value={q} onChange={(e) => setQ(e.target.value)} />

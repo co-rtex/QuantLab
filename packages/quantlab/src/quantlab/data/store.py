@@ -279,11 +279,30 @@ class DatasetStore:
             raise
         return path
 
-    def load_reports(self, dv: DatasetVersion) -> dict[str, dict[str, Any]]:
+    def load_reports(
+        self, dv: DatasetVersion, *, unreadable: list[str] | None = None
+    ) -> dict[str, dict[str, Any]]:
+        """The version's reports by name.
+
+        A file that is not a JSON object raises, unless ``unreadable`` is given: then it is
+        skipped and its name appended there, so one corrupt file cannot hide the others.
+        """
         d = self._reports_dir(dv)
         if not d.exists():
             return {}
-        return {p.stem: json.loads(p.read_text()) for p in sorted(d.glob("*.json"))}
+        out: dict[str, dict[str, Any]] = {}
+        for p in sorted(d.glob("*.json")):
+            try:
+                payload = json.loads(p.read_text())
+                if not isinstance(payload, dict):
+                    raise ValueError(f"report {p.stem!r} is not a JSON object")
+            except (ValueError, UnicodeDecodeError):  # JSONDecodeError is a ValueError
+                if unreadable is None:
+                    raise
+                unreadable.append(p.stem)
+                continue
+            out[p.stem] = payload
+        return out
 
     def load_master(self, dv: DatasetVersion) -> pd.DataFrame | None:
         """The version's instrument master (delisting dates and returns), if it has one."""

@@ -153,13 +153,15 @@ def integrity_evidence(db: DB, user: CurrentUser, exp: Experiment) -> dict[str, 
         )
         .order_by(ResearchRun.created_at.desc())
     )
-    delisted = list(
-        db.scalars(
-            select(Instrument.symbol).where(
-                Instrument.dataset_version_id == dv.id, Instrument.delisted.is_(True)
-            )
+    gone = db.execute(
+        select(Instrument.symbol, Instrument.instrument_id).where(
+            Instrument.dataset_version_id == dv.id, Instrument.delisted.is_(True)
         )
-    )
+    ).all()
+    delisted = sorted({s for s, _ in gone})
+    # Ids only when every delisted row has one; a partial id set is never compared (#66).
+    ids = {i for _, i in gone}
+    delisted_ids = None if None in ids else sorted(i for i in ids if i is not None)
     trials = (
         db.scalar(
             select(func.count())
@@ -189,6 +191,7 @@ def integrity_evidence(db: DB, user: CurrentUser, exp: Experiment) -> dict[str, 
             "is_synthetic": dv.is_synthetic,
             "quality_status": dv.quality_status,
             "delisted_symbols": delisted,
+            "delisted_instrument_ids": delisted_ids,
         },
         "analysis": analysis,
         "validation": run.result if run else None,

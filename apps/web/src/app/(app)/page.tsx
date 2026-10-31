@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { PageHeader } from "@/components/Shell";
-import { Empty, ErrorNote, Panel, Skeleton, StatusPill } from "@/components/ui";
+import { Empty, Panel, QueryError, Skeleton, StatusPill } from "@/components/ui";
 import type { DatasetVersion, Experiment, Job, Page } from "@/lib/api";
 import { dateTime, num, pct, shortHash, signClass, strategyLabel } from "@/lib/format";
 import { useApi } from "@/lib/useApi";
@@ -42,11 +42,10 @@ export default function Overview() {
       )}
       <div className="grid gap-6 xl:grid-cols-[2fr_1fr]">
         <Panel title="Recent experiments" aside={<Link className="text-cobalt hover:underline" href="/experiments">View all</Link>}>
+          <QueryError q={exps} what="recent experiments" />
           {exps.loading && !exps.data ? (
             <Skeleton />
-          ) : exps.error ? (
-            <ErrorNote error={exps.error} />
-          ) : exps.data && exps.data.items.length === 0 ? (
+          ) : exps.error && !exps.data ? null : exps.data && exps.data.items.length === 0 ? (
             <p className="text-sm text-ink-2">No experiments yet. Configure a strategy and run your first backtest.</p>
           ) : (
             <div className="overflow-x-auto" tabIndex={0}>
@@ -85,6 +84,7 @@ export default function Overview() {
         </Panel>
         <div className="space-y-6">
           <Panel title="Background jobs">
+            <QueryError q={jobs} what="background jobs" />
             {jobs.data && jobs.data.items.length === 0 && <p className="text-sm text-ink-2">No jobs have run yet.</p>}
             <ul className="space-y-3">
               {jobs.data?.items.map((j) => (
@@ -99,6 +99,7 @@ export default function Overview() {
             </ul>
           </Panel>
           <Panel title="Dataset versions" aside={<Link className="text-cobalt hover:underline" href="/data">Manage</Link>}>
+            <QueryError q={versions} what="dataset versions" />
             <ul className="space-y-2 text-sm">
               {versions.data?.slice(0, 5).map((v) => (
                 <li key={v.id} className="flex items-center justify-between gap-2">

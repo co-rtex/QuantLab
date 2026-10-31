@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useState, type FormEvent } from "react";
 import { PageHeader } from "@/components/Shell";
-import { ErrorNote, JobProgress, Panel, Skeleton, StatusPill, SyntheticTag } from "@/components/ui";
+import { ErrorNote, JobProgress, Panel, QueryError, Skeleton, StatusPill, SyntheticTag } from "@/components/ui";
 import { api, ApiError, newIdempotencyKey, type Dataset, type DatasetVersion, type Job } from "@/lib/api";
 import { compact, dateTime, shortHash } from "@/lib/format";
 import { useApi } from "@/lib/useApi";
@@ -60,11 +60,11 @@ export default function DataPage() {
       />
       <div className="grid gap-6 xl:grid-cols-[2fr_1fr]">
         <Panel title="Datasets">
+          <QueryError q={datasets} what="datasets" />
+          <QueryError q={versions} what="dataset versions" />
           {datasets.loading && !datasets.data ? (
             <Skeleton />
-          ) : datasets.error ? (
-            <ErrorNote error={datasets.error} />
-          ) : datasets.data?.length === 0 ? (
+          ) : datasets.error && !datasets.data ? null : datasets.data?.length === 0 ? (
             <p className="text-sm text-ink-2">No datasets yet. Generate one with the form on this page.</p>
           ) : (
             <div className="space-y-6">
@@ -151,6 +151,7 @@ export default function DataPage() {
             <button className="btn btn-primary" disabled={busy || !ws}>
               {busy ? "Generating…" : "Generate dataset version"}
             </button>
+            <QueryError q={job} what="the ingestion job's status" />
             {job.data && (
               <div className="pt-2">
                 <JobProgress job={job.data} />

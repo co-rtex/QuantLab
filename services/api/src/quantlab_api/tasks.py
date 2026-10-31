@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import uuid
+from collections.abc import Callable
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from typing import Any
@@ -80,7 +81,8 @@ def register_version(
 
     ``quality`` is the report from :func:`gate_quality`, which has already passed. A
     symbol history and instrument master, when given, are stored and hashed with the
-    version (#9), and each catalog row records its instrument and delisting facts.
+    version (#9). The catalog has one row per (ticker, instrument), recording that
+    instrument's delisting facts.
     """
     dv = dataset_store().write(
         dataset.slug,
@@ -115,24 +117,45 @@ def register_version(
     )
     db.add(row)
     db.flush()
-    stats = bars.groupby("symbol")["date"].agg(["min", "max", "count"])
-    meta = instruments.set_index("symbol") if instruments is not None else None
-    last_session = bars["date"].max()
-    # The instrument each ticker belonged to on its last bar, and its delisting facts.
-    owner: dict[str, str] = {}
+    # One catalog row per (ticker, instrument). Each bar is resolved as of its own date, so
+    # a reused ticker's earlier holder keeps its own row, dates, delisting and sector (#66).
+    keyed = pd.DataFrame(
+        {"symbol": bars["symbol"].astype(str).to_numpy(), "date": bars["date"].to_numpy()}
+    )
     if symbol_history is not None:
-        ids = resolve_ids(
-            symbol_history, pd.Series(stats.index), pd.Series(stats["max"].to_numpy())
-        )
-        owner = {str(s): str(i) for s, i in zip(stats.index, ids, strict=True) if i is not None}
+        ids = resolve_ids(symbol_history, keyed["symbol"], keyed["date"])
+        keyed["iid"] = [None if i is None else str(i) for i in ids]
+    else:
+        keyed["iid"] = None
+    stats = keyed.groupby(["symbol", "iid"], dropna=False)["date"].agg(["min", "max", "count"])
+    last_session = keyed["date"].max()
     # Delisted means the *instrument* stopped trading: a renamed security's old ticker
     # ends early but the security has not delisted.
-    last_of = stats["max"].groupby(lambda s: owner.get(str(s), str(s))).max()
+    instrument_last = keyed.dropna(subset=["iid"]).groupby("iid")["date"].max()
+    # The ticker's holder on its last bar: ticker-keyed metadata describes that holder
+    # only, so it is never copied onto an earlier, unrelated company.
+    latest = stats["max"].reset_index().sort_values("max").groupby("symbol").tail(1)
+    current = {
+        (s, None if pd.isna(i) else str(i))
+        for s, i in zip(latest["symbol"], latest["iid"], strict=True)
+    }
+    meta_by_id: dict[str, dict[str, Any]] = {}
+    meta_by_symbol: dict[str, dict[str, Any]] = {}
+    if instruments is not None:
+        records = instruments.to_dict("records")
+        meta_by_symbol = {str(r["symbol"]): r for r in records}
+        if "instrument_id" in instruments.columns:
+            meta_by_id = {
+                str(r["instrument_id"]): r for r in records if pd.notna(r["instrument_id"])
+            }
     facts = normalize_master(master).set_index("instrument_id") if master is not None else None
-    for sym, st in stats.iterrows():
-        info = meta.loc[sym] if meta is not None and sym in meta.index else None
-        iid = owner.get(str(sym))
+    for (sym, iid), st in stats.iterrows():
+        iid = None if pd.isna(iid) else str(iid)
+        info = meta_by_id.get(iid) if iid is not None else None
+        if info is None and (sym, iid) in current:
+            info = meta_by_symbol.get(str(sym))
         fact = facts.loc[iid] if facts is not None and iid in facts.index else None
+        last = instrument_last[iid] if iid is not None else st["max"]
         db.add(
             Instrument(
                 dataset_version_id=row.id,
@@ -142,9 +165,9 @@ def register_version(
                 asset_class=str(info["asset_class"]) if info is not None else "equity",
                 first_date=st["min"].date(),
                 last_date=st["max"].date(),
-                delisted=bool(last_of[owner.get(str(sym), str(sym))] < last_session),
+                delisted=bool(last < last_session),
                 rows=int(st["count"]),
-                instrument_id=None if iid is None else str(iid),
+                instrument_id=iid,
                 delisting_date=(
                     fact["delisting_date"].date()
                     if fact is not None and pd.notna(fact["delisting_date"])
@@ -349,12 +372,7 @@ def _for_display(
     contrib = dict(analysis.get("contributions") or {})
     held = list(analysis.get("final_holdings", {}))
     rows = [r["symbol"] for side in ("top", "bottom") for r in contrib.get(side, [])]
-    at_end = label_ids(inputs.history, sorted({*held, *rows}), final)
-    clash = {t for t in at_end.values() if list(at_end.values()).count(t) > 1}
-
-    def name(iid: str) -> str:
-        t = at_end.get(iid, iid)
-        return f"{t} [{iid}]" if t in clash else t
+    name = _unique_labels(label_ids(inputs.history, sorted({*held, *rows}), final))
 
     out["final_holdings"] = {name(k): v for k, v in analysis.get("final_holdings", {}).items()}
     for side in ("top", "bottom"):
@@ -367,15 +385,28 @@ def _for_display(
     meta = dict(analysis.get("meta") or {})
     when = inputs.start or final
     universe = [str(s) for s in meta.get("universe", [])]
-    named = label_ids(inputs.history, [*universe, *meta.get("not_listed_in_window", [])], when)
+    absent = [str(s) for s in meta.get("not_listed_in_window", [])]
+    named = _unique_labels(label_ids(inputs.history, [*universe, *absent], when))
     meta["universe_instrument_ids"] = universe
-    meta["universe"] = [named.get(i, i) for i in universe]
-    meta["not_listed_in_window"] = [named.get(i, i) for i in meta.get("not_listed_in_window", [])]
+    meta["universe"] = [named(i) for i in universe]
+    meta["not_listed_in_window"] = [named(i) for i in absent]
     if meta.get("benchmark"):
         meta["benchmark_instrument_id"] = meta["benchmark"]
         meta["benchmark"] = label_ids(inputs.history, [meta["benchmark"]], when)[meta["benchmark"]]
     out["meta"] = meta
     return shown, out
+
+
+def _unique_labels(labels: dict[str, str]) -> Callable[[str], str]:
+    """Label lookup where a ticker shown for two instruments gets the id beside it."""
+    shown = list(labels.values())
+    clash = {t for t in shown if shown.count(t) > 1}
+
+    def name(iid: str) -> str:
+        t = labels.get(iid, iid)
+        return f"{t} [{iid}]" if t in clash else t
+
+    return name
 
 
 @handler("backtest")
