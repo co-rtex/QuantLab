@@ -21,6 +21,7 @@ from sqlalchemy import (
     Text,
     UniqueConstraint,
     Uuid,
+    func,
 )
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
@@ -319,7 +320,10 @@ class Job(Base):
     # affects idempotency hashing).
     trace_context: Mapped[dict[str, Any] | None] = mapped_column(JSONType)
     created_by: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id"))
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    # The database's clock, like every other job time (#130): the reaper compares it with
+    # its own reading of that clock, so an API host running fast must not push a job whose
+    # first delivery failed past the redelivery cutoff.
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=func.now())
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 

@@ -32,7 +32,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from redis import Redis
-from rq import Queue
+from rq import Queue, get_current_job
 from rq.job import Job as RQJob
 from rq.serializers import JSONSerializer
 from sqlalchemy import func, or_, select, text, update
@@ -83,6 +83,17 @@ class PermanentJobError(Exception):
 
 class LeaseLostError(Exception):
     pass
+
+
+def db_now() -> Any:
+    """The database's clock, for every lease, backoff and claim (#130).
+
+    Hosts' clocks differ: a deadline one worker wrote with its clock and another compared
+    with its own let a delayed retry run early, or a lease look expired early (a second
+    worker then ran the job too, until fencing stopped its commit). ``now()`` is the
+    statement's transaction time in PostgreSQL, the same for every row it touches.
+    """
+    return func.now()
 
 
 def now() -> datetime:
@@ -432,7 +443,7 @@ def request_cancel(db: Session, job: Job) -> Job:
             .values(
                 status=JobStatus.cancelled,
                 cancel_requested=True,
-                finished_at=now(),
+                finished_at=db_now(),
                 message="cancelled before start",
             )
         )
@@ -499,8 +510,8 @@ class JobContext:
         self._last_beat = t
         lease = get_settings().job_lease_seconds
         values: dict[str, Any] = {
-            "heartbeat_at": now(),
-            "lease_expires_at": now() + timedelta(seconds=lease),
+            "heartbeat_at": db_now(),
+            "lease_expires_at": db_now() + timedelta(seconds=lease),
         }
         if progress is not None:
             values["progress"] = max(0.0, min(1.0, float(progress)))
@@ -547,7 +558,7 @@ def handler(kind: str) -> Callable[[Handler], Handler]:
 
 def claim(job_id: uuid.UUID, worker_id: str) -> Job | None:
     lease = get_settings().job_lease_seconds
-    t = now()
+    t = db_now()  # the statement's own clock: one host's skew cannot move a deadline
     with SessionLocal() as db:
         row = db.execute(
             update(Job)
@@ -599,7 +610,7 @@ def _finish(
         job.status = status
         job.message = message[:500]
         job.error = error
-        job.finished_at = now()
+        job.finished_at = db_now()
         job.lease_expires_at = None
         if progress is not None:
             job.progress = progress
@@ -616,15 +627,20 @@ def _redeliver_when_due(job_id: uuid.UUID) -> None:
         job = db.get(Job, job_id)
         if job is None or job.status != JobStatus.queued or job.cancel_requested:
             return
-        if job.not_before is not None and job.not_before > now():
+        t = db.scalar(select(db_now()))
+        if job.not_before is not None and t is not None and job.not_before > t:
             # One delivery per due time: k early (or forged) deliveries reschedule it once.
             due = job.not_before
-            enqueue(
-                job,
-                delay_seconds=(due - now()).total_seconds(),
-                # No ":" in it: RQ registries key entries as "<job id>:<execution id>".
-                delivery_id=f"{job.id}-{round(due.timestamp() * 1_000_000)}",
-            )
+            # No ":" in it: RQ registries key entries as "<job id>:<execution id>".
+            delivery = f"{job.id}-{round(due.timestamp() * 1_000_000)}"
+            running = get_current_job()
+            if running is not None and running.id == delivery:
+                # This entry is that delivery, arriving early. Under its own name the
+                # reschedule shares the hash of the entry being run: RQ 3.0 still delivers
+                # it when due, but the worker marks it finished in the meantime, so the
+                # queue shows a pending delivery as done. Another name keeps them apart.
+                delivery += "-again"
+            enqueue(job, delay_seconds=(due - t).total_seconds(), delivery_id=delivery)
 
 
 def execute_job(job_id: str, worker_id: str | None = None) -> str:
@@ -693,7 +709,7 @@ def _run_claimed(job: Job, jid: uuid.UUID, wid: str) -> str:
             locked.status = JobStatus.completed
             locked.progress = 1.0
             locked.message = (summary or {}).get("message", "completed")[:500]
-            locked.finished_at = now()
+            locked.finished_at = db_now()
             locked.lease_expires_at = None
             _mirror_status(db, locked, JobStatus.completed)
             db.commit()
@@ -740,7 +756,7 @@ def _run_claimed(job: Job, jid: uuid.UUID, wid: str) -> str:
                         status=JobStatus.queued,
                         error=err,
                         lease_expires_at=None,
-                        not_before=now() + timedelta(seconds=delay),
+                        not_before=db_now() + timedelta(seconds=delay),
                         message=f"retrying in {delay:.0f}s after {type(exc).__name__}",
                     )
                 )
@@ -798,7 +814,8 @@ class _Keepalive:
                             Job.status == JobStatus.running,
                         )
                         .values(
-                            lease_expires_at=now() + timedelta(seconds=lease), heartbeat_at=now()
+                            lease_expires_at=db_now() + timedelta(seconds=lease),
+                            heartbeat_at=db_now(),
                         )
                     )
                     db.commit()
@@ -817,9 +834,13 @@ class _Keepalive:
 # --------------------------------------------------------------------------- recovery
 def reap(redeliver_after_seconds: int = 120) -> dict[str, int]:
     """Recover jobs whose worker died and re-deliver queued jobs that were never picked up."""
-    t = now()
     stats = {"requeued": 0, "failed": 0, "timed_out": 0, "redelivered": 0, "uploads_swept": 0}
     with SessionLocal() as db:
+        # The database's time, not this host's (#130): leases and backoffs were written in
+        # it, and a reaper with a fast clock would otherwise requeue live jobs.
+        t = db.scalar(select(db_now()))
+        if t is None:  # not an assert: those are stripped under -O
+            raise RuntimeError("the database returned no time")
         stale = db.scalars(
             select(Job)
             .where(Job.status == JobStatus.running, Job.lease_expires_at < t)
