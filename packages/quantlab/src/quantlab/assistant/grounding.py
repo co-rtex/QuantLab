@@ -534,10 +534,18 @@ def _candidates(f: Fact) -> list[Candidate]:
 # clauses that share the citations at the end ("Total return: 15.2%; maximum drawdown:
 # -28.3% [F3][F2]"), so it is a clause boundary (below), not a sentence one (#79).
 _SENTENCE = re.compile(r"(?<=[.!?])\s+(?!\[F\d+\])|\n+")
-# Clause boundaries. A figure is read with the words of its own clause: in "Although the
-# benchmark fell, the strategy returned 15.2%" the fall is the benchmark's (#79). Commas in
-# numbers ("12,345") are not followed by a space.
+# Clause boundaries (commas in numbers, "12,345", are not followed by a space). A figure is
+# read with the words of its scope: its own clause plus the clauses around it that carry no
+# figure of their own, so "15.2%, a loss" and "Total return, which fell, was 15.2%" still
+# state a loss (#94). Only a leading subordinate clause with no figure is a scope of its
+# own: in "Although the benchmark fell, the strategy returned 15.2%" the fall is the
+# benchmark's (#79).
 _CLAUSE = re.compile(r"[,;]\s|\s(?:and|but|while|whereas)\s", re.I)
+_SUBORDINATE = re.compile(
+    r"\s*(?:although|though|even though|despite|in spite of|after|before|unlike|since|"
+    r"during|whereas|while|when)\b",
+    re.I,
+)
 # "the VaR of 2.13%": a quantity named right before "of" owns the figure.
 _OF = re.compile(r"\s+of\s+(?:(?:about|around|roughly|nearly|almost|just|only)\s+)?", re.I)
 
@@ -642,7 +650,11 @@ _KIND_WORDS: list[tuple[frozenset[str], re.Pattern[str], str | None]] = [
         ),
         "gain",
     ),
-    (frozenset({"return", "alpha"}), re.compile(r"\bunderperform(?:s|ed)?\b", re.I), "loss"),
+    (
+        frozenset({"return", "alpha"}),
+        re.compile(r"\bunderperform(?:s|ed)?\b|\blag(?:s|ged|ging)\b|\btrail(?:s|ed|ing)\b", re.I),
+        "loss",
+    ),
     (_LOSSES, re.compile(r"\blos(?:e|es|t|ing|s|ses)\b", re.I), "loss"),
 ]
 # Words that state a fall without naming a quantity ("Equity fell 4%").
@@ -740,9 +752,28 @@ def _nearest(start: int, end: int, mentions: list[Mention]) -> Mention | None:
     return min(mentions, key=distance)
 
 
-def _right_after(body: str, end: int, spans: list[tuple[int, int]]) -> bool:
-    """Whether one of ``spans`` starts right after position ``end`` ("28.3% higher")."""
-    return any(s >= end and not body[end:s].strip() for s, _ in spans)
+def _scopes(masked: str, figures: list[int]) -> list[tuple[int, int, bool]]:
+    """(start, end, carries a figure) for each scope of a sentence: a clause that carries
+    a figure, with the figure-less clauses that trail or lead it. A figure-less leading
+    subordinate clause ("Although the benchmark fell,") is a scope of its own."""
+    cuts = list(_CLAUSE.finditer(masked))
+    edges = [0, *(c.end() for c in cuts), len(masked)]
+    out: list[list[Any]] = []  # [start, end, has figure, closed]
+    for i in range(len(edges) - 1):
+        s, e = edges[i], edges[i + 1]
+        fig = any(s <= p < e for p in figures)
+        sep = cuts[i - 1].group(0).strip().lower() if i else ""
+        sub = sep in ("while", "whereas") or _SUBORDINATE.match(masked[s:e]) is not None
+        leading = (
+            not out or out[-1][3]
+        )  # opens the sentence: "Total return, although it fell," does not
+        if sub and not fig and leading:
+            out.append([s, e, False, True])
+        elif out and not out[-1][3] and (not fig or not out[-1][2]):
+            out[-1][1], out[-1][2] = e, out[-1][2] or fig
+        else:
+            out.append([s, e, fig, False])
+    return [(s, e, fig) for s, e, fig, _ in out]
 
 
 def verify_answer(text: str, facts: list[Fact]) -> dict[str, Any]:
@@ -799,10 +830,16 @@ def verify_answer(text: str, facts: list[Fact]) -> dict[str, Any]:
         masked = body
         for w in mentions:  # "profit and loss" is one name, not two clauses
             masked = masked[: w[0]] + " " * (w[1] - w[0]) + masked[w[1] :]
-        bounds = [b.end() for b in _CLAUSE.finditer(masked)]
+        numbers = list(_NUM.finditer(body))
+        scopes = _scopes(masked, [n.start() for n in numbers])
+        firsts = [s[0] for s in scopes]
 
-        def clause(pos: int, bounds: list[int] = bounds) -> int:
-            return bisect.bisect_right(bounds, pos)
+        def clause(pos: int, firsts: list[int] = firsts) -> int:
+            return bisect.bisect_right(firsts, pos) - 1
+
+        # Words of a cited fact's label ("SYNIDX"): "SYNIDX (10.1%)" is an aside.
+        label_words = {w.lower() for f in cited for w in re.findall(r"[A-Za-z]{2,}", f.label)}
+        templates = {x for f in cited for x in f.label_numbers}
 
         falls = [(m.start(), m.end()) for m in _FALL.finditer(body)]
         rises = [
@@ -815,18 +852,27 @@ def verify_answer(text: str, facts: list[Fact]) -> dict[str, Any]:
                 for w in mentions
             )
         ]
-        numbers = list(_NUM.finditer(body))
         assigned = _assign(mentions, [(m.start(), m.end()) for m in numbers], clause)
         prev_end = 0
-        for m in numbers:
-            # "Total return (15.2%)": parentheses right after a name are an aside, not a
-            # negative in accounting notation (#79).
-            aside = any(w[1] <= m.start() and not body[w[1] : m.start()].strip() for w in mentions)
+        for k, m in enumerate(numbers):
+            # "Total return (15.2%)", "SYNIDX (10.1%)", "5.1% (510 bps)": parentheses right
+            # after a name or another figure are an aside, not accounting notation (#79).
+            before = body[: m.start()].rstrip()
+            last = re.search(r"([A-Za-z]{2,})$", before)
+            aside = (
+                any(w[1] <= m.start() and not body[w[1] : m.start()].strip() for w in mentions)
+                or (k > 0 and not body[numbers[k - 1].end() : m.start()].strip())
+                or (last is not None and last.group(1).lower() in label_words)
+            )
             x, unit = _value(m, accounting_ok=not aside), _unit(m)
             claim = m.group(0).strip()
             claims.append(claim)
             c = clause(m.start())
-            start = max(prev_end, bounds[c - 1] if c else 0)
+            start = max(prev_end, scopes[c][0])
+            # Direction words after the figure count up to the next figure of its scope
+            # ("15.2%, a decline", "15.2%, but negative").
+            later = [n.start() for n in numbers[k + 1 :] if clause(n.start()) == c]
+            stop = min([*later, scopes[c][1]])
             # The words of the figure's own clause speak for it when there are any; a
             # quantity attached by "of" ("the VaR of 2.13%") speaks for it alone.
             own = assigned[(m.start(), m.end())]
@@ -838,19 +884,28 @@ def verify_answer(text: str, facts: list[Fact]) -> dict[str, Any]:
             # ("gained 15.2% with a 28.3% drawdown" asserts a gain of 15.2% only), or of
             # the number it is assigned to ("a 15.2% loss", "a 4.12% drop").
             words = [w for w in mentions if start <= w[1] <= m.start()] + own
-            loss = (
-                any(start <= e <= m.start() for _, e in falls)
-                or _right_after(body, m.end(), falls)
-                or any(w[4] == "loss" for w in words)
+            loss = any(start <= e <= m.start() or m.end() <= s < stop for s, e in falls) or any(
+                w[4] == "loss" for w in words
             )
-            gain = (
-                any(w[4] == "gain" for w in words)
-                or any(start <= e <= m.start() for _, e in rises)
-                or _right_after(body, m.end(), rises)
+            gain = any(w[4] == "gain" for w in words) or any(
+                start <= e <= m.start() or m.end() <= s < stop for s, e in rises
             )
             prev_end = m.end()
-            same = [w for w in mentions if clause(w[0]) == c]
-            near = _nearest(m.start(), m.end(), same or mentions)
+            # The nearest name speaks for a figure no word was given to, from its own scope,
+            # else from a leading clause with no figure ("During the drawdown, equity rose
+            # 28.3%"), but never across another figure: in "rose 15.2% despite a 28.3%
+            # drawdown" the drawdown is the 28.3%.
+            pool = [w for w in mentions if clause(w[0]) == c] or [
+                w for w in mentions if not scopes[clause(w[0])][2]
+            ]
+            # A label's template number ("VaR (95%)") is part of the name, not a figure.
+            figures = [n for n in numbers if n is not m and abs(_value(n)) not in templates]
+            pool = [
+                w
+                for w in pool
+                if not any(min(w[1], m.start()) <= n.start() < max(w[0], m.end()) for n in figures)
+            ]
+            near = _nearest(m.start(), m.end(), pool)
             bindings: list[Binding | None] = [(w[2], w[3]) for w in own]
             bindings.append(None if near is None else (near[2], near[3]))
             if all(_supported(x, unit, cited, b, loss, gain) for b in bindings):

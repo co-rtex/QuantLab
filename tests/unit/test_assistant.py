@@ -431,6 +431,14 @@ FACTS_79 = [
     Fact("F14", "worst_day", "Worst single-day return", -0.0412, "pct", "w"),
     Fact("F18", "cost_drag_cagr", "CAGR lost to costs", 0.008, "pct", "k"),
     Fact("F19", "annual_turnover", "Annual one-way turnover (x equity)", 3.2, "ratio", "o"),
+    Fact("F4", "benchmark_total_return", "SYNIDX total return", 0.101, "pct", "b"),
+    Fact("F11", "excess_total_return", "Total return minus SYNIDX", 0.051, "pct", "x"),
+]
+# The same with the benchmark and the excess return negative, for the sign pairs.
+FACTS_79_NEG = [
+    *(f for f in FACTS_79 if f.id not in ("F4", "F11")),
+    Fact("F4", "benchmark_total_return", "SYNIDX total return", -0.101, "pct", "b"),
+    Fact("F11", "excess_total_return", "Total return minus SYNIDX", -0.051, "pct", "x"),
 ]
 
 
@@ -492,3 +500,54 @@ def test_issue_79_legitimate_phrasings_pass(text):
 )
 def test_issue_79_misattributions_stay_rejected(text, facts):
     assert not verify_answer(text, facts)["grounded"], text
+
+
+@pytest.mark.parametrize(
+    ("text", "facts"),
+    [
+        # A clause with no figure of its own still speaks for the figure next to it (#94).
+        ("Total return was 15.2%, a loss [F3].", FACTS_79),
+        ("Total return was 15.2%, which was a loss [F3].", FACTS_79),
+        ("Total return, which fell, was 15.2% [F3].", FACTS_79),
+        ("Total return, down sharply, was 15.2% [F3].", FACTS_79),
+        ("Total return, although it fell, was 15.2% [F3].", FACTS_79),
+        ("The maximum drawdown was 28.3%, a gain [F2].", FACTS_79),
+        ("The strategy posted a gain of 28.3% [F2].", FACTS_79),
+        # Accepted on main as well.
+        ("Total return was 15.2%, a decline [F3].", FACTS_79),
+        ("Total return was 15.2%, but negative [F3].", FACTS_79),
+        ("It lagged SYNIDX by 5.1 percentage points [F11].", FACTS_79),
+        # The figures swapped in the false rejects fixed below.
+        ("The strategy rose 28.3% despite a 15.2% drawdown [F3][F2].", FACTS_79),
+        ("Equity rose 28.3% while the drawdown reached 15.2% [F3][F2].", FACTS_79),
+        ("Total return (15.2%) beat SYNIDX (10.1%) [F3][F4].", FACTS_79_NEG),
+        ("The excess return was 5.1% (510 bps) [F11].", FACTS_79_NEG),
+    ],
+)
+def test_review_94_misattributions_rejected(text, facts):
+    assert not verify_answer(text, facts)["grounded"], text
+
+
+@pytest.mark.parametrize(
+    ("text", "facts"),
+    [
+        # The same shapes, stating the fact's real sign.
+        ("Total return was 15.2%, a loss [F3].", SIGNED_FACTS),
+        ("Total return was 15.2%, which was a loss [F3].", SIGNED_FACTS),
+        ("Total return, which fell, was 15.2% [F3].", SIGNED_FACTS),
+        ("Total return, down sharply, was 15.2% [F3].", SIGNED_FACTS),
+        ("Total return was 15.2%, a decline [F3].", SIGNED_FACTS),
+        ("Total return was 15.2%, but negative [F3].", SIGNED_FACTS),
+        ("The maximum drawdown was 28.3%, a deep loss [F2].", FACTS_79),
+        ("It lagged SYNIDX by 5.1 percentage points [F11].", FACTS_79_NEG),
+        # A figure-less clause before the figure speaks for it, too.
+        ("Alpha was negative, at 2.1% [F10].", FACTS_79),
+        # Lower-priority false rejects from the #94 review.
+        ("The strategy rose 15.2% despite a 28.3% drawdown [F3][F2].", FACTS_79),
+        ("Equity rose 15.2% while the drawdown reached 28.3% [F3][F2].", FACTS_79),
+        ("Total return (15.2%) beat SYNIDX (10.1%) [F3][F4].", FACTS_79),
+        ("The excess return was 5.1% (510 bps) [F11].", FACTS_79),
+    ],
+)
+def test_review_94_legitimate_phrasings(text, facts):
+    assert verify_answer(text, facts)["grounded"], text

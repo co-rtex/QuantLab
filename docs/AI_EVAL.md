@@ -123,13 +123,20 @@ which every version rejects; it stays as a guard.
 
 False rejects after #74 (#79), each fixed with a regression test that keeps the matching
 misattribution rejected (`test_issue_79_*`):
-* Clauses. Commas, semicolons, "and", "but", "while" and "whereas" separate clauses. A
-  figure is read with the words of its own clause when that clause names anything, and
-  only its own clause's direction words count. So "Although the benchmark fell, the
-  strategy returned 15.2%" and "After the drawdown, the strategy returned 15.2%" pass,
-  and in "Volatility was 18.3% and costs were $12,345" each figure has its own kind. A
-  figure whose clause names nothing still takes the nearest name ("During the drawdown,
-  equity rose 28.3%" stays rejected).
+* Scopes. Commas, semicolons, "and", "but", "while" and "whereas" separate clauses, and
+  a clause that carries a figure starts a scope. A clause with no figure of its own joins
+  the scope beside it, so "Total return was 15.2%, a loss", "Total return, which fell,
+  was 15.2%" and "Alpha was negative, at 2.1%" are read as one. (An earlier draft of #94
+  cut these off and accepted the misattributions; review caught it.) Only a figure-less
+  subordinate clause that opens the sentence ("Although the benchmark fell,", "After the
+  drawdown,") is a scope of its own, so its words describe something else. A figure is
+  read with the names of its scope when there are any, and with the direction words of
+  its scope up to the next figure, so "15.2%, a decline" and "15.2%, but negative" state
+  a loss. In "Volatility was 18.3% and costs were $12,345" each figure has its own kind.
+  A figure whose scope names nothing takes the nearest name from a leading clause
+  ("During the drawdown, equity rose 28.3%" stays rejected), never across another figure
+  ("rose 15.2% despite a 28.3% drawdown": the drawdown is the 28.3%).
+* "lagged" and "trailed" state underperformance, like "underperformed".
 * "of" attaches: in "The expected shortfall exceeded the VaR of 2.13%" the figure is the
   VaR's. Without "of", every name in the clause must agree ("Total return during the
   drawdown was 28.3%" stays rejected).
@@ -139,8 +146,9 @@ misattribution rejected (`test_issue_79_*`):
 * Drawdown phrasing: "deepest/largest/worst decline, fall, drop or loss" and "underwater".
 * A semicolon no longer ends a sentence, so "Total return: 15.2%; maximum drawdown:
   -28.3% [F3][F2]" keeps its citations for both halves.
-* "Total return (15.2%)": parentheses right after a name are an aside, not accounting
-  notation. "Total return was (15.2%)" still reads as negative.
+* "Total return (15.2%)", "SYNIDX (10.1%)", "5.1% (510 bps)": parentheses right after a
+  name, a word of a cited label, or another figure are an aside, not accounting notation.
+  "Total return was (15.2%)" still reads as negative.
 * Percentage points are a unit of their own, allowed only for differences between rates
   (cost drag, excess return, alpha): "Total return was 15.2 percentage points" is rejected.
 
