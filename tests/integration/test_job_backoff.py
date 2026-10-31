@@ -29,9 +29,11 @@ def flaky(seeded):
         return lambda db: {"message": "ok"}
 
     J.HANDLERS["t.backoff"] = handler
+    J.HANDLERS["t.ok"] = lambda ctx: lambda db: {"message": "ok"}
     J.set_redis(fakeredis.FakeRedis())
     yield calls
     J.HANDLERS.pop("t.backoff", None)
+    J.HANDLERS.pop("t.ok", None)
     J.set_redis(None)
 
 
@@ -56,11 +58,12 @@ def test_an_early_delivery_does_not_run_a_retry_and_a_due_one_does(flaky):
     assert job.not_before is not None and job.not_before > J.now()
     scheduled = len(J.get_queue().scheduled_job_registry)
 
-    # Delivered before the backoff ends: nothing runs, no attempt is spent...
+    # Delivered before the backoff ends (twice): nothing runs, no attempt is spent...
+    assert J.execute_job(str(jid)) == "skipped"
     assert J.execute_job(str(jid)) == "skipped"
     job = _row(jid)
     assert (job.status, job.attempts, flaky["n"]) == (JobStatus.queued, 1, 1)
-    # ...and a delivery is scheduled for when it is due, so a fast clock cannot strand it.
+    # ...and one delivery is scheduled for when it is due, however many came early.
     assert len(J.get_queue().scheduled_job_registry) == scheduled + 1
 
     # Once due, the delivery claims it.
@@ -80,7 +83,7 @@ def test_the_reaper_does_not_redeliver_a_retry_before_it_is_due(flaky):
     assert J.reap()["redelivered"] == 1
 
 
-def test_a_delayed_retry_can_still_be_cancelled(flaky):
+def test_a_delayed_retry_can_still_be_cancelled_and_then_never_runs(flaky):
     jid = _make_job("t.backoff")
     assert J.execute_job(str(jid)) == "retry"
     with SessionLocal() as db:
@@ -88,3 +91,23 @@ def test_a_delayed_retry_can_still_be_cancelled(flaky):
         assert job is not None and job.not_before is not None
         J.request_cancel(db, job)
     assert _row(jid).status == JobStatus.cancelled
+    # Its pending deliveries still arrive, before and after the due time: none runs it.
+    assert J.execute_job(str(jid)) == "skipped"
+    _set(jid, not_before=J.now() - timedelta(seconds=1))
+    assert J.execute_job(str(jid)) == "skipped"
+    assert _row(jid).status == JobStatus.cancelled
+    assert flaky["n"] == 1
+
+
+def test_a_job_whose_worker_was_lost_is_due_at_once(flaky):
+    """Lease loss is not a backoff: the reaper requeues the job, and it runs on the next
+    delivery. claim() clears not_before, so a running row never carries one."""
+    jid = _make_job("t.ok")
+    claimed = J.claim(jid, "w1")
+    assert claimed is not None and claimed.not_before is None
+    _set(jid, lease_expires_at=J.now() - timedelta(seconds=1))  # w1 stopped heartbeating
+    assert J.reap()["requeued"] == 1
+    job = _row(jid)
+    assert (job.status, job.not_before) == (JobStatus.queued, None)
+    assert J.execute_job(str(jid), "w2") == "completed"
+    assert _row(jid).attempts == 2

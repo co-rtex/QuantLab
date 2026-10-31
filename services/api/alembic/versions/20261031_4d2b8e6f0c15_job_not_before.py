@@ -24,8 +24,12 @@ depends_on: str | Sequence[str] | None = None
 
 
 def upgrade() -> None:
+    # A metadata-only change, but its brief ACCESS EXCLUSIVE lock must not queue behind a
+    # long transaction and stall every job claim behind it: give up instead, and retry.
+    op.execute("SET LOCAL lock_timeout = '5s'")
     op.add_column("jobs", sa.Column("not_before", sa.DateTime(timezone=True), nullable=True))
 
 
 def downgrade() -> None:
+    op.execute("SET LOCAL lock_timeout = '5s'")
     op.drop_column("jobs", "not_before")
