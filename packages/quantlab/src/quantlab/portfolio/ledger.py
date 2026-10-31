@@ -15,6 +15,8 @@ Conventions
 * Dividends are credited per share held at the ex-date open (short positions pay them).
 * Splits multiply the share count; fractional shares created by a split are retained
   (no cash-in-lieu), which conserves value exactly.
+* A delisting removes the whole position at its final value per share, which may be 0
+  (a worthless bankruptcy). Unlike a sale it carries no costs and allows a zero price.
 """
 
 from __future__ import annotations
@@ -26,7 +28,7 @@ from typing import Any, Literal
 
 import pandas as pd
 
-Kind = Literal["deposit", "withdrawal", "buy", "sell", "dividend", "split"]
+Kind = Literal["deposit", "withdrawal", "buy", "sell", "dividend", "split", "delisting"]
 EPS = 1e-9
 
 
@@ -195,6 +197,27 @@ class Ledger:
             cash_delta=0.0,
         )
 
+    def delist(
+        self, date: pd.Timestamp, symbol: str, final_value: float, note: str = ""
+    ) -> Transaction:
+        """Remove the whole position at ``final_value`` per share (>= 0)."""
+        qty = self.quantity(symbol)
+        if abs(qty) < EPS:
+            raise InsufficientPosition(f"no position in {symbol} to delist")
+        if not math.isfinite(final_value) or final_value < 0:
+            raise InvalidOrder("delisting value must be finite and >= 0")
+        self.cash += qty * final_value
+        self._set_qty(symbol, 0.0)
+        return self._record(
+            date=date,
+            kind="delisting",
+            symbol=symbol,
+            quantity=-qty,
+            price=final_value,
+            cash_delta=qty * final_value,
+            note=note,
+        )
+
     # ------------------------------------------------------------------ valuation
     def market_value(self, prices: Mapping[str, float]) -> float:
         total = 0.0
@@ -281,6 +304,12 @@ def _verify(tx: Transaction, held: float) -> None:
         tx.price <= 0 or tx.cash_delta != 0 or not _close(tx.quantity, held * (tx.price - 1))
     ):
         raise LedgerError(bad + "does not restate the shares held")
+    elif tx.kind == "delisting" and (
+        tx.price < 0
+        or not _close(tx.quantity, -held)
+        or not _close(tx.cash_delta, -tx.quantity * tx.price)
+    ):
+        raise LedgerError(bad + "does not remove the shares held at their final value")
 
 
 def replay(
@@ -302,7 +331,7 @@ def replay(
         if verify:
             _verify(tx, led.quantity(sym))
         led.cash += tx.cash_delta
-        if tx.kind in ("buy", "sell"):
+        if tx.kind in ("buy", "sell", "delisting"):
             led._set_qty(sym, led.quantity(sym) + tx.quantity)
         elif tx.kind == "split":
             led._set_qty(sym, led.quantity(sym) * tx.price)

@@ -5,7 +5,11 @@ Timeline for each session ``k`` (all prices are raw, as traded):
 1. **Open** — corporate actions placed on session ``k`` are applied to holdings: those
    ex-dated ``k``, plus any whose ex-date fell on a day the symbol printed no bar (see
    ``quantlab.data.adjust``), composed in ex-date order into one dividend on the share
-   count held before the open, then one split. Positions in symbols that have printed no
+   count held before the open, then one split. **Delistings:** with an instrument master
+   (``instruments``), a position is closed on the first session after its
+   ``delisting_date`` at last close x (1 + ``delisting_return``), or at the last close
+   when the return is unknown, and the security cannot be bought again. Without one (or
+   for securities the master does not delist), positions in symbols that have printed no
    bar for ``delist_after_missing`` sessions are liquidated at their last close.
 2. **Open execution** (``execution="next_open"``) — orders decided at the previous
    rebalance close are filled at ``open[k]`` adjusted for slippage. Sells run before buys.
@@ -150,6 +154,7 @@ def run_backtest(
     on_progress: Callable[[float], None] | None = None,
     should_cancel: Callable[[], bool] | None = None,
     record_positions: bool = True,
+    instruments: pd.DataFrame | None = None,
 ) -> BacktestResult:
     universe = sorted({s.upper() for s in config.universe}) if config.universe else None
     bench = config.benchmark.upper() if config.benchmark else None
@@ -192,6 +197,21 @@ def run_backtest(
     has_bar = np.isfinite(C)
     missing_run = np.zeros(len(universe), dtype=np.int64)
     col = {s: j for j, s in enumerate(universe)}
+    # Delisting date and return per universe symbol, from the instrument master. The
+    # date is public on the day, so acting on the next session uses no future data. The
+    # return (final value vs last close) is booked at that point, as is standard.
+    delist_at: dict[str, tuple[pd.Timestamp, float]] = {}
+    if instruments is not None and len(instruments):
+        master = instruments.set_index("instrument_id")
+        for sym in universe:
+            if sym in master.index and pd.notna(master.at[sym, "delisting_date"]):
+                ret = master.at[sym, "delisting_return"]
+                delist_at[sym] = (
+                    pd.Timestamp(master.at[sym, "delisting_date"]),
+                    float(ret) if pd.notna(ret) else math.nan,
+                )
+    delisted: set[str] = set()
+    delist_counts = {"with_return": 0, "return_unknown": 0, "by_missing_bars": 0}
     placement = adjuster.placed["placement"].value_counts()
     action_counts = {
         "on_ex_date": int(placement.get("ex_date", 0)),
@@ -248,6 +268,17 @@ def run_backtest(
         for o in sorted(orders, key=lambda o: (o.quantity > 0, o.symbol)):
             j = col[o.symbol]
             ref = px_row[j]
+            if o.symbol in delisted:
+                rejects.append(
+                    {
+                        "date": d,
+                        "decision_date": o.decision_date,
+                        "symbol": o.symbol,
+                        "quantity": o.quantity,
+                        "reason": "delisted",
+                    }
+                )
+                continue
             if not math.isfinite(ref):
                 rejects.append(
                     {
@@ -352,9 +383,44 @@ def run_backtest(
         # consecutive sessions is liquidated at its last close. The rule only looks at the
         # past, so it cannot know in advance that a series has ended.
         missing_run = np.where(has_bar[k], 0, missing_run + 1)
+        for sym, (when, ret) in delist_at.items():
+            if sym in delisted or d <= when:
+                continue
+            delisted.add(sym)
+            j = col[sym]
+            q = ledger.quantity(sym)
+            if abs(q) < 1e-12 or not math.isfinite(last_px[j]):
+                continue
+            has_ret = math.isfinite(ret)
+            value = last_px[j] * (1 + ret) if has_ret else last_px[j]
+            note = (
+                f"delisting return applied ({ret:+.2%})"
+                if has_ret
+                else "delisting return unknown: liquidated at last close"
+            )
+            ledger.delist(d, sym, max(value, 0.0), note=note)
+            delist_counts["with_return" if has_ret else "return_unknown"] += 1
+            trades.append(
+                {
+                    "date": d,
+                    "decision_date": d,
+                    "symbol": sym,
+                    "side": "sell",
+                    "quantity": -q,
+                    "reference_price": last_px[j],
+                    "price": max(value, 0.0),
+                    "notional": abs(q) * max(value, 0.0),
+                    "commission": 0.0,
+                    "slippage_cost": 0.0,
+                    "partial": False,
+                    "note": f"delisting: {note}",
+                }
+            )
+            traded += abs(q) * max(value, 0.0)
         for sym in list(ledger.positions):
             j = col[sym]
             if missing_run[j] >= config.delist_after_missing and math.isfinite(last_px[j]):
+                delist_counts["by_missing_bars"] += 1
                 q = ledger.quantity(sym)
                 ledger.trade(d, sym, -q, last_px[j], note="delisted: liquidated at last close")
                 trades.append(
@@ -469,6 +535,7 @@ def run_backtest(
             "sessions": n_steps,
             "not_listed_in_window": not_listed,
             "corporate_actions": action_counts,
+            "delistings": delist_counts,
             "first_session": str(trade_dates[0].date()),
             "last_session": str(trade_dates[-1].date()),
         },

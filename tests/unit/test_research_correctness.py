@@ -127,7 +127,24 @@ def test_dropping_names_that_later_delist_inflates_results():
     assert full.equity["equity"].iloc[-1] == pytest.approx(500 + 50 * 5.0)
     assert survivors.equity["equity"].iloc[-1] == pytest.approx(1000)
     liq = full.trades[full.trades["note"] == "delisting"].iloc[0]
-    assert liq["symbol"] == "B" and liq["price"] == 5.0  # last close: optimistic by design
+    # Without a delisting return the exit is the last close: optimistic, as documented.
+    assert liq["symbol"] == "B" and liq["price"] == 5.0
+    # With the instrument master's delisting return (#9 part B) the exit is realistic:
+    # B delisted on its last bar with a -60% delisting return.
+    from quantlab.data.identity import normalize_master
+
+    d = pd.DatetimeIndex(sorted(bars["date"].unique()))
+    master = normalize_master(
+        pd.DataFrame(
+            [{"instrument_id": "B", "name": "B", "delisting_date": d[4], "delisting_return": -0.6}]
+        )
+    )
+    real = run_backtest(bars, NONE, create_strategy("equal_weight"), cfg, instruments=master)
+    assert real.equity["equity"].iloc[-1] == pytest.approx(500 + 50 * 5.0 * 0.4)
+    # The survivorship gap widens once delisting losses are counted: 1000 vs 600.
+    assert survivors.equity["equity"].iloc[-1] - real.equity["equity"].iloc[-1] == pytest.approx(
+        400
+    )
 
 
 # ---------------------------------------------------------- missing observations

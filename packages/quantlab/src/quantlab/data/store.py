@@ -6,6 +6,7 @@ Layout::
                                         /actions.parquet
                                         /instruments.parquet   (optional)
                                         /symbol_history.parquet (optional)
+                                        /instrument_master.parquet (optional)
                                         /manifest.json
 
 ``version_hash`` is a SHA-256 over a canonical serialization of the data, so the same
@@ -29,11 +30,13 @@ import pandas as pd
 
 from quantlab.data.identity import (
     HISTORY_COLUMNS,
+    MASTER_COLUMNS,
     IdentityError,
     is_legacy,
     key_by_instrument,
     legacy_history,
     normalize_history,
+    normalize_master,
 )
 from quantlab.data.schema import (
     ACTION_COLUMNS,
@@ -47,7 +50,10 @@ ROW_GROUP_ROWS = 50_000
 
 
 def content_hash(
-    bars: pd.DataFrame, actions: pd.DataFrame, symbol_history: pd.DataFrame | None = None
+    bars: pd.DataFrame,
+    actions: pd.DataFrame,
+    symbol_history: pd.DataFrame | None = None,
+    master: pd.DataFrame | None = None,
 ) -> str:
     h = hashlib.sha256()
     h.update(f"quantlab-dataset-v{FORMAT_VERSION}\n".encode())
@@ -70,6 +76,13 @@ def content_hash(
         for col in HISTORY_COLUMNS:
             h.update(f"history.{col}".encode())
             h.update(pd.util.hash_pandas_object(hist[col], index=False).to_numpy().tobytes())
+    # Delisting dates and returns change backtest and ML results, so a stored instrument
+    # master is part of the version too (there are no legacy versions with one).
+    if master is not None:
+        mst = normalize_master(master)
+        for col in MASTER_COLUMNS:
+            h.update(f"master.{col}".encode())
+            h.update(pd.util.hash_pandas_object(mst[col], index=False).to_numpy().tobytes())
     return h.hexdigest()
 
 
@@ -106,6 +119,7 @@ class DatasetStore:
         quality: dict[str, Any] | None = None,
         instruments: pd.DataFrame | None = None,
         symbol_history: pd.DataFrame | None = None,
+        master: pd.DataFrame | None = None,
     ) -> DatasetVersion:
         bars = normalize_bars(bars)
         actions = normalize_actions(actions)
@@ -113,7 +127,8 @@ class DatasetStore:
         if history is not None:
             # Fail before writing anything if the data cannot be keyed by instrument.
             key_by_instrument(bars, actions, history)
-        version = content_hash(bars, actions, history)
+        master = None if master is None else normalize_master(master)
+        version = content_hash(bars, actions, history, master)
         target = self._dir(slug, version)
         if target.exists():
             return self.open(slug, version)
@@ -128,6 +143,7 @@ class DatasetStore:
             "end": str(bars["date"].max().date()) if len(bars) else None,
             "actions": len(actions),
             "symbol_history": history is not None,
+            "instrument_master": master is not None,
             "provenance": provenance,
             "quality": quality,
         }
@@ -148,6 +164,8 @@ class DatasetStore:
                 instruments.to_parquet(tmp / "instruments.parquet", index=False)
             if history is not None:
                 history.to_parquet(tmp / "symbol_history.parquet", index=False)
+            if master is not None:
+                master.to_parquet(tmp / "instrument_master.parquet", index=False)
             (tmp / "manifest.json").write_text(json.dumps(manifest, indent=2, default=str))
             try:
                 os.rename(tmp, target)  # atomic publish of the whole version
@@ -200,6 +218,11 @@ class DatasetStore:
             df = df[df["symbol"].isin([s.upper() for s in symbols])]
         return normalize_actions(df)
 
+    def load_master(self, dv: DatasetVersion) -> pd.DataFrame | None:
+        """The version's instrument master (delisting dates and returns), if it has one."""
+        p = dv.path / "instrument_master.parquet"
+        return normalize_master(pd.read_parquet(p)) if p.exists() else None
+
     def load_symbol_history(self, dv: DatasetVersion) -> pd.DataFrame:
         """The version's symbol history, or the legacy identity map when it has none."""
         p = dv.path / "symbol_history.parquet"
@@ -215,6 +238,8 @@ class DatasetStore:
         """Recompute the content hash; False means the stored files were tampered with."""
         try:
             history = self.load_symbol_history(dv)
-        except IdentityError:  # a history edited into an invalid one was tampered with
+            master = self.load_master(dv)
+        except IdentityError:  # identity data edited into an invalid state was tampered with
             return False
-        return content_hash(self.load_bars(dv), self.load_actions(dv), history) == dv.version
+        bars, actions = self.load_bars(dv), self.load_actions(dv)
+        return content_hash(bars, actions, history, master) == dv.version

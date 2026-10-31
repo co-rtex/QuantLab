@@ -108,8 +108,18 @@ def compute_features(
     return feats, adj
 
 
-def build_panel(bars: pd.DataFrame, actions: pd.DataFrame, cfg: MLConfig) -> pd.DataFrame:
-    """Long panel (date, symbol, features..., fwd_return, label, label_available_at)."""
+def build_panel(
+    bars: pd.DataFrame,
+    actions: pd.DataFrame,
+    cfg: MLConfig,
+    *,
+    instruments: pd.DataFrame | None = None,
+) -> pd.DataFrame:
+    """Long panel (date, symbol, features..., fwd_return, label, label_available_at).
+
+    ``instruments`` is an instrument master keyed like ``bars["symbol"]``; its delisting
+    returns are applied to labels whose horizon runs past the security's last bar.
+    """
     feats, adj = compute_features(bars, actions, cfg.exclude)
     close = adj
     h = cfg.horizon
@@ -117,10 +127,21 @@ def build_panel(bars: pd.DataFrame, actions: pd.DataFrame, cfg: MLConfig) -> pd.
     # inside the horizon that is the return to delisting (the engine liquidates at the last
     # close). Using adj.shift(-h) alone made the label NaN and the row was dropped, so the
     # panel only contained assets that survived to t+h: selection on future information.
-    # The exit at the last close is optimistic: a real delisting return (often a large
-    # loss for performance delistings) is not modelled until instrument identity (#9)
-    # supplies delisting returns.
     fwd = adj.ffill().shift(-h) / adj - 1
+    # Exiting at the last close is optimistic (performance delistings often lose much
+    # more), so a known delisting return compounds onto every label that reaches it, as in
+    # the engine. Without one the optimistic exit remains (documented in METHODOLOGY).
+    if instruments is not None and len(instruments):
+        rets = instruments.set_index("instrument_id")["delisting_return"].dropna()
+        positions = np.arange(len(adj))
+        for sym, r in rets.items():
+            if sym not in adj.columns:
+                continue
+            bars_at = np.flatnonzero(adj[sym].notna().to_numpy())
+            if not len(bars_at):
+                continue
+            reaches = positions + h > bars_at[-1]
+            fwd.loc[reaches, sym] = (1 + fwd.loc[reaches, sym]) * (1 + r) - 1
     dates = close.index[252 :: cfg.sample_every]
     dates = dates[dates <= close.index[-1 - h]] if len(close) > h else dates[:0]
     frames = []
@@ -244,12 +265,14 @@ def run_ml_experiment(
     actions: pd.DataFrame,
     cfg: MLConfig | None = None,
     on_progress: Callable[[float, str], None] | None = None,
+    *,
+    instruments: pd.DataFrame | None = None,
 ) -> dict[str, Any]:
     cfg = cfg or MLConfig()
     unknown = set(cfg.models) - set(MODELS)
     if unknown:
         raise ValueError(f"unknown models: {sorted(unknown)}")
-    panel = build_panel(bars, actions, cfg)
+    panel = build_panel(bars, actions, cfg, instruments=instruments)
     splits = purged_splits(panel, cfg)
     if not splits:
         raise ValueError(

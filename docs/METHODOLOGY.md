@@ -125,9 +125,18 @@ Per session `k`:
 1. Corporate actions placed on this session (see *Placement* above), applied at the open
    as one equivalent event: dividend `D` on the shares held before the open, then split
    `S`. Pending orders decided before a split are restated in post-split shares.
-2. A held symbol that has printed no bar for `delist_after_missing` consecutive sessions
-   (default 5) is treated as delisted and liquidated at its last close. The rule uses only
-   past data; recovery values in real delistings may be lower.
+2. Delistings. With an instrument master (`run_backtest(..., instruments=)`), a held
+   security is closed on the first session after its `delisting_date` at
+   `last close x (1 + delisting_return)` (a `delisting` ledger entry, which may be worth
+   0), or at its last close when the return is unknown. It cannot be bought again.
+   The delisting date is public on the day, so acting on the next session uses no
+   future data; the delisting return (final value relative to the last close, as in
+   CRSP's DLRET) is booked at that point, which is standard practice even though the
+   final value may be settled later. Otherwise (no master, or a security the master does
+   not delist), a held symbol that has printed no bar for `delist_after_missing`
+   consecutive sessions (default 5) is liquidated at its last close. That rule uses only
+   past data, but recovery values in real delistings are usually lower.
+   `meta.delistings` counts `with_return`, `return_unknown` and `by_missing_bars`.
 3. Orders decided at the previous rebalance close fill at `open[k]` (default) or
    `close[k]`, adjusted by slippage (`price * (1 ± slippage_bps/1e4)`). Commission is
    `max(commission_min, notional * commission_bps/1e4)`.
@@ -255,11 +264,13 @@ solving.
 
 * No survivorship-free real data source is configured; the synthetic generator includes
   delistings to demonstrate the effect.
-* Delisting liquidation at last close is optimistic for bankruptcies. The same applies to
-  ML labels: an asset that delists inside the label horizon exits at its last close
-  (`quantlab.ml.pipeline.build_panel`). This does not leak information, but it overstates
-  returns compared with real delisting returns, which are not modelled until permanent
-  instrument identity (#9) supplies them.
+* Without a delisting return, a delisting exits at the last close, which is optimistic
+  for bankruptcies. The same applies to ML labels: an asset that delists inside the label
+  horizon exits at its last close, unless the instrument master supplies a delisting
+  return, which is then compounded onto every label that reaches the delisting
+  (`quantlab.ml.pipeline.build_panel(..., instruments=)`). No configured vendor documents
+  delisting returns (docs/MARKET_DATA_PROVIDERS.md), so until one is licensed they are
+  unknown (NaN) and the optimistic exit applies.
 * Dividends are credited at the ex-date rather than the pay date.
 * No borrowing, shorting, margin, taxes or market impact beyond linear slippage.
 * Daily bars only.
