@@ -287,9 +287,11 @@ def run_backtest(
     # Held positions marked at a stale price: a zero-volume close, or the last close when
     # the session has no bar. Equity on stale marks is not realisable.
     stale_position_days = 0
-    # The largest share of equity on stale marks; None until something is held with
-    # positive equity.
+    zero_volume_position_days = 0  # the subset marked at a zero-volume close
+    # The largest share of equity on stale marks, and the share on the last session; None
+    # where nothing is held with positive equity.
     stale_share: float | None = None
+    final_share: float | None = None
     slip = config.slippage_bps / 1e4
     comm = config.commission_bps / 1e4
 
@@ -511,9 +513,11 @@ def run_backtest(
         equity = ledger.cash + mv
         stale_held = [s for s in ledger.positions if not traded_bar[k, col[s]]]
         stale_position_days += len(stale_held)
+        zero_volume_position_days += sum(bool(no_trade[k, col[s]]) for s in stale_held)
+        final_share = None
         if ledger.positions and equity > 0:
-            share = sum(ledger.positions[s] * prices[s] for s in stale_held) / equity
-            stale_share = share if stale_share is None else max(stale_share, share)
+            final_share = sum(ledger.positions[s] * prices[s] for s in stale_held) / equity
+            stale_share = final_share if stale_share is None else max(stale_share, final_share)
         records.append(
             {
                 "date": d,
@@ -591,6 +595,13 @@ def run_backtest(
         b_ret.iloc[0] = 0.0
         bench_series = config.initial_capital * (1 + b_ret).cumprod()
         bench_series.name = bench
+    stale_undefined: dict[str, str] = {}
+    if stale_share is None:
+        stale_undefined["max_equity_share"] = "nothing was held on a day with positive equity"
+    if final_share is None:
+        stale_undefined["final_equity_share"] = (
+            "nothing was held on the last session with positive equity"
+        )
     result = BacktestResult(
         config=config,
         strategy=strategy.describe(),
@@ -611,8 +622,12 @@ def run_backtest(
             "delistings": delist_counts,
             # Universe bars in the window printed with zero volume: not tradable (#149).
             "zero_volume_bars": int(no_trade[start_pos:].sum()),
-            # Universe symbols with bars in the window, every one of them zero volume: the
-            # backtest could never trade them (a CSV uploaded with volume 0, say).
+            # Orders rejected because their fill bar printed zero volume.
+            "no_volume_rejections": sum(r["reason"] == "no_volume" for r in rejects),
+            # Universe symbols with bars in the window, and those whose bars there all have
+            # zero volume: the backtest could never trade them (a CSV uploaded with volume
+            # 0, say).
+            "symbols_with_bars": int(has_bar[start_pos:].any(axis=0).sum()),
             "never_traded": [
                 s
                 for j, s in enumerate(universe)
@@ -622,10 +637,10 @@ def run_backtest(
             # zero-volume close, or at the last close across a missing bar, is not realisable.
             "stale_marks": {
                 "position_days": stale_position_days,
+                "zero_volume_position_days": zero_volume_position_days,
                 "max_equity_share": stale_share,
-                "undefined": {}
-                if stale_share is not None
-                else {"max_equity_share": "nothing was held on a day with positive equity"},
+                "final_equity_share": final_share,
+                "undefined": stale_undefined,
             },
             "instrument_master_unmatched": master_unmatched,
             "instrument_master": instruments is not None and len(instruments) > 0,

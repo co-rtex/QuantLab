@@ -170,16 +170,26 @@ def test_a_zombie_name_without_a_master_is_held_on_stale_marks_and_reported():
     assert res.meta["delistings"]["by_missing_bars"] == 0
     assert res.ledger.quantity("B") == pytest.approx(100.0)
     stale = res.meta["stale_marks"]
-    assert stale["position_days"] == 8 and stale["max_equity_share"] == pytest.approx(1.0)
+    assert stale["position_days"] == 8 and stale["zero_volume_position_days"] == 8
+    assert stale["max_equity_share"] == pytest.approx(1.0)
+    # NB5: still on a stale mark at the end of the window, so visible at the end too.
+    assert stale["final_equity_share"] == pytest.approx(1.0)
     assert res.meta["never_traded"] == []  # it traded in the window
+    c = _checks(res.meta)["zero_volume"]
+    assert c["status"] == "warning" and "100% at the end" in c["finding"]
 
 
 def test_a_missing_bar_under_a_holding_is_a_stale_mark_too():
+    # NB4: stale exposure from missing bars warns even with no zero-volume bar at all.
     b = [10.0, 10.0, 10.0, None, None, 10.0, 10.0, 10.0]
     bars = make_bars({"A": [10.0] * 8, "B": b})
     res = run_backtest(bars, NONE, Scripted(_dates(bars), None), _daily())
-    assert res.meta["stale_marks"]["position_days"] == 2  # held, marked at the last close
+    stale = res.meta["stale_marks"]
+    assert stale["position_days"] == 2 and stale["zero_volume_position_days"] == 0
+    assert stale["final_equity_share"] == 0.0  # it trades again before the end
     assert res.meta["zero_volume_bars"] == 0
+    c = _checks(res.meta)["zero_volume"]
+    assert c["status"] == "warning" and "missing bars) on 2 position-days" in c["finding"]
 
 
 def test_a_universe_name_that_never_traded_is_named():
@@ -196,7 +206,9 @@ def test_the_stale_mark_share_is_undefined_when_nothing_is_held():
     bars, _ = _halt_case()
     stale = run_backtest(bars, NONE, Cash(), _daily()).meta["stale_marks"]
     assert stale["position_days"] == 0 and stale["max_equity_share"] is None
+    assert stale["final_equity_share"] is None
     assert "nothing was held" in stale["undefined"]["max_equity_share"]
+    assert "last session" in stale["undefined"]["final_equity_share"]
 
 
 # ------------------------------------------------------------------- other choices
@@ -247,25 +259,50 @@ def _checks(meta: dict) -> dict[str, dict]:
     return {c["key"]: c for c in build_integrity_report(ev)["checks"]}
 
 
-def test_the_integrity_report_fails_a_universe_name_that_never_traded():
+def test_one_never_traded_name_is_a_warning_even_when_targeted():
+    # A target that cannot fill stays in cash, which is modelled correctly, and equal
+    # weight targets every name it is offered: one dead name is a warning, not a failure.
     bars = make_bars({"A": [10.0] * 6, "Z": [10.0] * 6})
     bars.loc[bars["symbol"] == "Z", "volume"] = 0.0
     cfg = BacktestConfig(rebalance="monthly", initial_capital=1000, **FREE)
-    c = _checks(run_backtest(bars, NONE, create_strategy("equal_weight"), cfg).meta)["zero_volume"]
-    assert c["status"] == "failed" and "could never be traded (Z)" in c["finding"]
+    meta = run_backtest(bars, NONE, create_strategy("equal_weight"), cfg).meta
+    assert meta["symbols_with_bars"] == 2 and meta["no_volume_rejections"] == 1
+    c = _checks(meta)["zero_volume"]
+    assert c["status"] == "warning"
+    assert "1 of 2 universe symbols" in c["finding"] and "never be traded (Z)" in c["finding"]
+    assert "must not be recorded as volume 0" in c["finding"]
 
 
-def test_the_integrity_report_warns_on_zero_volume_bars_and_states_the_stale_exposure():
+def test_the_integrity_report_fails_when_nothing_in_the_universe_ever_traded():
+    bars = make_bars({"Y": [10.0] * 6, "Z": [10.0] * 6})
+    bars["volume"] = 0.0  # a whole CSV uploaded with volume 0
+    cfg = BacktestConfig(rebalance="monthly", initial_capital=1000, **FREE)
+    res = run_backtest(bars, NONE, create_strategy("equal_weight"), cfg)
+    assert res.trades.empty and res.meta["never_traded"] == ["Y", "Z"]
+    c = _checks(res.meta)["zero_volume"]
+    assert c["status"] == "failed" and c["finding"].startswith("Nothing in the universe")
+
+
+def test_the_integrity_report_warns_when_the_run_was_affected_and_states_the_exposure():
     bars, d = _halt_case()
     c = _checks(run_backtest(bars, NONE, Scripted(d, None), _daily()).meta)["zero_volume"]
     assert c["status"] == "warning"
-    assert "4 universe bars printed zero volume" in c["finding"]
-    assert "4 position-days, at most 100% of equity" in c["finding"]
+    assert "marked at a zero-volume close on 4 position-days" in c["finding"]
+    assert "at most 100% of equity on one day and 0% at the end" in c["finding"]
     assert "not realisable" in c["finding"]
+
+
+def test_zero_volume_bars_that_did_not_affect_the_run_are_verified():
+    # NB3: B prints zero volume, but nothing was held or ordered on those bars.
+    bars, _ = _halt_case()
+    meta = run_backtest(bars, NONE, Cash(), _daily()).meta
+    c = _checks(meta)["zero_volume"]
+    assert c["status"] == "verified" and "4 universe bars printed zero volume" in c["finding"]
 
 
 def test_the_integrity_report_verifies_data_without_zero_volume_and_skips_old_results():
     bars = make_bars({"A": [10.0] * 6, "B": [10.0] * 6})
     meta = run_backtest(bars, NONE, Scripted(_dates(bars), None), _daily()).meta
-    assert _checks(meta)["zero_volume"]["status"] == "verified"
+    c = _checks(meta)["zero_volume"]
+    assert c["status"] == "verified" and c["finding"].startswith("No universe bar")
     assert "zero_volume" not in _checks({"universe": ["A"]})  # before #149: no such check
