@@ -74,8 +74,9 @@ def content_hash(
     # Identity changes what the data means (which series a ticker belongs to), so a real
     # history is part of the version. The legacy identity map is not, which keeps every
     # version written before symbol histories existed at its hash.
-    if symbol_history is not None and not is_legacy(symbol_history):
-        hist = symbol_history.sort_values(["instrument_id", "valid_from"]).reset_index(drop=True)
+    history = None if symbol_history is None else normalize_history(symbol_history)
+    if history is not None and not is_legacy(history):
+        hist = history.sort_values(["instrument_id", "valid_from"]).reset_index(drop=True)
         for col in HISTORY_COLUMNS:
             h.update(f"history.{col}".encode())
             h.update(pd.util.hash_pandas_object(hist[col], index=False).to_numpy().tobytes())

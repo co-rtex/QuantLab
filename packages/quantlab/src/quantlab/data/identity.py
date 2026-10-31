@@ -238,7 +238,7 @@ def _resolve(
     left = (
         pd.DataFrame(
             {
-                by: keys.astype(str).str.upper().to_numpy(),
+                by: keys.astype(str).str.strip().str.upper().to_numpy(),
                 "_d": pd.to_datetime(dates).astype("datetime64[ns]").to_numpy(),
                 "_pos": np.arange(len(keys)),
             }

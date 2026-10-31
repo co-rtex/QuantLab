@@ -263,7 +263,8 @@ data after a decision date leaves that decision unchanged (no look-ahead).
 | Gross ("before costs") | equity plus cumulative commissions and slippage paid; an approximation that ignores compounding of the saved costs |
 
 Undefined statistics (zero variance, fewer than two observations, no drawdown, no losing
-trades) are reported as `null` with a reason, never as `0`. "Zero variance" means a
+trades) are reported as `null` with a reason, never as `0`. This includes beta, whose
+benchmark dispersion uses the same per-period rule. "Zero variance" means a
 per-period standard deviation at or below `1e-12`, so floating-point residue is never
 annualized into a statistic: an exact index tracker has tracking error `0` and an
 undefined information ratio. When there are fewer than two observations or the initial
@@ -289,7 +290,9 @@ Prado). The statistic is the per-period Sharpe of excess returns,
 `mean(r - rf_p) / std(r - rf_p)`, which is the annualized Sharpe divided by `sqrt(252)`.
 `PSR(SR*) = Φ((SR - SR*) sqrt(n - 1) / sqrt(1 - γ3 SR + (γ4 - 1)/4 SR²))`, where γ3 and
 γ4 are the sample skewness and (non-excess) kurtosis. The DSR is the PSR against
-`SR* = E[max SR]` of the N grid trials under the null. Every trial Sharpe *and* the
+`SR* = E[max SR]` of the N grid trials under the null. N counts every configuration
+tried, including those whose Sharpe is undefined (no dispersion), so N is not
+understated; the variance comes from the defined Sharpes. Every trial Sharpe *and* the
 selected strategy's PSR/DSR use the same inputs: each run's invested window (as above)
 and the configured risk-free rate. Before #14 the selected strategy used its full window,
 including warm-up cash, with no risk-free rate, which overstated both probabilities.
@@ -299,7 +302,10 @@ records `observations` and `selected_sharpe_per_period`, so the inputs can be au
 Regime analysis classifies each day using trailing benchmark volatility and trend, with
 volatility cut points taken from expanding quantiles, so no day's regime depends on later
 data. Bootstrap Sharpe intervals use the same risk-free convention as the reported
-Sharpe.
+Sharpe and, like it, the whole requested window (warm-up cash included). They describe
+the account as experienced. The deflated Sharpe instead uses the invested window,
+because it assesses parameter *selection* (see below), so the two can differ for
+strategies with long look-backs.
 
 ## Risk (`quantlab.analytics.risk`)
 
