@@ -67,9 +67,9 @@ function PanelInputs({ res }: { res: NonNullable<MLRun["result"]> }) {
   const ex = res.panel.excluded_rows;
   const items: [string, string, string][] = [
     ["Pipeline version", res.pipeline_version == null ? "not recorded" : `v${res.pipeline_version}`, "How the panel was built; it changes whenever the same data and config could give a different panel."],
-    ["Rows excluded: no trading", recorded(ex?.untraded_21), "Zero volume in the last 21 sessions; counted only on dates that make the panel."],
+    ["Rows excluded: no trading", recorded(ex?.untraded_21), "Zero volume over its last 21 bars (its own trading days); counted only on dates that make the panel."],
     ["Dates skipped: too few names", recorded(ex?.dates_below_10_after_untraded), "Fewer than 10 names left on the date once untraded rows were removed."],
-    ["Rows with flat volume", recorded(res.panel.volume_flat_rows), "Kept: constant non-zero volume over 21 sessions, flagged to the models as an input."],
+    ["Rows with flat volume", recorded(res.panel.volume_flat_rows), "Kept: constant non-zero volume over its last 21 bars, flagged to the models as an input."],
   ];
   return (
     <section aria-labelledby="panel-construction">
