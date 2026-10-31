@@ -14,6 +14,7 @@ import structlog
 from prometheus_client import Counter, Gauge, Histogram
 from starlette.requests import Request
 from starlette.responses import Response
+from structlog.tracebacks import ExceptionDictTransformer
 
 request_id_var: contextvars.ContextVar[str | None] = contextvars.ContextVar(
     "request_id", default=None
@@ -83,7 +84,9 @@ def configure_logging(level: str = "INFO", json: bool = True) -> None:
             _add_request_id,
             structlog.processors.add_log_level,
             structlog.processors.TimeStamper(fmt="iso", utc=True),
-            structlog.processors.dict_tracebacks,
+            # Frames without their local variables: structlog's default (dict_tracebacks)
+            # logs them, so any logged 500 printed request bodies such as passwords.
+            structlog.processors.ExceptionRenderer(ExceptionDictTransformer(show_locals=False)),
             structlog.processors.JSONRenderer() if json else structlog.dev.ConsoleRenderer(),
         ],
         wrapper_class=structlog.make_filtering_bound_logger(logging.getLevelName(level)),
