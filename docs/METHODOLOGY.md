@@ -33,20 +33,41 @@ the source of truth; tests in `tests/unit` pin each definition to a golden examp
   Adjusted returns are identical for every as-of date; adjusted price levels are not, so
   strategies receive the as-of view.
 * **Ingestion gates** (`quantlab.data.quality`): a check with status `fail` blocks the
-  dataset (`enforce_gates` raises `QualityGateError` with a per-check report). The gates
-  are: invalid bars (non-finite, non-positive, negative volume, OHLC inconsistent,
-  duplicate rows); duplicate corporate actions (any repeated row, or two splits on one
-  ex-date); actions for a symbol without bars or outside its history; split ratios equal
-  to 1 or outside `[1/10000, 10000]`; a dividend at least the previous close; a declared
-  date after the ex, record or pay date, or a pay date before the record date; a bar
-  carrying a split whose total return still exceeds 25% (wrong ratio or ex-date); and a bar
-  without a split whose gross return is within 2.5% of a k-for-1 or 1-for-k split
-  signature (k ≥ 2), which suggests an unrecorded split. Pay or record dates *before* the
-  ex-date are allowed, because for distributions of 25% or more the ex-date is the first
-  business day after the payable date (FINRA Rule 11140(b)). The following are warnings
-  only: missing sessions, an ex-date without a bar, a bar dated on a non-session day,
-  stale prices, and other moves above 50%. Genuine large moves do happen, and 3-for-2
-  signatures (−33%) are too common in real data to block on.
+  dataset (`enforce_gates` raises `QualityGateError` with a per-check report). Gates are
+  reserved for input that is malformed by construction, so that legitimate market data
+  never blocks a dataset. The gates are:
+  * Invalid bars: non-finite, non-positive, negative volume, OHLC inconsistent, or
+    duplicate rows.
+  * Duplicate corporate actions: an identical repeated row, or two splits on one ex-date.
+    A same-amount regular and special dividend must be supplied as one row.
+  * Actions for a symbol without bars, or dated before its first bar.
+  * Split ratios equal to 1 or outside `[1/10000, 10000]`.
+  * A dividend of at least the previous close.
+  * A dividend of at least 10% of the previous close where the price falls by less than
+    half the dividend (for example, cents entered as dollars).
+  * A declared date after the ex, record or pay date, or a pay date before the record
+    date.
+  * A split bar whose gross total return is still about 2x or 1/2x or worse (wrong ratio,
+    wrong ex-date or a phantom split).
+
+  Pay or record dates *before* the ex-date are allowed: for distributions of 25% or more
+  the ex-date is the first business day after the payable date (FINRA Rule 11140(b)).
+
+  The following are warnings only:
+  * Missing sessions, a bar dated on a non-session day, stale prices.
+  * An ex-date without a bar (the action applies at the next bar).
+  * Actions after a symbol's last bar: announced future actions or terminal distributions,
+    which are not applied.
+  * A split bar moving more than 25%.
+  * Other moves above 50%.
+  * A move within 2.5% of a k-for-1 or 1-for-k split signature (k ≥ 2) on a bar without a
+    split.
+
+  The last warning is the signature of an unrecorded split. It stays a warning because a
+  genuine −50% or +100% day (a trial readout, a takeover, a one-tick move in a penny
+  stock) produces the same prices: telling them apart needs a second source
+  (reconciliation, #12). Spin-offs are not modelled (only splits and cash dividends), so a
+  parent's ex-date drop shows up as a large move.
 * **Calendar**: rule-based NYSE full-day holidays (verified against published session
   counts for 2021–2024). Early closes and one-off closures are not modelled.
 * **Dataset versions** are content-addressed (SHA-256 of a canonical serialization) and
@@ -81,8 +102,8 @@ Per session `k`:
 Symbols that only list after the backtest window are excluded (recorded in
 `meta.not_listed_in_window`). `meta.corporate_actions` counts the universe's actions by
 placement: `on_ex_date`, `applied_next_session` (ex-date without a bar for the symbol,
-applied at its next bar) and `outside_history` (not applied; such datasets fail the
-ingestion gates).
+applied at its next bar) and `outside_history` (before the symbol's first bar or after
+its last bar; not applied).
 
 No leverage or shorting is modelled. Cash earns nothing (the risk-free rate is used only in
 risk-adjusted ratios).

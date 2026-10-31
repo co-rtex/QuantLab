@@ -14,8 +14,8 @@ after its ex-date. For clean data that is the ex-date itself. For an ex-date on 
 non-session day, or on a session where the symbol printed no bar, it is the symbol's next
 bar: nothing traded in between, so the holders and the price discontinuity are the same,
 and the factor uses a close that really is the first post-event price. Actions dated
-before a symbol's first bar or after its last bar are outside its history and ignored (the
-ingestion gates in ``quantlab.data.quality`` reject them).
+before a symbol's first bar or after its last bar are outside its history and are not
+applied (``quantlab.data.quality`` rejects the former and warns about the latter).
 
 **Ordering.** Several actions placed on one bar are composed in ex-date order into one
 equivalent event ``(S, D)`` per share held before the bar: a split multiplies the running
@@ -38,7 +38,7 @@ from quantlab.data.schema import wide
 
 # Same-ex-date tie-break: the dividend is paid before the split.
 _KIND_ORDER = {"dividend": 0, "split": 1}
-PLACEMENTS = ("ex_date", "next_bar", "outside_history", "unknown_symbol")
+PLACEMENTS = ("ex_date", "next_bar", "before_history", "after_history", "no_bars")
 
 
 def place_actions(close_wide: pd.DataFrame, actions: pd.DataFrame) -> pd.DataFrame:
@@ -46,8 +46,9 @@ def place_actions(close_wide: pd.DataFrame, actions: pd.DataFrame) -> pd.DataFra
 
     Returns the actions sorted by (symbol, ex_date, dividend before split) with extra
     columns ``row`` (position in ``close_wide`` where the action takes effect, ``-1`` when
-    it is not applied), ``col`` (column position, ``-1`` for an unknown symbol) and
-    ``placement`` (one of :data:`PLACEMENTS`).
+    it is not applied), ``col`` (column position, ``-1`` for a symbol absent from the
+    frame) and ``placement`` (one of :data:`PLACEMENTS`; ``no_bars`` means the symbol has
+    no bar at all).
     """
     out = actions[["symbol", "ex_date", "kind", "value"]].copy()
     out["_order"] = out["kind"].map(_KIND_ORDER)
@@ -56,7 +57,7 @@ def place_actions(close_wide: pd.DataFrame, actions: pd.DataFrame) -> pd.DataFra
     n = len(out)
     rows = np.full(n, -1, dtype=np.int64)
     cols = np.asarray(close_wide.columns.get_indexer(out["symbol"]), dtype=np.int64)
-    placement = np.where(cols >= 0, "outside_history", "unknown_symbol").astype(object)
+    placement = np.full(n, "no_bars", dtype=object)
     index = close_wide.index
     close = close_wide.to_numpy(dtype=float)
     ex = pd.DatetimeIndex(out["ex_date"])
@@ -72,7 +73,8 @@ def place_actions(close_wide: pd.DataFrame, actions: pd.DataFrame) -> pd.DataFra
         r = np.where(inside, bar_rows[np.minimum(pos, len(bar_rows) - 1)], -1)
         rows[sel] = r
         on_ex = inside & (index[np.maximum(r, 0)] == e)
-        placement[sel] = np.where(inside, np.where(on_ex, "ex_date", "next_bar"), "outside_history")
+        outside = np.where(e < bar_dates[0], "before_history", "after_history")
+        placement[sel] = np.where(inside, np.where(on_ex, "ex_date", "next_bar"), outside)
     out["row"] = rows
     out["col"] = cols
     out["placement"] = placement

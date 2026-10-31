@@ -175,11 +175,9 @@ def test_place_actions_reports_rows_and_placement():
     assert placed.loc[("A", d[1]), "placement"] == "ex_date"
     assert placed.loc[("A", d[2]), "row"] == 3
     assert placed.loc[("A", d[2]), "placement"] == "next_bar"
-    assert placed.loc[("A", d[3] + pd.Timedelta(days=9)), "placement"] == "outside_history"
-    assert placed.loc[("ZZZ", d[1]), "placement"] == "unknown_symbol"
-    assert (
-        placed.loc[placed["placement"].isin(["outside_history", "unknown_symbol"]), "row"] == -1
-    ).all()
+    assert placed.loc[("A", d[3] + pd.Timedelta(days=9)), "placement"] == "after_history"
+    assert placed.loc[("ZZZ", d[1]), "placement"] == "no_bars"
+    assert (placed.loc[placed["placement"].isin(["after_history", "no_bars"]), "row"] == -1).all()
 
 
 # ------------------------------------------------------------- property: conservation
@@ -284,15 +282,21 @@ def _gate_cases() -> dict[str, tuple[pd.DataFrame, pd.DataFrame, str]]:
     d = _sessions(bars)
     split = {"symbol": "A", "ex_date": d[5], "kind": "split", "value": 2.0}
     return {
-        # The audit defect: the split row is missing, so the data shows a 50% loss.
-        "missing_split": (bars, _acts([]), "split_like_returns"),
-        # A split recorded one session late leaves the drop unexplained on its true date.
+        # A split recorded one session late: its bar shows a 2x jump the ratio cannot
+        # explain (the true ex-date shows a -50% move, a warning on its own).
         "late_split": (
             bars,
             _acts([{**split, "ex_date": d[6]}]),
-            "split_like_returns",
+            "split_price_mismatch",
         ),
-        "wrong_ratio": (bars, _acts([{**split, "value": 3.0}]), "split_price_mismatch"),
+        # 4-for-1 recorded for a 2-for-1 split: the split bar doubles in value.
+        "wrong_ratio": (bars, _acts([{**split, "value": 4.0}]), "split_price_mismatch"),
+        # 25.0 instead of 0.25: the price does not drop, so the data fabricates a +25% day.
+        "dividend_in_wrong_unit": (
+            bars,
+            _acts([split, {**split, "ex_date": d[2], "kind": "dividend", "value": 25.0}]),
+            "dividend_price_mismatch",
+        ),
         "phantom_split": (
             bars,
             _acts([split, {**split, "ex_date": d[2]}]),
@@ -303,21 +307,6 @@ def _gate_cases() -> dict[str, tuple[pd.DataFrame, pd.DataFrame, str]]:
             bars,
             _acts([split, {**split, "symbol": "ZZZ"}]),
             "orphan_corporate_actions",
-        ),
-        "after_last_bar": (
-            bars,
-            _acts(
-                [
-                    split,
-                    {
-                        **split,
-                        "ex_date": d[-1] + pd.Timedelta(days=30),
-                        "kind": "dividend",
-                        "value": 1.0,
-                    },
-                ]
-            ),
-            "corporate_actions_outside_history",
         ),
         "before_first_bar": (
             bars,
@@ -332,7 +321,7 @@ def _gate_cases() -> dict[str, tuple[pd.DataFrame, pd.DataFrame, str]]:
                     },
                 ]
             ),
-            "corporate_actions_outside_history",
+            "corporate_actions_before_history",
         ),
         "noop_split": (
             bars,
@@ -387,6 +376,98 @@ def test_genuine_large_move_is_a_warning_not_a_gate():
     assert by["extreme_returns"].status == "warn"
     assert by["split_like_returns"].status == "pass"
     enforce_gates(report)
+
+
+def _warn_cases() -> dict[str, tuple[pd.DataFrame, pd.DataFrame, str]]:
+    """Legitimate real-market patterns that must be reported but never block ingestion."""
+    bars, _ = _base()
+    d = _sessions(bars)
+    split = {"symbol": "A", "ex_date": d[5], "kind": "split", "value": 2.0}
+    return {
+        # Prices alone cannot tell an unrecorded split from a genuine move of that size.
+        "missing_split": (bars, _acts([]), "split_like_returns"),
+        "penny_stock_tick": (
+            make_bars({"P": [0.02, 0.02, 0.01, 0.01]}),
+            _acts([]),
+            "split_like_returns",
+        ),
+        "biotech_readout": (
+            make_bars({"X": [40.0, 40.4, 20.2, 20.0]}),
+            _acts([]),
+            "split_like_returns",
+        ),
+        "takeover_bid": (
+            make_bars({"T": [10.0, 10.1, 20.4, 20.5]}),
+            _acts([]),
+            "split_like_returns",
+        ),
+        # 1-for-10 reverse split of a distressed name that also falls 30% that day.
+        "reverse_split_selloff": (
+            make_bars({"R": [0.5, 0.52, 0.5, 3.5, 3.4]}),
+            _acts(
+                [
+                    {
+                        "symbol": "R",
+                        "ex_date": make_bars({"R": [1.0] * 4})["date"].iloc[3],
+                        "kind": "split",
+                        "value": 0.1,
+                    }
+                ]
+            ),
+            "split_bar_large_move",
+        ),
+        # 3-for-1 recorded for a 2-for-1 split: +51%, worth a look but not certain.
+        "ratio_off_by_half": (bars, _acts([{**split, "value": 3.0}]), "split_bar_large_move"),
+        # An announced action, or a terminal distribution after the last trade.
+        "after_last_bar": (
+            bars,
+            _acts(
+                [
+                    split,
+                    {
+                        **split,
+                        "ex_date": d[-1] + pd.Timedelta(days=30),
+                        "kind": "dividend",
+                        "value": 1.0,
+                    },
+                ]
+            ),
+            "corporate_actions_after_history",
+        ),
+    }
+
+
+@pytest.mark.parametrize("case", sorted(_warn_cases()))
+def test_legitimate_patterns_warn_but_do_not_block(case):
+    bars, acts, check = _warn_cases()[case]
+    report = assess_quality(bars, acts)
+    by = {c.name: c for c in report.checks}
+    assert by[check].status == "warn", [(c.name, c.status) for c in report.checks]
+    enforce_gates(report)
+
+
+def test_dividend_on_a_symbols_first_bar_passes():
+    # A download window that starts on an ex-date has no previous close to compare with.
+    bars = make_bars({"Y": [50.0, 50.5, 50.2, 50.4]})
+    acts = _acts(
+        [{"symbol": "Y", "ex_date": bars["date"].iloc[0], "kind": "dividend", "value": 0.25}]
+    )
+    assert assess_quality(bars, acts).status == "pass"
+
+
+def test_large_special_dividend_with_matching_price_drop_passes():
+    # $30 special dividend on a $100 stock that opens about $30 lower.
+    bars = make_bars({"S": [100.0, 101.0, 71.5, 72.0]})
+    acts = _acts(
+        [{"symbol": "S", "ex_date": bars["date"].iloc[2], "kind": "dividend", "value": 30.0}]
+    )
+    assert assess_quality(bars, acts).status == "pass"
+
+
+def test_quality_accepts_legacy_four_column_actions():
+    bars, acts = _base()
+    report = assess_quality(bars, acts[["symbol", "ex_date", "kind", "value"]])
+    assert report.status == "pass"
 
 
 def test_ex_date_without_a_bar_warns_but_does_not_block():

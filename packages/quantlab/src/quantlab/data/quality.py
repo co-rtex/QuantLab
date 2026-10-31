@@ -4,13 +4,18 @@ Each check yields a status (``pass`` / ``warn`` / ``fail``), a count and a small
 offending rows, so the report remains useful for large datasets.
 
 A ``fail`` is an **ingestion gate**: :func:`enforce_gates` raises
-:class:`QualityGateError` and the dataset must not be registered. Gates cover inputs that
-are malformed or would silently corrupt returns: invalid or duplicate bars, duplicate
-actions, actions for unknown symbols or outside a symbol's history, impossible split
-ratios or dividends, impossible action date order, and price moves that look like an
-unrecorded or misrecorded split. A ``warn`` marks something a researcher should look at
-but that the pipeline handles correctly: missing sessions, an ex-date without a bar,
-genuine large moves and stale prices.
+:class:`QualityGateError` and the dataset must not be registered. Gates are reserved for
+input that is malformed *by construction*, so that legitimate real-market data never
+blocks a dataset: invalid or duplicate bars, duplicate actions, actions for symbols
+without bars or dated before a symbol's first bar, impossible split ratios, dates or
+dividends, a split bar whose price change the ratio cannot explain, and a large dividend
+that the price does not reflect.
+
+A ``warn`` marks something a researcher should look at but that prices alone cannot
+settle, or that the pipeline handles correctly: missing sessions, an ex-date without a
+bar, actions after a symbol's last bar, stale prices, large moves, and moves matching a
+split ratio on a bar without a split. The last can be an unrecorded split or a genuine
+-50% / +100% day; telling them apart needs a second source (reconciliation).
 """
 
 from __future__ import annotations
@@ -23,13 +28,13 @@ import pandas as pd
 
 from quantlab.data.adjust import _matrices, place_actions
 from quantlab.data.calendar import trading_days
-from quantlab.data.schema import ACTION_DATE_COLUMNS
+from quantlab.data.schema import ACTION_DATE_COLUMNS, normalize_actions
 
 Status = Literal["pass", "warn", "fail"]
 SAMPLE = 5
 # Gross one-period returns that an unrecorded (or extra) k-for-1 or 1-for-k split produces
 # on an otherwise quiet day. 3-for-2 and smaller ratios are left out: a -33% day is too
-# common in real data to block ingestion on.
+# common in real data to be worth flagging.
 SPLIT_SIGNATURES = (2, 3, 4, 5, 6, 8, 10, 15, 20, 25, 30, 40, 50, 100)
 
 
@@ -103,18 +108,23 @@ def assess_quality(
     split_mismatch: float = 0.25,
     split_tolerance: float = 0.025,
     max_split_ratio: float = 10_000.0,
+    dividend_yield_check: float = 0.10,
     stale_run: int = 5,
     as_of: pd.Timestamp | None = None,
 ) -> QualityReport:
-    """Run every check on canonical (normalized) bars and actions.
+    """Run every check on canonical bars and actions.
 
     * ``extreme_return``: |total return| above this is reported (warning).
-    * ``split_mismatch``: |total return| above this on a bar carrying a split means the
-      ratio or the ex-date does not explain the price change (gate).
+    * ``split_mismatch``: |total return| above this on a bar carrying a split is reported
+      (warning); a gross return of about 2x or 1/2x or worse there is a gate, because the
+      ratio or the ex-date cannot be right.
     * ``split_tolerance``: relative distance from a split signature (``SPLIT_SIGNATURES``)
-      within which a gross return on a bar without a split is split-like (gate).
+      within which a gross return counts as split-like.
     * ``max_split_ratio``: a split ratio equal to 1 or outside ``[1/max, max]`` is invalid.
+    * ``dividend_yield_check``: a dividend of at least this fraction of the previous close
+      must be matched by a price drop of at least half the dividend (gate).
     """
+    actions = normalize_actions(actions)
     cols = ["symbol", "date"]
     checks: list[QualityCheck] = []
 
@@ -190,7 +200,16 @@ def assess_quality(
     close = clean.pivot(index="date", columns="symbol", values="close").sort_index()
     placed = place_actions(close, actions)
     checks.extend(_action_checks(actions, placed, max_split_ratio))
-    checks.extend(_return_checks(close, placed, extreme_return, split_mismatch, split_tolerance))
+    checks.extend(
+        _return_checks(
+            close,
+            placed,
+            extreme_return=extreme_return,
+            split_mismatch=split_mismatch,
+            split_tolerance=split_tolerance,
+            dividend_yield_check=dividend_yield_check,
+        )
+    )
 
     stale_rows = []
     for sym in close.columns:
@@ -232,8 +251,9 @@ def _action_checks(
     key = ["symbol", "ex_date", "kind"]
     show = [*key, "value"]
     splits = actions["kind"] == "split"
-    # Two splits on one ex-date contradict each other even with different ratios; two
-    # dividends with different amounts can be a regular and a special dividend.
+    # An identical repeated row is far more often a duplicated record than two equal
+    # payments, so it blocks (a same-amount regular and special dividend must be supplied
+    # as one row). Two splits on one ex-date contradict each other whatever the ratios.
     repeated = actions.duplicated([*key, "value"], keep=False) | (
         splits & actions.duplicated(key, keep=False)
     )
@@ -245,6 +265,10 @@ def _action_checks(
     misordered = (actions["declared_date"] > first_known) | (
         actions["pay_date"] < actions["record_date"]
     )
+
+    def placed_as(*kinds: str) -> pd.DataFrame:
+        return placed.loc[placed["placement"].isin(kinds), show]
+
     return [
         _check(
             "duplicate_corporate_actions",
@@ -254,19 +278,26 @@ def _action_checks(
         ),
         _check(
             "orphan_corporate_actions",
-            placed.loc[placed["placement"] == "unknown_symbol", show],
+            placed_as("no_bars"),
             "Corporate actions for a symbol with no bars",
             True,
         ),
         _check(
-            "corporate_actions_outside_history",
-            placed.loc[placed["placement"] == "outside_history", show],
-            "Corporate actions dated before a symbol's first bar or after its last bar",
+            "corporate_actions_before_history",
+            placed_as("before_history"),
+            "Corporate actions dated before the symbol's first bar",
             True,
         ),
         _check(
+            "corporate_actions_after_history",
+            placed_as("after_history"),
+            "Corporate actions dated after the symbol's last bar (announced, or a terminal "
+            "distribution after delisting); not applied",
+            False,
+        ),
+        _check(
             "corporate_action_ex_date_without_bar",
-            placed.loc[placed["placement"] == "next_bar", show],
+            placed_as("next_bar"),
             "Ex-date has no bar for the symbol; the action applies at its next bar",
             False,
         ),
@@ -288,9 +319,11 @@ def _action_checks(
 def _return_checks(
     close: pd.DataFrame,
     placed: pd.DataFrame,
+    *,
     extreme_return: float,
     split_mismatch: float,
     split_tolerance: float,
+    dividend_yield_check: float,
 ) -> list[QualityCheck]:
     """Checks on bar-to-bar total returns, computed exactly as ``adjust.total_returns``."""
     splits, divs = _matrices(close.shape, placed)
@@ -299,17 +332,25 @@ def _return_checks(
     with np.errstate(invalid="ignore", divide="ignore"):
         ret = (splits * c + divs) / prev - 1.0
         log_gross = np.abs(np.log1p(ret))
+        # Price drop explained per share held before the bar (split-neutral).
+        drop = prev - splits * c
     defined = np.isfinite(ret)
     has_split = splits != 1.0
+    has_div = (divs > 0) & np.isfinite(prev)
     tol = np.log1p(split_tolerance)
     near = np.zeros(ret.shape, dtype=bool)
     for k in SPLIT_SIGNATURES:
         near |= np.abs(log_gross - np.log(k)) <= tol
     split_like = defined & ~has_split & near
-    mismatch = defined & has_split & (np.abs(ret) > split_mismatch)
+    split_wrong = defined & has_split & (log_gross >= np.log(2.0) - tol)
+    split_large = defined & has_split & (np.abs(ret) > split_mismatch) & ~split_wrong
     with np.errstate(invalid="ignore"):
-        div_too_big = (divs > 0) & ~(divs < prev)
-    extreme = defined & (np.abs(ret) > extreme_return) & ~split_like & ~mismatch
+        div_too_big = has_div & (divs >= prev)
+        div_no_drop = (
+            has_div & ~div_too_big & (divs >= dividend_yield_check * prev) & (drop < 0.5 * divs)
+        )
+    explained = split_like | split_wrong | split_large | div_no_drop
+    extreme = defined & (np.abs(ret) > extreme_return) & ~explained
 
     def cells(mask: np.ndarray, **extra: np.ndarray) -> pd.DataFrame:
         r, j = np.nonzero(mask)
@@ -327,15 +368,9 @@ def _return_checks(
 
     return [
         _check(
-            "split_like_returns",
-            cells(split_like),
-            "Price change matching a split ratio on a bar without a split (unrecorded split?)",
-            True,
-        ),
-        _check(
             "split_price_mismatch",
-            cells(mismatch, split=splits),
-            f"|total return| > {split_mismatch:.0%} on a split bar (wrong ratio or ex-date?)",
+            cells(split_wrong, split=splits),
+            "Total return of 2x or 1/2x or worse on a split bar: the ratio or ex-date is wrong",
             True,
         ),
         _check(
@@ -345,10 +380,30 @@ def _return_checks(
             True,
         ),
         _check(
+            "dividend_price_mismatch",
+            cells(div_no_drop, dividend=divs),
+            f"Dividend of >= {dividend_yield_check:.0%} of the previous close with less than "
+            "half of it reflected in the price (amount in the wrong unit?)",
+            True,
+        ),
+        _check(
+            "split_like_returns",
+            cells(split_like),
+            "Price change matching a split ratio on a bar without a split: an unrecorded "
+            "split or a genuine move; prices alone cannot tell, so check another source",
+            False,
+        ),
+        _check(
+            "split_bar_large_move",
+            cells(split_large, split=splits),
+            f"|total return| > {split_mismatch:.0%} on a split bar (check the ratio)",
+            False,
+        ),
+        _check(
             "extreme_returns",
             cells(extreme),
-            f"|total return| > {extreme_return:.0%} after corporate-action adjustment "
-            "and not split-like",
+            f"|total return| > {extreme_return:.0%} after corporate-action adjustment, "
+            "not flagged by another check",
             False,
         ),
     ]

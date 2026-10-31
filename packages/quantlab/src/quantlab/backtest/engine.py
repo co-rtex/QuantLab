@@ -196,7 +196,9 @@ def run_backtest(
     action_counts = {
         "on_ex_date": int(placement.get("ex_date", 0)),
         "applied_next_session": int(placement.get("next_bar", 0)),
-        "outside_history": int(placement.get("outside_history", 0)),
+        "outside_history": int(
+            placement.get("before_history", 0) + placement.get("after_history", 0)
+        ),
     }
 
     start_pos = 0 if config.start is None else int(dates.searchsorted(pd.Timestamp(config.start)))
