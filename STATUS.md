@@ -1,6 +1,6 @@
 # Status (authoritative handoff)
 
-_Last updated: 2026-10-31 (lead integration cycle 2: 105 PRs merged before this update, per `gh pr list --state merged`; main `0939811`)_
+_Last updated: 2026-10-31 (lead integration cycle 2: 112 PRs merged before this update, per `gh pr list --state merged`; main `6eaf2d9`)_
 
 ## Where things stand
 All roadmap phases 0–10 are implemented. An independent audit on 2026-10-30
@@ -298,12 +298,13 @@ lives in the repository's git directory, so it covers every worktree of this clo
 a separate clone.
 
 ## Next steps (issues carry owners and acceptance criteria)
-1. **Release blockers** (docs/RELEASE_READINESS.md):
-   * **#162** (P1, Agent 2): workers rejoin after an unclean exit, and compose restart
-     policies;
-   * **#163** (P1, Agent 3): memory-exhausting backtests within the limits.
-2. **Agent 2, then:** #167 (per-attempt timeout), #165 (worker metrics), #166 (CSP).
-3. **Agent 3, then:** #164 (adjuster look-ahead test), #160 (benchmark contention).
+1. **Release blockers fixed:** #162 (in #170) and #163 (in #174). Also merged: #164 (in
+   #172), #167 (in #171, migration M5) and #160 (in #176). See
+   docs/RELEASE_READINESS.md, "Status update".
+2. **Agent 2:** #165 (worker metrics), then #175 (Docker VM vs container limits), then
+   #166 (CSP).
+3. **Lead:** after #165, an independent confirmation of job recovery on merged main, then
+   the private release-candidate decision.
 3. **Lead:** integrate.
 4. **User decisions (2026-10-31):**
    * Public deployment and paid infrastructure **stay blocked** (#39 gate, any
