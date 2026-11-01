@@ -90,6 +90,12 @@ class Settings(BaseSettings):
     environment: Literal["development", "test", "production"] = "development"
     database_url: str = "postgresql+psycopg://quantlab:quantlab@localhost:5433/quantlab"
     redis_url: str = "redis://localhost:6380/0"
+    # Seconds one Redis call waits for a connection, then for each reply (#200). The API's
+    # calls are bounded by them; RQ raises the reply timeout of a worker's connection to its
+    # blocking dequeue's (415 s), so a worker is not. 5 s is redis-py's default, set here
+    # rather than inherited from a library that changed it before.
+    redis_connect_timeout_seconds: float = Field(5.0, gt=0, le=60)
+    redis_socket_timeout_seconds: float = Field(5.0, gt=0, le=60)
     data_dir: Path = Path("var/data")
     # Production must set one. Elsewhere an unset secret is generated once and shared by all
     # processes through ``data_dir`` (see _shared_dev_secret).

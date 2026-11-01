@@ -147,8 +147,17 @@ A worker, reaper or API host with a skewed clock no longer moves any job deadlin
     `error`, where an outage logs `ConnectionError` or `TimeoutError`.
 * **A Redis that accepts connections but doesn't answer** (a hung server, a network that
   drops packets) is different from one that is down.
-  * A connection attempt gives up after 5 s (redis-py's default connect timeout).
-  * Once connected, a worker's call blocks for up to 415 s: RQ raises the connection's
+  * A connection attempt gives up after 5 s (`QUANTLAB_REDIS_CONNECT_TIMEOUT_SECONDS`).
+  * **The API:** each call gives up after 5 s (`QUANTLAB_REDIS_SOCKET_TIMEOUT_SECONDS`),
+    once, without retries (#200). Then:
+    * `/api/v1/ready` reports 503 with `redis: error`;
+    * the login and invitation rate limits are counted in each API process instead, so
+      they still limit;
+    * bar reads skip the cache (`"cache": "bypass"`);
+    * a submitted job stays `queued` until the reaper delivers it, once Redis answers.
+    A request that makes several calls waits for each. A login makes three (two when the
+    password is wrong; measured), so it takes about 15 s while Redis hangs.
+  * **A worker:** once connected, a call blocks for up to 415 s: RQ raises the connection's
     socket timeout to its dequeue timeout plus 10 s (`worker_ttl` 420 − 15 + 10), so a
     blocking dequeue isn't cut short. That is about 7 minutes per attempt.
   * Meanwhile the horse monitor is blocked, and with it its backstop kill of a horse
