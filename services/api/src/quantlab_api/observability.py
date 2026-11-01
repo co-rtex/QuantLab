@@ -242,26 +242,46 @@ def _has_header(path: str) -> bool:
         return False
 
 
+def _file_order(path: str) -> tuple[int, int, str]:
+    """Archives first, then each process's files by pid (see :func:`worker_collector`)."""
+    owner = os.path.basename(path)[: -len(".db")].rsplit("_", 1)[-1]
+    if owner == "archive":
+        return (0, 0, path)
+    return (1, int(owner), path) if owner.isdigit() else (2, 0, path)
+
+
+def worker_collector() -> type:
+    """MultiProcessCollector as a worker's endpoint needs it (#165).
+
+    * It skips a file still being created. A new work horse opens each of its files empty
+      and then sizes it, and a scrape that listed one in between failed reading 0 bytes
+      (``unpack_from requires a buffer of at least 4 bytes``); every job is a new horse.
+      Such a file holds nothing yet, and once it has its header it reads correctly.
+    * It adds files in a fixed order, archives first and then by pid. Floating-point sums
+      depend on order, so the directory's own order made float series (a histogram's
+      ``_sum``) wobble in the last bit, and Prometheus reads any drop in a counter as a
+      reset. In this order a fold adds to the archive exactly the term the scrape added
+      next, so a scrape gives the same bits before and after it (while pids increase).
+    """
+    from prometheus_client.multiprocess import MultiProcessCollector
+
+    class WorkerCollector(MultiProcessCollector):
+        def collect(self) -> Any:
+            files = sorted(glob.glob(os.path.join(self._path, "*.db")), key=_file_order)
+            return self.merge([f for f in files if _has_header(f)], accumulate=True)  # type: ignore[no-untyped-call]
+
+    return WorkerCollector
+
+
 def worker_metrics_app(token: str | None) -> WSGIApp:
     """``GET /metrics`` with this container's samples, behind the API's bearer token.
 
     ``token`` None (development) serves without one, as the API does.
     """
     from prometheus_client import CONTENT_TYPE_LATEST, CollectorRegistry, generate_latest
-    from prometheus_client.multiprocess import MultiProcessCollector
-
-    class Collector(MultiProcessCollector):
-        """Skips a file still being created. A new work horse opens each of its files empty
-        and then sizes it, and a scrape that listed it in between failed reading 0 bytes
-        (``unpack_from requires a buffer of at least 4 bytes``); every job is a new horse.
-        Such a file holds nothing yet, and once it has its header it reads correctly."""
-
-        def collect(self) -> Any:
-            files = glob.glob(os.path.join(self._path, "*.db"))
-            return self.merge([f for f in files if _has_header(f)], accumulate=True)  # type: ignore[no-untyped-call]
 
     registry = CollectorRegistry()
-    Collector(registry)  # type: ignore[no-untyped-call]
+    worker_collector()(registry)
 
     def app(environ: dict[str, Any], start_response: Callable[..., Any]) -> Iterable[bytes]:
         if environ.get("PATH_INFO") != "/metrics" or environ.get("REQUEST_METHOD") != "GET":
