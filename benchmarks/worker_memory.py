@@ -187,6 +187,7 @@ def one(
         }
     t = time.time()
     since = datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+    load_start = harness.load_snapshot()  # contention, next to the job's memory figures
     sampler.start()
     job_id = r.json()["job"]["id"]
     try:
@@ -213,6 +214,7 @@ def one(
         "oom_classified_logged": worker_log.count("job_out_of_memory"),
         "reaper_requeues_logged": len(REQUEUED.findall(reaper_log)),
         "container": cid[:12],
+        "load": {"start": load_start, "end": harness.load_snapshot()},
         "wall_s": round(time.time() - t, 1),
         "anon_peak_mb": round(anon / 2**20, 1),
         "anon_samples": sampler.samples,
