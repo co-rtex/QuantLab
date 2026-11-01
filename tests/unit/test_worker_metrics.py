@@ -5,6 +5,7 @@ from __future__ import annotations
 import io
 import json
 import os
+import re
 import shutil
 import subprocess
 from pathlib import Path
@@ -138,4 +139,11 @@ def test_each_worker_start_gets_an_empty_multiprocess_directory() -> None:
     ).stdout
     worker = json.loads(out)["services"]["worker"]
     directory = worker["environment"]["PROMETHEUS_MULTIPROC_DIR"]
-    assert directory in worker["tmpfs"]
+    mounts = dict(m.partition(":")[::2] for m in worker["tmpfs"])
+    assert directory in mounts
+    # Writable by the image's user: a default tmpfs is root's, and the worker then failed
+    # at import with PermissionError on its first metric file (found by the live probe).
+    uid = re.search(r"useradd [^\n]*--uid (\d+)", (ROOT / "services/api/Dockerfile").read_text())
+    assert uid is not None
+    options = dict(o.split("=", 1) for o in mounts[directory].split(","))
+    assert options["uid"] == uid.group(1) and options["gid"] == uid.group(1)
