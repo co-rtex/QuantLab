@@ -781,6 +781,43 @@ def ml_task(ctx: JobContext) -> Finalizer:
     return finalize
 
 
+@handler("optimize")
+def optimize_task(ctx: JobContext) -> Finalizer:
+    """Portfolio optimization in the worker, not the API process (#224)."""
+    from quantlab_api.models import OptimizationRun
+    from quantlab_api.optimization import OptimizeIn, compute
+
+    run_id = uuid.UUID(ctx.payload["optimization_run_id"])
+    with SessionLocal() as db:
+        run = db.get(OptimizationRun, run_id)
+        if run is None:
+            raise PermanentJobError("optimization run not found")
+        dv_row = db.get(DatasetVersion, run.dataset_version_id)
+        ds = db.get(Dataset, dv_row.dataset_id) if dv_row else None
+        if dv_row is None or ds is None:
+            raise PermanentJobError("dataset version not found")
+        body = OptimizeIn.model_validate(run.params)
+        slug, version_hash, synthetic = ds.slug, dv_row.version_hash, dv_row.is_synthetic
+    ctx.heartbeat(0.02, "loading bars", force=True)
+    store = dataset_store()
+    doc = compute(
+        store,
+        store.open(slug, version_hash),
+        body,
+        synthetic,
+        on_step=lambda f, m: ctx.heartbeat(0.05 + 0.9 * f, m),
+    )
+
+    def finalize(db: Session) -> dict[str, Any]:
+        row = db.get(OptimizationRun, run_id)
+        if row is None:
+            raise PermanentJobError("optimization run was deleted")
+        row.result = doc
+        return {"message": f"{len(doc['results'])} allocations over {len(doc['symbols'])} symbols"}
+
+    return finalize
+
+
 @handler("dataset.csv")
 def csv_dataset_task(ctx: JobContext) -> Finalizer:
     """Validate and version an uploaded CSV dataset (staged by the upload endpoint)."""

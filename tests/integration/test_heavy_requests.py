@@ -1,5 +1,6 @@
 """The heavy routes refuse rather than stack up (#223): 503 server_busy with Retry-After
-when their process has no free slot, and optimize also 429 past its per-user limit."""
+when their process has no free slot. Optimization is a worker job since #224, so it takes
+no slot; its submissions keep the per-user limit (429)."""
 
 from __future__ import annotations
 
@@ -36,13 +37,14 @@ def _assert_busy(r) -> None:  # type: ignore[no-untyped-def]
     assert r.json()["error"]["code"] == "server_busy"
 
 
-def test_optimize_is_refused_while_the_process_is_busy(client, seeded, busy) -> None:
+def test_optimize_is_queued_while_the_process_is_busy(client, seeded, busy) -> None:
+    """#224: the work runs in a worker, so a busy API process still accepts it."""
     r = client.post(
-        f"/api/v1/dataset-versions/{seeded['dv']}/optimize",
+        f"/api/v1/dataset-versions/{seeded['dv']}/optimizations",
         headers=seeded["headers"],
         json=OPTIMIZE,
     )
-    _assert_busy(r)
+    assert r.status_code == 202, r.text
 
 
 def test_the_portfolio_ledger_routes_are_refused_while_busy(client, seeded, monkeypatch) -> None:
@@ -139,31 +141,11 @@ def test_access_is_checked_before_a_slot_is_taken(client, seeded, monkeypatch) -
         limits.reset_heavy_slots()
 
 
-def test_a_busy_refusal_does_not_spend_the_optimize_budget(client, seeded, monkeypatch) -> None:
-    """#223 review: a 503 server_busy did no work, so it is not one of the user's limit."""
-    monkeypatch.setattr(get_settings(), "rate_limit_optimize_per_minute", 2)
-    monkeypatch.setattr(get_settings(), "heavy_requests_per_process", 1)
-    limits.reset_heavy_slots()
-    url = f"/api/v1/dataset-versions/{seeded['dv']}/optimize"
-    sem = limits._heavy_semaphore()
-    assert sem.acquire(blocking=False)
-    try:
-        refused = [client.post(url, headers=seeded["headers"], json=OPTIMIZE) for _ in range(3)]
-    finally:
-        sem.release()
-        limits.reset_heavy_slots()
-    assert [r.status_code for r in refused] == [503, 503, 503]
-    codes = [
-        client.post(url, headers=seeded["headers"], json=OPTIMIZE).status_code for _ in range(3)
-    ]
-    assert codes == [200, 200, 429]  # the full budget of 2 is still there
-
-
 def test_optimize_has_a_per_user_rate_limit(client, seeded, monkeypatch) -> None:
     monkeypatch.setattr(get_settings(), "rate_limit_optimize_per_minute", 2)
-    url = f"/api/v1/dataset-versions/{seeded['dv']}/optimize"
+    url = f"/api/v1/dataset-versions/{seeded['dv']}/optimizations"
     out = [client.post(url, headers=seeded["headers"], json=OPTIMIZE) for _ in range(3)]
-    assert [r.status_code for r in out] == [200, 200, 429]
+    assert [r.status_code for r in out] == [202, 202, 429]
     # #239: when to try again, in the header and the body; the limiter clock is mid-minute.
     refused = out[2]
     assert refused.headers["retry-after"] == "30"

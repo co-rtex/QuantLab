@@ -234,13 +234,90 @@ def check_backtest_memory(cost: BacktestCost, limit_mb: int) -> None:
         )
 
 
+# ------------------------------------------------------------ optimization memory (#224)
+# Peak anonymous memory of one optimization job in the worker container, as an envelope
+# over measured jobs: benchmarks/optimize_memory.py on the 1536 MB compose worker (one
+# replica, recreated per job, sampled every 0.1 s), synthetic data of 756, 3,275 and 7,056
+# sessions, 10, 50 and 100 symbols plus a benchmark, every method, look-back 1260 (raw
+# results: benchmarks/results/20261101T1700Z-optimize-memory-8afffa4.json). Least squares
+# on all nine jobs, then the base raised, rounded up to 0.1 MB, until every one is covered.
+# The base includes the RQ parent and the forked horse's copy of it. The job loads each
+# symbol's whole history up to as_of, so the cost is in symbol-sessions, whatever the
+# look-back.
+OPTIMIZE_BASE_MB = 332.7
+OPTIMIZE_MB_PER_MILLION_SYMBOL_SESSIONS = 461.4
+# The largest measured: 101 series over 7,056 sessions. Beyond it a job is refused rather
+# than estimated; within it the estimate peaks at 661.5 MB.
+OPTIMIZE_MEASURED_MAX_SYMBOL_SESSIONS = 101 * 7056
+
+
+@dataclass(frozen=True)
+class OptimizeCost:
+    symbols: int  # the requested symbols and the benchmark
+    sessions: int  # loaded: from the data's first session to as_of
+
+    @property
+    def memory_mb(self) -> float:
+        return (
+            OPTIMIZE_BASE_MB
+            + OPTIMIZE_MB_PER_MILLION_SYMBOL_SESSIONS * self.symbols * self.sessions / 1e6
+        )
+
+
+def optimize_cost(
+    symbols: int,
+    data_start: date,
+    data_end: date,
+    as_of: date | None,
+    bar_dates: pd.DatetimeIndex | None = None,
+) -> OptimizeCost:
+    """The job's size from what is known at submission: the sessions from the data's first
+    to ``as_of`` (or the data's last). As for backtests, the larger of the exchange
+    calendar's count and the version's own distinct bar dates (``bar_dates``), which can
+    include days the calendar does not (#181)."""
+    last = min(as_of, data_end) if as_of else data_end
+    sessions = len(trading_days(data_start, last))
+    if bar_dates is not None:
+        sessions = max(sessions, int((bar_dates <= pd.Timestamp(last)).sum()))
+    return OptimizeCost(symbols, sessions)
+
+
+def check_optimize_memory(cost: OptimizeCost, limit_mb: int) -> None:
+    """Reject at submission an optimization outside the measured range, or whose estimated
+    peak would not fit the worker."""
+    details = {"symbols": cost.symbols, "sessions": cost.sessions}
+    advice = "Use fewer symbols or an earlier as_of: the whole history up to as_of is loaded."
+    if cost.symbols * cost.sessions > OPTIMIZE_MEASURED_MAX_SYMBOL_SESSIONS:
+        raise ApiError(
+            422,
+            "optimization_too_large",
+            f"This optimization loads {cost.symbols} series over {cost.sessions:,} sessions. "
+            f"Memory was measured only up to {OPTIMIZE_MEASURED_MAX_SYMBOL_SESSIONS:,} "
+            f"series-sessions, so larger ones are refused. {advice}",
+            {
+                **details,
+                "reason": "outside_measured_range",
+                "max_symbol_sessions": OPTIMIZE_MEASURED_MAX_SYMBOL_SESSIONS,
+            },
+        )
+    if cost.memory_mb > limit_mb:
+        shown = math.ceil(cost.memory_mb * 10) / 10  # never shown under the limit (#181)
+        raise ApiError(
+            422,
+            "optimization_too_large",
+            f"This optimization needs an estimated {shown:.1f} MB, over the {limit_mb} MB "
+            f"limit for one job. {advice}",
+            {**details, "reason": "estimated_memory", "estimated_mb": shown, "limit_mb": limit_mb},
+        )
+
+
 # ------------------------------------------------------- heavy request-time work (#223)
-# Routes that compute over full price histories in the API process itself (optimize, the
-# portfolio ledger). FastAPI runs a sync route in its process's thread pool, up to 40 at
-# once, so concurrent heavy requests stacked in memory: 16 optimizations of 100 symbols
-# drove the Docker VM into a global OOM, in which the kernel killed API processes and
-# could have killed Postgres. Each process admits at most heavy_requests_per_process of
-# them at a time; more are refused at once, never queued.
+# Routes that compute over full price histories in the API process itself: the portfolio
+# ledger (optimization has been a worker job since #224). FastAPI runs a sync route in its
+# process's thread pool, up to 40 at once, so concurrent heavy requests stacked in memory:
+# 16 optimizations of 100 symbols drove the Docker VM into a global OOM, in which the
+# kernel killed API processes and could have killed Postgres. Each process admits at most
+# heavy_requests_per_process of them at a time; more are refused at once, never queued.
 _heavy_lock = threading.Lock()
 _heavy: threading.BoundedSemaphore | None = None
 HEAVY_RETRY_AFTER_SECONDS = 2

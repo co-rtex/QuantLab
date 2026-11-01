@@ -29,6 +29,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 ENG = "packages/quantlab/src/quantlab/backtest/engine.py"
 ADJ = "packages/quantlab/src/quantlab/data/adjust.py"
+ALLOC = "packages/quantlab/src/quantlab/optimize/allocators.py"
 VAL = "packages/quantlab/src/quantlab/research/validation.py"
 ORACLE = "tests/unit/test_engine_oracle.py"
 OTHER_TESTS = [
@@ -39,6 +40,7 @@ OTHER_TESTS = [
     "tests/unit/test_zero_volume_fills.py",
     "tests/unit/test_research_correctness.py",
     "tests/unit/test_ledger.py",
+    "tests/unit/test_allocator_dust.py",
     "tests/unit/test_leakage_master.py",
 ]
 
@@ -278,6 +280,13 @@ MUTATIONS = [
         "    return abs(delta) < max(1e-9, 1e-12 * max(1.0, abs(want), abs(held)))",
         "    return abs(delta) < 1e-9",
         "float-noise rebalance orders created and charged commission (#215)",
+    ),
+    Mutation(
+        "M33",
+        ALLOC,
+        "    return np.where(w < DUST_WEIGHT, 0.0, w)",
+        "    return w",
+        "SLSQP residue weights kept, dust orders from zero holdings in large accounts (#227)",
     ),
     Mutation(
         "M34",

@@ -1,5 +1,20 @@
 # Release-candidate readiness (updated 2026-11-01)
 
+## Since rc.2 (on main, not tagged)
+Merged after `v0.1.0-rc.2`, each with review, a lead trial and green CI. They change
+behaviour that the rc sections below describe:
+* **Optimize runs as a job** (#250, #255; #224). `POST /dataset-versions/{id}/optimizations`
+  returns 202, results are read at `GET /optimizations/{id}`, and the synchronous
+  `/optimize` route is gone. Optimize no longer takes an API heavy slot, so it no longer
+  returns 503 `server_busy`; the bound stays on the portfolio ledger routes. Submitting
+  needs the **editor** role (it was any member). Requests outside the measured memory range
+  are refused with 422 `optimization_too_large`. Migration M6 `aec87540a0ac` adds
+  `optimization_runs`.
+* **load_bars** streams row groups pruned by symbol statistics (#248, #225). Per-optimize
+  memory is about 574 → 190 MiB at 2 API processes, with backtest outputs byte-identical.
+  No limit changed.
+* The rc.2 evidence and limitations below describe `87449b2` and are kept as recorded.
+
 ## Release candidate 2 (2026-11-01, main `87449b2`)
 
 **Release SHA:** `87449b2927b988c611757d2835bcc2de9a2049ac`, proposed tag `v0.1.0-rc.2`.

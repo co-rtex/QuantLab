@@ -435,6 +435,11 @@ Per session `k`:
      1.6.0 such an order filled and paid a full `commission_min`.
    * **At the boundary:** a change of exactly the threshold is an order, and a real order
      of one share is always one.
+   * **Dust weights** (#227, engine 1.7.0). The noise rule compares a change with the
+     holding, so it doesn't cover an order from zero holdings. Such orders came from
+     optimizer residue: about 1.7e-9 shares in a 3e9 account. Since 1.7.0 the
+     minimum-variance allocator behind the `min_variance` strategy returns exact zeros
+     there (see *Optimizers*). The engine's own rules are unchanged.
 
 Symbols that only list after the backtest window are excluded (recorded in
 `meta.not_listed_in_window`). `meta.corporate_actions` counts the universe's actions by
@@ -527,7 +532,11 @@ from `quantlab`.
 * `tests/unit/test_engine_oracle.py` requires the engine to agree with it to 1e-9 on 200
   seeded adversarial synthetic universes, plus twelve hand-computed cases.
 * A mutation harness (`tests/oracle/mutate.py`) shows the comparison catches 32 injected
-  engine and adjuster defects.
+  engine and adjuster defects. A 33rd, M33, keeps the allocators' solver residue (#227).
+  The comparison can't see it, because none of its strategies uses an optimizer.
+  `tests/unit/test_allocator_dust.py` catches it. M34 drops the look-ahead check's halt
+  exemption (#247). The comparison doesn't run the check, so it misses M34;
+  `tests/unit/test_leakage_master.py` catches it.
 * **What is independent and what is not** (#209 review).
   * Since 1.5.0 the sell proceeds and the pro-rata factor are written from this text; the
     reference finds the factor by bisection, where the engine solves it in closed form.
@@ -713,6 +722,15 @@ dependencies; CI checks it on Linux (`tests/unit/test_reproducibility_processes.
       fractional, minimum commission 5). On 1.5.0 a -2^-29-share order on ID2 filled for a
       notional of 3.1e-7 and paid 5.
     * Tests: `tests/unit/test_order_noise.py`.
+  * 1.7.0 (#227): the minimum-variance and mean-variance allocators set SLSQP residue under
+    1e-10 to exactly 0, without renormalizing (see *Optimizers*). The engine's rules are
+    unchanged; the version moves because `min_variance` runs that filled dust orders
+    change their trades.
+    * **A/B against 1.6.0** (1,002 runs): 18 change, all `min_variance`.
+    * **Size:** at 3e9, 566 to 894 fills under $0.01 per run are gone. Elsewhere the
+      changes are only in the recorded decisions or at float level (at most 7.6e-15
+      relative equity).
+    * Tests: `tests/unit/test_allocator_dust.py`; mutation M33.
 * A worker refuses a backtest stamped for another engine version (#152).
 * A validation run re-runs backtests on the worker's current engine, so it records that
   engine (`engine_version`) beside the experiment's (`experiment_engine_version`), plus
@@ -821,6 +839,49 @@ Long-only, fully invested. Minimum-variance and mean-variance use SLSQP on a res
 objective; risk parity uses Spinu's convex formulation. Every result is validated (finite,
 sums to 1, within bounds) or an error is raised; infeasible bounds are rejected before
 solving.
+
+**Solver residue (#227, engine 1.7.0).** At an active lower bound of 0, SLSQP leaves a
+weight of about 1e-20 to 1e-14 instead of 0.
+* Since 1.7.0 a weight under `DUST_WEIGHT` = 1e-10 is set to exactly 0. Bounds with a
+  positive floor are left alone.
+* **No renormalization:** every other weight keeps its exact value. The dropped mass, at
+  most n × 1e-10, stays in cash: 2e-8 at the strategies' 200-asset cap, 1e-8 at the
+  optimize API's 100 symbols. That is well inside the allocators' sum tolerance of 1e-6.
+* **Why:** in a large account a residue became an order from zero holdings. At 3e9 and
+  minimum commission 1, market 3's weekly `min_variance` run had 264 fills under $0.01,
+  each paying the full minimum.
+* **How the threshold was chosen.** Every raw output was recorded on markets 3, 11 and 29
+  (`generate_market(n_assets=30, 2019-01-02 to 2021-12-31)`).
+  * `min_variance` in weekly and daily backtests of the strategy: 2,280 solves.
+  * `mean_variance`, which only the optimize API uses (no strategy calls it), on the same
+    covariances: 2,200 solves.
+  * The residue was at most 5.6e-16 (`min_variance`) and 8.1e-15 (`mean_variance`).
+  * Real weights were at least 2.3e-6 and 2.2e-5.
+  * No weight lay between, an empty gap of about 9.4 decades. 1e-10 sits about four
+    decades from each side.
+* **Caveats:**
+  * These covariances are well-conditioned: 126 or 252 sessions for at most 30 assets.
+  * A singular one leaves larger residue, for example up to about 1e-6 with 20 sessions
+    for 200 assets. That is above the threshold, so 1.7.0 doesn't remove it there (#254).
+  * The residue's size follows SLSQP's `ftol` (1e-15) and the O(1) objective scaling in
+    `_solve_qp`. If either changes, measure again.
+  `tests/unit/test_allocator_dust.py` fails if a raw weight falls in [1e-13, 1e-7) for
+  the strategy's or the optimize API's default inputs.
+* **What changed in backtests** (the A/B, `tests/oracle/ab.py`): 18 of 1,002 runs, all
+  `min_variance`.
+  * **Whole shares at 1e6 (6 runs):** only the recorded decisions changed, losing the dust
+    rows.
+  * **Fractional at 3e9 (6 runs):** 566 to 894 fills under $0.01 per run are gone, and
+    none remain. Equity moved by at most 2.3e-15 relative.
+  * **Fractional at 20,000 (6 runs):** float-level changes only, at most 7.6e-15
+    relative, with fingerprints unchanged. Two mechanisms:
+    * a dust target turned a full exit into a sell about 2 ulp short of the holding;
+    * dust pushed a target sum a few ulp over 1, so the engine scaled every weight down
+      by about 1e-16.
+* **The optimize API** now returns exact zeros for these weights. On the API's defaults
+  over the three markets (156 solves, all with residue), the sum of weights, expected
+  volatility, historical mean return, risk shares and HHI moved by at most 1.3e-14
+  relative.
 
 ## ML features (`quantlab.ml.pipeline`)
 * Features at `t` use only bars dated on or before `t`. Momentum and reversal are ratios

@@ -1,153 +1,170 @@
-"""Portfolio construction research: compare allocators on point-in-time history."""
+"""Portfolio construction research: compare allocators on point-in-time history.
+
+``POST .../optimizations`` submits the computation as a worker job and ``GET
+/optimizations/{id}`` reads it back (#224). It used to run in the API process
+(``POST .../optimize``, bounded per process by #223), competing with every other request.
+"""
 
 from __future__ import annotations
 
-import math
 import uuid
-from typing import Any, Literal
+from typing import Any
 
-import numpy as np
-import pandas as pd
-from fastapi import APIRouter
-from pydantic import BaseModel, Field
+from fastapi import APIRouter, Header, Request
+from sqlalchemy import select
 
-from quantlab.analytics.risk import concentration, covariance
-from quantlab.analytics.summary import jsonable
-from quantlab.data.adjust import total_returns
-from quantlab.optimize.allocators import (
-    Bounds,
-    OptimizationError,
-    equal_weight,
-    mean_variance,
-    min_variance,
-    risk_contributions,
-    risk_parity,
-)
 from quantlab_api.config import get_settings
 from quantlab_api.errors import ApiError
-from quantlab_api.limits import heavy_slot
+from quantlab_api.jobs import (
+    enqueue,
+    lock_idempotency_key,
+    replayed_job,
+    request_fingerprint,
+    submit_job,
+)
+from quantlab_api.limits import check_optimize_memory, optimize_cost
+from quantlab_api.marketdata import bar_dates
+from quantlab_api.models import Instrument, Job, OptimizationRun, Role
+from quantlab_api.optimization import OptimizeIn
 from quantlab_api.routes.datasets import load_version
-from quantlab_api.schemas import BoundedDate
-from quantlab_api.security import DB, CurrentUser, login_limiter, rate_limited
+from quantlab_api.schemas import JobOut
+from quantlab_api.security import (
+    DB,
+    CurrentUser,
+    audit,
+    login_limiter,
+    rate_limited,
+    require_workspace,
+)
 from quantlab_api.tasks import dataset_store
 
 router = APIRouter(tags=["optimization"])
-Method = Literal["equal_weight", "min_variance", "mean_variance", "risk_parity"]
-ALL_METHODS: tuple[Method, ...] = ("equal_weight", "min_variance", "mean_variance", "risk_parity")
+# Seconds per attempt; the largest request measured runs in a few seconds (#224).
+OPTIMIZE_TIMEOUT_SECONDS = 300
 
 
-def _all_methods() -> list[Method]:
-    return list(ALL_METHODS)
+def _run_out(db: DB, run: OptimizationRun) -> dict[str, Any]:
+    job = db.get(Job, run.job_id) if run.job_id else None
+    return {
+        "id": str(run.id),
+        "dataset_version_id": str(run.dataset_version_id),
+        "status": run.status.value,
+        "params": run.params,
+        "code_version": run.code_version,
+        "created_at": run.created_at,
+        # The same document the synchronous route answers, once the job has completed.
+        "result": run.result,
+        "job": JobOut.model_validate(job).model_dump(mode="json") if job else None,
+    }
 
 
-class OptimizeIn(BaseModel):
-    symbols: list[str] = Field(min_length=2, max_length=100)
-    as_of: BoundedDate | None = None
-    lookback: int = Field(252, ge=40, le=1260)
-    max_weight: float = Field(0.4, gt=0, le=1)
-    risk_aversion: float = Field(5.0, gt=0, le=100)
-    covariance: Literal["sample", "ledoit_wolf"] = "ledoit_wolf"
-    benchmark: str | None = Field(None, max_length=32)
-    methods: list[Method] = Field(default_factory=_all_methods, min_length=1, max_length=4)
-
-
-@router.post("/dataset-versions/{version_id}/optimize")
-def optimize(version_id: uuid.UUID, body: OptimizeIn, user: CurrentUser, db: DB) -> dict[str, Any]:
-    """Allocations from returns dated on or before ``as_of`` only (no look-ahead).
-
-    Computed in this process over each symbol's full history, so bounded (#223): per user
-    and minute (429, the login limiter's fail-safe breaker included), and per process at
-    once (503 server_busy with Retry-After, never queued)."""
+@router.post("/dataset-versions/{version_id}/optimizations", status_code=202)
+def submit_optimization(
+    version_id: uuid.UUID,
+    body: OptimizeIn,
+    user: CurrentUser,
+    db: DB,
+    request: Request,
+    idempotency_key: str | None = Header(None, min_length=1, max_length=128),
+) -> dict[str, Any]:
+    """Queue an optimization on a worker (#224). Editors only: a run and a job are written."""
     dv, ds = load_version(db, user, version_id)
+    require_workspace(db, user, ds.workspace_id, Role.editor)
+    params = body.model_dump(mode="json")
+    fingerprint = request_fingerprint(f"optimize:{dv.id}", user.id, params)
+
+    def previous(job: Job) -> OptimizationRun | None:
+        run_id = (job.payload or {}).get("optimization_run_id")
+        return db.get(OptimizationRun, uuid.UUID(run_id)) if run_id else None
+
+    lock_idempotency_key(db, ds.workspace_id, idempotency_key)
+    prior_job = replayed_job(db, ds.workspace_id, idempotency_key, fingerprint, lambda j: False)
+    if prior_job is not None:  # the same request replayed: report it, run nothing
+        prior = previous(prior_job)
+        if prior is None:
+            raise ApiError(
+                409,
+                "idempotency_conflict",
+                "Idempotency-Key was already used with a different request",
+            )
+        return _run_out(db, prior)
+    # Symbols the version doesn't list at all fail here, before a job; whether they have
+    # data up to as_of is the job's to say. A version without catalog rows is not checked.
+    listed = set(
+        db.scalars(select(Instrument.symbol).where(Instrument.dataset_version_id == dv.id))
+    )
+    unknown = {s.upper() for s in body.symbols} - listed if listed else set()
+    if unknown:
+        raise ApiError(
+            422, "unknown_symbols", "Symbols not in this dataset version", sorted(unknown)[:20]
+        )
+    # A job that cannot fit the worker is refused here, not OOM-killed later, as backtests
+    # are (#163). The benchmark counts as a series. A version without dates isn't estimated.
+    if dv.start_date and dv.end_date:
+        try:
+            dates = bar_dates(dataset_store().open(ds.slug, dv.version_hash).path, body.as_of)
+        except OSError as exc:  # its manifest or bars are missing on this server
+            raise ApiError(
+                409,
+                "dataset_unavailable",
+                "This dataset version's files are not available on the server. Ask an "
+                "operator, or use another version.",
+            ) from exc
+        series = len({s.upper() for s in body.symbols}) + (1 if body.benchmark else 0)
+        check_optimize_memory(
+            optimize_cost(series, dv.start_date, dv.end_date, body.as_of, dates),
+            get_settings().max_backtest_memory_mb,
+        )
     receipt = login_limiter.reserve_receipt(
         f"optimize:user:{user.id}", get_settings().rate_limit_optimize_per_minute
     )
     if not receipt:
         raise rate_limited(60, "Too many optimizations")
+    run = OptimizationRun(
+        workspace_id=ds.workspace_id,
+        dataset_version_id=dv.id,
+        params=params,
+        code_version=get_settings().git_sha,
+        created_by=user.id,
+    )
+    db.add(run)
+    db.flush()
+    audit(
+        db,
+        request,
+        "optimization.submitted",
+        user=user,
+        workspace_id=ds.workspace_id,
+        target_type="optimization_run",
+        target_id=run.id,
+    )
     try:
-        with heavy_slot("optimize"):
-            return _optimize(dv, ds, body)
-    except ApiError as exc:
-        if exc.code == "server_busy":  # refused before any work: not one of the user's 10
-            login_limiter.refund(receipt)
+        job, _ = submit_job(
+            db,
+            workspace_id=ds.workspace_id,
+            user_id=user.id,
+            kind="optimize",
+            payload={"optimization_run_id": str(run.id), "request_fingerprint": fingerprint},
+            idempotency_key=idempotency_key,
+            request_id=getattr(request.state, "request_id", None),
+            timeout_seconds=OPTIMIZE_TIMEOUT_SECONDS,
+            dispatch=False,
+            on_created=lambda j: setattr(run, "job_id", j.id),
+        )
+    except ApiError:  # refused (too_many_jobs): nothing queued, so not one of the user's 10
+        login_limiter.refund(receipt)
         raise
+    enqueue(job)
+    return _run_out(db, run)
 
 
-def _optimize(dv: Any, ds: Any, body: OptimizeIn) -> dict[str, Any]:
-    store = dataset_store()
-    v = store.open(ds.slug, dv.version_hash)
-    syms = sorted({s.upper() for s in body.symbols})
-    bench = body.benchmark.upper() if body.benchmark else None
-    bars = store.load_bars(
-        v, symbols=[*syms, *([bench] if bench else [])], end=str(body.as_of) if body.as_of else None
-    )
-    missing = set(syms) - set(bars["symbol"].unique())
-    if missing:
-        raise ApiError(
-            422, "unknown_symbols", "Symbols without data up to as_of", sorted(missing)[:20]
-        )
-    rets = total_returns(bars, store.load_actions(v, symbols=[*syms, *([bench] if bench else [])]))
-    window = rets[syms].iloc[-body.lookback :]
-    usable = [s for s in syms if window[s].notna().sum() >= int(0.9 * body.lookback)]
-    if len(usable) < 2:
-        raise ApiError(
-            422,
-            "insufficient_history",
-            "Fewer than two symbols have enough history in the look-back window",
-        )
-    window = window[usable].dropna()
-    cov = covariance(window, method=body.covariance).to_numpy()
-    mu = window.mean().to_numpy() * 252
-    n = len(usable)
-    cap = max(body.max_weight, 1.0 / n)
-    betas = None
-    if bench and bench in rets:
-        b = rets[bench].reindex(window.index)
-        betas = window.apply(
-            lambda c: float(np.cov(c, b)[0, 1] / b.var()) if b.var() > 0 else float("nan")
-        )
-    results: list[dict[str, Any]] = []
-    for m in body.methods:
-        try:
-            if m == "equal_weight":
-                w = equal_weight(n)
-            elif m == "min_variance":
-                w = min_variance(cov, Bounds(0.0, cap))
-            elif m == "mean_variance":
-                w = mean_variance(mu, cov, body.risk_aversion, Bounds(0.0, cap))
-            else:
-                w = risk_parity(cov)
-        except OptimizationError as exc:
-            results.append({"method": m, "error": str(exc)})
-            continue
-        rc = risk_contributions(w, cov)
-        weights = pd.Series(w, index=usable)
-        results.append(
-            {
-                "method": m,
-                "weights": {s: float(x) for s, x in weights.items()},
-                "expected_volatility": float(math.sqrt(w @ cov @ w)),
-                "historical_mean_return": float(w @ mu),
-                "beta": float(weights @ betas.fillna(0)) if betas is not None else None,
-                "risk_share": {s: float(x) for s, x in zip(usable, rc["pct"], strict=True)},
-                "concentration": concentration(weights),
-            }
-        )
-    return jsonable(
-        {
-            "as_of": str(window.index[-1].date()),
-            "window_start": str(window.index[0].date()),
-            "observations": len(window),
-            "symbols": usable,
-            "excluded_for_history": sorted(set(syms) - set(usable)),
-            "covariance": body.covariance,
-            "max_weight": cap,
-            "is_synthetic": dv.is_synthetic,
-            "results": results,
-            "notes": [
-                "Inputs use only returns dated on or before as_of.",
-                "Expected volatility is in-sample; out-of-sample risk is usually higher.",
-                "Mean-variance weights are sensitive to estimated means, which are noisy.",
-            ],
-        }
-    )
+@router.get("/optimizations/{optimization_id}")
+def get_optimization(optimization_id: uuid.UUID, user: CurrentUser, db: DB) -> dict[str, Any]:
+    run = db.get(OptimizationRun, optimization_id)
+    if run is None:
+        raise ApiError(404, "not_found", "Optimization not found")
+    try:
+        require_workspace(db, user, run.workspace_id)
+    except ApiError as exc:  # a non-member can't tell a run exists
+        raise ApiError(404, "not_found", "Optimization not found") from exc
+    return _run_out(db, run)
