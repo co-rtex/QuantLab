@@ -9,9 +9,11 @@
 //   uses eval to rebuild server error stacks.
 // * Style elements: the nonce too. Style attributes stay allowed (style-src-attr
 //   'unsafe-inline'), and only they:
-//   - Needed: Next's built-in error pages (_not-found, _global-error) render style
-//     attributes in their HTML, which no nonce can cover. React's own style={…} on the
-//     client sets properties through the CSSOM, which CSP does not govern.
+//   - Needed: style attributes in server-rendered HTML, which no nonce can cover. Next's
+//     built-in error pages (_not-found, _global-error) render them, and so does every
+//     style={…} of ours that is server-rendered (chart legends, the monthly-returns
+//     heatmap in components/charts.tsx). Only a style={…} set after hydration goes
+//     through the CSSOM, which CSP does not govern.
 //   - Narrow: an attribute cannot run script, load a stylesheet or @import; url() in it
 //     is still held to img-src and font-src. A <style> element, which could carry
 //     selectors that probe the page, still needs the nonce.
