@@ -65,6 +65,36 @@ def test_solver_residue_and_real_weights_are_separated_by_an_empty_gap(monkeypat
         assert (w[w > 0] < GAP[0]).any(), name  # residue does occur: the test is not vacuous
 
 
+def test_the_threshold_lies_inside_the_measured_gap():
+    # A threshold below the gap leaves residue (1e-14 would keep 8.1e-15); one above it
+    # drops real weights (1e-5 would drop those from 2.3e-6 up) (#251 review).
+    assert GAP[0] <= DUST_WEIGHT < GAP[1]
+
+
+def test_kept_weights_are_exactly_the_validated_solver_output(monkeypatch):
+    # The real path: drop_dust runs after validate_weights and changes nothing it keeps.
+    # Dropping before validate_weights would renormalize them (#251 review).
+    raw: list[np.ndarray] = []
+    real_minimize = allocators.minimize
+
+    def recording(*args, **kwargs):
+        res = real_minimize(*args, **kwargs)
+        raw.append(res.x.copy())
+        return res
+
+    monkeypatch.setattr(allocators, "minimize", recording)
+    dropped = 0
+    for w in _windows(MARKETS[0], 126, every=20):
+        bounds = Bounds(0, max(0.25, 1.0 / w.shape[1]))
+        out = min_variance(w.cov(ddof=1).to_numpy() * 252, bounds)
+        expected = allocators.validate_weights(raw[-1], bounds)
+        kept = out > 0
+        assert (out[kept] == expected[kept]).all()  # bit-identical, not approximately
+        assert (expected[~kept] < DUST_WEIGHT).all()
+        dropped += int(((expected > 0) & ~kept).sum())
+    assert dropped > 0  # residue was dropped: the comparison is not vacuous
+
+
 def test_no_allocator_weight_is_left_between_zero_and_the_threshold():
     for seed in MARKETS[:1]:
         for w in _windows(seed, 126, every=20):

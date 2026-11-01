@@ -438,8 +438,8 @@ Per session `k`:
    * **Dust weights** (#227, engine 1.7.0). The noise rule compares a change with the
      holding, so it doesn't cover an order from zero holdings. Such orders came from
      optimizer residue: about 1.7e-9 shares in a 3e9 account. Since 1.7.0 the
-     minimum-variance and mean-variance allocators return exact zeros there (see
-     *Optimizers*). The engine's own rules are unchanged.
+     minimum-variance allocator behind the `min_variance` strategy returns exact zeros
+     there (see *Optimizers*). The engine's own rules are unchanged.
 
 Symbols that only list after the backtest window are excluded (recorded in
 `meta.not_listed_in_window`). `meta.corporate_actions` counts the universe's actions by
@@ -676,6 +676,15 @@ dependencies; CI checks it on Linux (`tests/unit/test_reproducibility_processes.
       fractional, minimum commission 5). On 1.5.0 a -2^-29-share order on ID2 filled for a
       notional of 3.1e-7 and paid 5.
     * Tests: `tests/unit/test_order_noise.py`.
+  * 1.7.0 (#227): the minimum-variance and mean-variance allocators set SLSQP residue under
+    1e-10 to exactly 0, without renormalizing (see *Optimizers*). The engine's rules are
+    unchanged; the version moves because `min_variance` runs that filled dust orders
+    change their trades.
+    * **A/B against 1.6.0** (1,002 runs): 18 change, all `min_variance`.
+    * **Size:** at 3e9, 566 to 894 fills under $0.01 per run are gone. Elsewhere the
+      changes are only in the recorded decisions or at float level (at most 7.6e-15
+      relative equity).
+    * Tests: `tests/unit/test_allocator_dust.py`; mutation M33.
 * A worker refuses a backtest stamped for another engine version (#152).
 * A validation run re-runs backtests on the worker's current engine, so it records that
   engine (`engine_version`) beside the experiment's (`experiment_engine_version`), plus
@@ -796,14 +805,20 @@ weight of about 1e-20 to 1e-14 instead of 0.
   minimum commission 1, market 3's weekly `min_variance` run had 264 fills under $0.01,
   each paying the full minimum.
 * **How the threshold was chosen.** Every raw output was recorded on markets 3, 11 and 29
-  (`generate_market(n_assets=30, 2019-01-02 to 2021-12-31)`): `min_variance` in weekly
-  and daily backtests (2,280 solves), and `mean_variance` on the same covariances (2,200).
+  (`generate_market(n_assets=30, 2019-01-02 to 2021-12-31)`).
+  * `min_variance` in weekly and daily backtests of the strategy: 2,280 solves.
+  * `mean_variance`, which only the optimize API uses (no strategy calls it), on the same
+    covariances: 2,200 solves.
   * The residue was at most 5.6e-16 (`min_variance`) and 8.1e-15 (`mean_variance`).
   * Real weights were at least 2.3e-6 and 2.2e-5.
   * No weight lay between, an empty gap of about 9.4 decades. 1e-10 sits about four
     decades from each side.
-* **Caveat:** the residue's size follows SLSQP's `ftol` (1e-15) and the O(1) objective
-  scaling in `_solve_qp`. If either changes, measure again.
+* **Caveats:**
+  * These covariances are well-conditioned: 126 or 252 sessions for at most 30 assets.
+  * A singular one leaves larger residue, for example up to about 1e-6 with 20 sessions
+    for 200 assets. That is above the threshold, so 1.7.0 doesn't remove it there (#254).
+  * The residue's size follows SLSQP's `ftol` (1e-15) and the O(1) objective scaling in
+    `_solve_qp`. If either changes, measure again.
   `tests/unit/test_allocator_dust.py` fails if a raw weight falls in [1e-13, 1e-7) for
   the strategy's or the optimize API's default inputs.
 * **What changed in backtests** (the A/B, `tests/oracle/ab.py`): 18 of 1,002 runs, all
