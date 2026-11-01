@@ -138,12 +138,16 @@ export function ValidationPanel({ experimentId, onComplete }: { experimentId: st
   const notRun = run.error?.status === 404;
   const r = run.data?.result;
   const active = run.data && (run.data.status === "queued" || run.data.status === "running");
+  // Failed, cancelled or timed out: say why, and offer a rerun (#260). The API requeues any
+  // of them; a timed-out run used to leave the panel empty, with no reason and no button.
+  const ended = !!run.data && !active && run.data.status !== "completed";
 
   return (
     <Panel
       title="Out-of-sample validation"
       aside={
-        notRun || run.data?.status === "failed" || run.data?.status === "cancelled" ? (
+        // Editors only: the API refuses viewers (403).
+        canEdit && (notRun || ended) ? (
           <button className="btn btn-primary py-1 text-xs" onClick={start} disabled={busy}>
             {busy ? "Starting…" : "Run validation suite"}
           </button>
@@ -160,7 +164,8 @@ export function ValidationPanel({ experimentId, onComplete }: { experimentId: st
           regime breakdown and an empirical look-ahead check. Results feed the integrity report.
         </p>
       )}
-      {active && run.data?.job && (
+      {/* While it runs, and after it ended without results: the status, message and error. */}
+      {(active || ended) && run.data?.job && (
         <JobProgress
           job={run.data.job}
           onCancel={
