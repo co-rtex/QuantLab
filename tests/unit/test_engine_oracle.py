@@ -150,6 +150,58 @@ def test_hand_computed_zero_volume_suspension_and_missing_bars_exit():
     assert diff(eng, ref, 10_000.0) == []
 
 
+def test_cash_dust_leaves_a_shortfall_recorded_as_insufficient_cash():
+    # #184 F1. Day 2: both buys of 166.67 shares need 1023.33 at 3.07 and are scaled to
+    # 162.866450, leaving cash +1.1369e-13 (rounding dust). Day 3: A's sell is rejected on
+    # its zero-volume bar, so B's buy of 0.5 x 977.198697 / 2.5 - 162.866450 = 32.573290
+    # meets only the dust. It used to be scaled to 4.5e-14 shares and logged InvalidOrder.
+    from quantlab.strategies.library import create_strategy
+
+    bars = [
+        ("AAA", DAYS[0], 3.0, 3.0, 1e4),
+        ("AAA", DAYS[1], 3.07, 3.5, 1e4),
+        ("AAA", DAYS[2], 3.5, 3.5, 0.0),
+        ("AAA", DAYS[3], 3.6, 3.6, 1e4),
+        ("BBB", DAYS[0], 3.0, 3.0, 1e4),
+        ("BBB", DAYS[1], 3.07, 2.5, 1e4),
+        ("BBB", DAYS[2], 2.5, 2.6, 1e4),
+        ("BBB", DAYS[3], 2.6, 2.6, 1e4),
+    ]
+    sc = _scenario(bars, [], {"fractional_shares": True})
+    eng, ref = _both(sc, create_strategy("equal_weight"), S.EqualWeightRef())
+    assert 0 < eng.equity["cash"].iloc[1] < 1e-12  # the dust this case is about
+    held = 0.5 * 1000 / 3 * (1000 / (1000 / 3 * 3.07))
+    want = 0.5 * held * 6.0 / 2.5
+    rej = eng.rejections[eng.rejections["date"] == DAYS[2]].set_index("symbol")
+    assert rej.loc["AAA", "reason"] == "no_volume"
+    assert rej.loc["BBB", "reason"] == "insufficient_cash"
+    assert rej.loc["BBB", "quantity"] == pytest.approx(want - held, rel=1e-9)
+    assert want - held == pytest.approx(32.573290, rel=1e-7)
+    assert diff(eng, ref, 1000.0) == []
+
+
+def test_whole_share_buys_scaled_below_one_share_are_rejected_not_dropped():
+    # #184 F2. 50 shares of each at 10 are wanted; at the next open (1100) they need
+    # 110,000 against 1000 cash, so each is scaled to 50 x 1000/110000 = 0.454545 shares,
+    # under one whole share. They used to vanish: no trade and no rejection.
+    from quantlab.strategies.library import create_strategy
+
+    bars = [
+        (s, d, px, px, 1e4)
+        for s in ("AAA", "BBB")
+        for d, px in zip(DAYS[:3], (10.0, 1100.0, 1100.0), strict=True)
+    ]
+    sc = _scenario(bars, [], {"rebalance": "monthly"})
+    eng, ref = _both(sc, create_strategy("equal_weight"), S.EqualWeightRef())
+    assert len(eng.trades) == 0
+    rej = eng.rejections
+    assert rej["symbol"].tolist() == ["AAA", "BBB"]
+    assert set(rej["reason"]) == {"insufficient_cash"}
+    assert rej["quantity"].tolist() == pytest.approx([50 * 1000 / 110_000] * 2, rel=1e-12)
+    assert eng.equity["equity"].tolist() == [1000.0] * 3
+    assert diff(eng, ref, 1000.0) == []
+
+
 @pytest.mark.parametrize("seed", SEEDS)
 def test_engine_matches_reference(seed):
     assert compare(seed) == []

@@ -24,9 +24,12 @@ The rules, per session ``d`` of the window, in order:
 3. **Fills.** Orders decided at the previous rebalance fill at ``open[d]`` (``next_open``)
    or ``close[d]`` (``next_close``), with slippage. Nothing fills without a bar, or on a
    bar printed with volume <= 0 (an unknown, NaN, volume is tradable). When the cash after
-   the sells cannot fund the buys, every buy is scaled by one factor. Sells run first, then
-   buys, each group by instrument id. A buy is cut to what the cash can fund, including
-   commission ``max(commission_min, notional x bps)``.
+   the sells cannot fund the buys, every buy is scaled by one factor; cash under a
+   billionth of the need is rounding dust and counts as none. Sells run first, then buys,
+   each group by instrument id. A buy is cut to what the cash can fund, including
+   commission ``max(commission_min, notional x bps)``; one cut to nothing is rejected
+   ``insufficient_cash`` (#184). With whole shares, a buy under one share that no
+   shortfall caused (a top-up of a holding a split left fractional) is not an order.
 4. **Mark** at the close, or at the last close for an instrument without a bar. A position
    marked on a missing bar or a zero-volume bar is a stale mark.
 5. **Decision** at the close of a rebalance session (the last session of each period and
@@ -236,7 +239,7 @@ def run_reference(
     missing = dict.fromkeys(ids, 0)
     delisted: set[str] = set()
     pending: list[Order] = []
-    dropped: list[tuple[pd.Timestamp, str, float]] = []
+    dropped: list[tuple[pd.Timestamp, str, float, bool]] = []
     total = {"commission": 0.0, "slippage": 0.0, "dividends": 0.0}
     counts = dict.fromkeys(
         (
@@ -357,7 +360,8 @@ def run_reference(
                 for o in pending
                 if o.qty > 0 and o.iid in ref and o.iid not in delisted
             )
-            if need > after_sells > 0:
+            # Cash under a billionth of the need is rounding dust: treated as none (#184).
+            if need > 0 and after_sells > need * 1e-9 and need > after_sells:
                 for o in pending:
                     if o.qty > 0:
                         o.qty *= after_sells / need
@@ -379,8 +383,10 @@ def run_reference(
                     px = r * (1 - slip)
                 else:
                     q = math.floor(o.qty + 1e-9) if whole else o.qty
-                    if q == 0:  # a buy scaled below one share: neither filled nor rejected
-                        dropped.append((day, o.iid, o.qty))
+                    if q == 0 and not o.scaled:
+                        # Under one share without any cash shortfall: a top-up of a holding
+                        # a split left fractional. Neither filled nor rejected.
+                        dropped.append((day, o.iid, o.qty, o.scaled))
                         continue
                     px = r * (1 + slip)
                     can = cash / (px * (1 + comm)) if px > 0 else 0.0
@@ -390,7 +396,9 @@ def run_reference(
                         can = math.floor(can + 1e-9)
                     if can < q - 1e-9:
                         q, partial = max(can, 0.0), True
-                    if q <= 0:
+                    # Nothing left to buy (scaled under one share, or no affordable amount
+                    # the ledger can book): a shortfall of cash (#184).
+                    if q < EPS:
                         reject(day, o, "insufficient_cash")
                         continue
                 notional = abs(q) * px
