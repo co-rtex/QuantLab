@@ -302,11 +302,11 @@ lives in the repository's git directory, so it covers every worktree of this clo
 a separate clone.
 
 ## Next steps (issues carry owners and acceptance criteria)
-1. **Private release candidate `v0.1.0-rc.1` on `7fc89ee`: READY, with caveats.** The
-   lead's integrated gate and an independent fresh-clone assessment both pass; no release
-   blocker for private use. Evidence, requirements and known limitations are in
-   docs/RELEASE_READINESS.md ("Private release candidate, 2026-11-01"). rc.2: #237 (P1,
-   Agent 3), #238 (P2, Agent 2), #239 (P3). Public deployment stays prohibited (#39).
+1. **Private release candidate `v0.1.0-rc.2` on `87449b2`: READY.** It fixes rc.1's three
+   caveats (#237, #238, #239; rc.1 was `7fc89ee`, READY with caveats) and adds #233 and
+   #235. The lead's gate ran on exactly this tree, and the rc.1 assessor re-checked every
+   caveat live on it. Evidence, requirements and known limitations are in
+   docs/RELEASE_READINESS.md. Public deployment stays prohibited (#39).
 2. **Merged this cycle (cycle 3, 2026-11-01), each with an independent review where it
    changed behaviour, a lead trial on current main and green CI:**
    * Engine **1.5.0** (#209: #187, #195, #196) and **1.6.0** (#226: #215, float-noise
@@ -322,10 +322,11 @@ a separate clone.
    * Verification: reproducibility across processes, hash seeds, threads and restarts
      (#193, #182), a multiple-dividends-per-ex-date warning (#222, #210), deterministic
      limiter tests (#236), and the RC docs audits (#229, #234).
-3. **Agent 2 (post-RC):** #233 (bare-compose guard), #235 (edge forces production), #225
-   (load_bars memory), #224 (optimize as a job), #218, #231.
-4. **Agent 3 (post-RC):** #227 (min_variance dust weights), large/xl benchmarks in a quiet
-   window (#24).
+3. **Agent 2 (post-RC):** #225 (load_bars memory, PR #248 in trial), #224 (optimize as a
+   job), #218, #231.
+4. **Agent 3 (post-RC):** #227 (min_variance dust weights, engine 1.7.0, ε = 1e-10 from a
+   measured gap), #247 (leakage check and the instrument master), large/xl benchmarks in a
+   quiet window (#24).
 5. **Lead:** integrate; keep RELEASE_READINESS current; #17 needs branch-protection approval
    to become a required check.
 6. **User decisions (2026-10-31), unchanged:**

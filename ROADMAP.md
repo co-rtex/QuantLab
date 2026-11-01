@@ -37,8 +37,9 @@ Dependency-ordered. ✅ done and verified · 🔶 partial · ⬜ not started.
 * ✅ **Private release candidate `v0.1.0-rc.1`** on `7fc89ee` (2026-11-01): READY with
   caveats, per the lead's integrated gate and an independent assessment
   (docs/RELEASE_READINESS.md). Public deployment stays prohibited (#39, #168).
-* ⬜ **rc.2:** #237 (P1, validation with an explicit universe), #238 (P2, assistant "-0.00"),
-  #239 (P3, minor messages and docs).
+* ✅ **`v0.1.0-rc.2`** on `87449b2` (2026-11-01): READY. It fixes rc.1's caveats #237 (P1,
+  validation with an explicit universe), #238 (P2, assistant "-0.00") and #239 (P3, minor
+  messages and docs), and adds #233 (bare-compose guard) and #235 (edge forces production).
 
 ## Post-audit backlog (dependency order)
 

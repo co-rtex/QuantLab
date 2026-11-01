@@ -1,5 +1,55 @@
 # Release-candidate readiness (updated 2026-11-01)
 
+## Release candidate 2 (2026-11-01, main `87449b2`)
+
+**Release SHA:** `87449b2927b988c611757d2835bcc2de9a2049ac`, proposed tag `v0.1.0-rc.2`.
+Versions unchanged from rc.1: packages and web `0.1.0`, engine **1.6.0**, ML pipeline v3,
+Alembic head `18869f6a1dae` (no migration since rc.1). Scope unchanged: private,
+self-hosted use; **public deployment stays prohibited** (#39, #168).
+
+**Verdict: READY as a private release candidate.** It fixes all three of rc.1's caveats,
+each after review, a lead trial and green CI, and each re-checked live by the rc.1 assessor
+on this commit.
+
+**Changes since rc.1** (six PRs, one combined trial):
+* #243 (#237): the leakage check restricts an explicit universe to the members listed at
+  each cut, so validation no longer fails for a late listing. An independent review ran all
+  9 strategies with mid-sample listings: every multi-decision strategy verified with 0
+  mismatches, and a planted late-listing leak and the existing planted leak still fail.
+  buy_and_hold stays "unassessed" (one decision).
+* #241 (#238): the assistant's verifier reads the sign as written, so "-0.00" for -0.0041 is
+  supported, while wrong signs are still flagged.
+* #242 and #246 (#239): `is_synthetic` on portfolio create; 429 `rate_limited` with
+  Retry-After; one-line CSV failures; "50 MiB"; the CSV limits and a container-safe restore
+  in README and RUNBOOK.
+* #244 (#233): in a linked worktree a bare `docker compose` resolves to the worktree's
+  project, never `quantlab`. A **separate clone** still defaults to `quantlab` unless it
+  sets `QUANTLAB_SLOT` or `-p` (documented in README).
+* #245 (#235): the edge overlay pins `QUANTLAB_ENVIRONMENT=production`.
+
+**Evidence**
+* **The lead's combined trial** of the six PRs on `cbc3a2d`. Its merge tree is identical to
+  `87449b2`'s (`183f402b`), so it is a gate on this exact tree:
+  * ruff, format and mypy clean;
+  * pytest 1633 passed, 152 skipped (the same oracle slow-mode and opt-in stack skips as
+    rc.1);
+  * tests/unit alone 1003 passed;
+  * the slow-mode oracle, noise and buy-scale tests: 219 passed, 1 skipped;
+  * web 21/21; Playwright 49/49.
+* **The rc.1 assessor's live re-check on `87449b2`** (slot 88):
+  * #237: its repro and a 100-symbol daily experiment complete validation with the leakage
+    check verified, including a cut before the late listing;
+  * #238: an answer with "Sharpe ratio: -0.00" is `grounded: true`, and the sign checks
+    still flag "-0.01" for +0.0141, "0.01" for -0.0141 and "-0.00" for +0.0041;
+  * #239: every item observed as specified (create `is_synthetic: true`; 429 with
+    `retry-after`; one-line CSV failures; a 413 saying "50 MiB"; the docs);
+  * #244: a bare compose in a separate clone prints `quantlab`, as documented.
+* rc.1's full fresh-clone assessment (below) still applies to everything rc.2 did not
+  change.
+
+**Known limitations:** as rc.1's list below, minus #237, #238 and #239. Open post-RC:
+#218, #224, #225 (PR #248), #227, #231 and #247.
+
 ## Private release candidate (2026-11-01, main `7fc89ee`)
 
 **Release SHA:** `7fc89eed5639f8feca4bd1b49c5e5a1c4303603e`. Versions: packages and web
@@ -107,8 +157,8 @@ Each behaviour change had an independent review, a lead trial on current main an
   admission caps memory-heavy runs (about 199 symbols daily for 2005–2023).
 * **Benchmarks:** the published figures measured `da8767a` (engine 1.4.0); large/xl and
   external load tests are not done (#24, #20).
-* Open: #237, #238, #239 (rc.2), and #218, #225, #227, #231, #233, #235 (owners and
-  priorities on each).
+* Open at rc.1: #237, #238, #239 (all fixed in rc.2, above), and #218, #225, #227, #231,
+  #233, #235 (owners and priorities on each).
 
 ## Status update (later on 2026-10-31, main `6eaf2d9`)
 _Historical. Superseded by the section above: every issue listed below as open or in
