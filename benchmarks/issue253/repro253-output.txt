@@ -1,0 +1,42 @@
+== macOS
+platform note: darwin
+n=30 min_variance: 78 solves {'ok': 78}
+    ok    : KKT residual max 1.378e-08, median 7.097e-09; max |sum-1| 6.7e-16; min weight 0.00e+00
+            log10 bins: {-10: 1, -9: 55, -8: 22}
+n=30 mean_variance: 78 solves {'ok': 78}
+    ok    : KKT residual max 2.103e-08, median 4.496e-12; max |sum-1| 1.0e-14; min weight 0.00e+00
+            log10 bins: {-99: 6, -17: 3, -16: 22, -15: 2, -12: 8, -11: 8, -10: 15, -9: 12, -8: 2}
+n=100 min_variance: 78 solves {'ok': 78}
+    ok    : KKT residual max 1.209e-08, median 6.120e-09; max |sum-1| 1.1e-15; min weight 0.00e+00
+            log10 bins: {-11: 3, -10: 5, -9: 66, -8: 4}
+n=100 mean_variance: 78 solves {'fail (mode 8)': 77, 'ok': 1}
+    ok    : KKT residual max 2.220e-16, median 2.220e-16; max |sum-1| 9.5e-15; min weight 2.65e-21
+            log10 bins: {-16: 1}
+    failed: KKT residual max 5.009e-08, median 1.908e-10; max |sum-1| 7.5e-14; min weight 0.00e+00
+            log10 bins: {-99: 1, -16: 8, -15: 2, -14: 1, -13: 3, -12: 4, -11: 11, -10: 22, -9: 15, -8: 10}
+platform: darwin
+  ab_grid: 2700 solves, 0 failed
+  defaults_weekly: 390 solves, 0 failed
+  defaults_daily: 1890 solves, 0 failed
+  failure messages: {}
+== Linux image
+platform note: linux
+n=30 min_variance: 78 solves {'ok': 78}
+    ok    : KKT residual max 1.378e-08, median 7.097e-09; max |sum-1| 6.7e-16; min weight 0.00e+00
+            log10 bins: {-10: 1, -9: 55, -8: 22}
+n=30 mean_variance: 78 solves {'ok': 75, 'fail (mode 8)': 3}
+    ok    : KKT residual max 1.677e-08, median 3.726e-13; max |sum-1| 9.3e-15; min weight 0.00e+00
+            log10 bins: {-99: 4, -17: 3, -16: 22, -15: 5, -14: 2, -13: 4, -12: 2, -11: 3, -10: 14, -9: 12, -8: 4}
+    failed: KKT residual max 1.517e-08, median 2.508e-09; max |sum-1| 1.3e-14; min weight 0.00e+00
+            log10 bins: {-13: 1, -9: 1, -8: 1}
+n=100 min_variance: 78 solves {'ok': 78}
+    ok    : KKT residual max 1.418e-08, median 4.935e-09; max |sum-1| 1.3e-15; min weight 0.00e+00
+            log10 bins: {-12: 1, -11: 10, -10: 12, -9: 50, -8: 5}
+n=100 mean_variance: 78 solves {'fail (mode 8)': 78}
+    failed: KKT residual max 7.531e-08, median 4.076e-10; max |sum-1| 6.8e-14; min weight 0.00e+00
+            log10 bins: {-99: 1, -17: 1, -16: 3, -15: 7, -14: 1, -13: 3, -12: 7, -11: 7, -10: 17, -9: 19, -8: 12}
+platform: linux
+  ab_grid: 2700 solves, 0 failed
+  defaults_weekly: 390 solves, 0 failed
+  defaults_daily: 1890 solves, 0 failed
+  failure messages: {}
