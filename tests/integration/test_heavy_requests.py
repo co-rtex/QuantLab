@@ -162,7 +162,10 @@ def test_a_busy_refusal_does_not_spend_the_optimize_budget(client, seeded, monke
 def test_optimize_has_a_per_user_rate_limit(client, seeded, monkeypatch) -> None:
     monkeypatch.setattr(get_settings(), "rate_limit_optimize_per_minute", 2)
     url = f"/api/v1/dataset-versions/{seeded['dv']}/optimize"
-    codes = [
-        client.post(url, headers=seeded["headers"], json=OPTIMIZE).status_code for _ in range(3)
-    ]
-    assert codes == [200, 200, 429]
+    out = [client.post(url, headers=seeded["headers"], json=OPTIMIZE) for _ in range(3)]
+    assert [r.status_code for r in out] == [200, 200, 429]
+    # #239: when to try again, in the header and the body; the limiter clock is mid-minute.
+    refused = out[2]
+    assert refused.headers["retry-after"] == "30"
+    assert refused.json()["error"]["details"] == {"retry_after_seconds": 30}
+    assert refused.json()["error"]["message"] == "Too many optimizations; try again in 30 s."

@@ -21,6 +21,7 @@ from quantlab_api.security import (
     hash_password,
     login_limiter,
     rate_limit_address,
+    rate_limited,
     set_device_cookie,
     trusted_device,
     verify_password,
@@ -127,7 +128,7 @@ def login(body: LoginIn, request: Request, response: Response, db: DB) -> TokenO
     if budget is None:
         budget = login_limiter.reserve_receipt(f"login:fail:{email}", limit * 3)
         if not budget:
-            raise ApiError(429, "rate_limited", "Too many failed attempts; try again later")
+            raise rate_limited(60, "Too many failed sign-in attempts for this account")
     if (
         not verify_password(body.password, user.password_hash if user else None)
         or not user

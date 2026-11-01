@@ -84,6 +84,13 @@ and `make e2e` never touch another checkout's containers. Integration tests use 
 per-worktree database (`quantlab_test_<hash>`) and a session advisory lock, so concurrent
 runs that do share a database wait for each other instead of truncating each other's tables.
 
+Full-stack runs (`make e2e-serial`, or any command under `scripts/fullstack-lock.sh run`)
+take a lock in git's common directory, which every linked worktree of one clone shares. A
+**separate clone** has its own git directory, and so its own lock: it does not wait for
+this clone's runs. Stop its stacks before running one here, or run from a worktree of the
+same clone. A separate clone also defaults to slot 0, the `quantlab` project; give it its
+own `QUANTLAB_SLOT` (#233).
+
 ## Testing
 
 ```bash

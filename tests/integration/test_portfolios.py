@@ -14,6 +14,7 @@ def _create(client, seeded, **kw):
         f"/api/v1/workspaces/{seeded['ws']}/portfolios", headers=seeded["headers"], json=body
     )
     assert r.status_code == 201, r.text
+    assert r.json()["is_synthetic"] is True  # labelled in the create response too (#239)
     return r.json()["id"]
 
 
