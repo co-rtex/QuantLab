@@ -212,7 +212,17 @@ RQ_OPTIONS: dict[str, Any] = {"serializer": JSONSerializer, "job_class": Trusted
 def redis_conn() -> Redis:  # type: ignore[type-arg]
     global _redis
     if _redis is None:
-        _redis = Redis.from_url(get_settings().redis_url)
+        s = get_settings()
+        # Bounded explicitly (#200): a Redis that accepts connections but never answers
+        # fails each call in about these, in the direction its caller documents (the
+        # limiter counts locally, the bars cache misses, /ready is 503, enqueue leaves the
+        # job to the reaper). No retries: redis-py retries only a client built without a
+        # pool, which from_url doesn't. A worker's reply timeout is RQ's own (worker.py).
+        _redis = Redis.from_url(
+            s.redis_url,
+            socket_connect_timeout=s.redis_connect_timeout_seconds,
+            socket_timeout=s.redis_socket_timeout_seconds,
+        )
     return _redis
 
 
