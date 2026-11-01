@@ -1,6 +1,119 @@
-# Release-candidate readiness (2026-10-31)
+# Release-candidate readiness (updated 2026-11-01)
+
+## Private release candidate (2026-11-01, main `7fc89ee`)
+
+**Release SHA:** `7fc89eed5639f8feca4bd1b49c5e5a1c4303603e`. Versions: packages and web
+`0.1.0`, engine **1.6.0**, ML pipeline v3, Alembic head `18869f6a1dae`. Scope: **private,
+self-hosted use** on one host, every port bound to 127.0.0.1, trusted users. **Public
+deployment stays prohibited** (#39 security gate; #168 account lifecycle).
+
+**Verdict: READY as a private release candidate, with caveats.** Proposed tag `v0.1.0-rc.1`
+on `7fc89ee`.
+
+* The lead's integrated gate and an independent assessment from a fresh clone both pass on
+  this exact commit. The assessment found **no release blocker for private use**: every core
+  workflow ran live, crash recovery worked, and synthetic data was labelled on every surface
+  it checked, including the assistant and both report formats.
+* **Caveats** (each fails closed, never with wrong figures; fixes planned for rc.2):
+  * #237 (P1): validation fails, with an explicit error, for an experiment whose explicit
+    universe includes a symbol first listed after a sampled leakage-check cut. Workaround:
+    no explicit universe (the UI default).
+  * #238 (P2): the assistant marks its own answer ungrounded when a value rounds to "-0.00".
+  * #239 (P3): minor API messages and documentation gaps.
+  * This Mac's Docker VM (3918 MiB) is below the documented 5120 MiB minimum. Every run here
+    passed, with no OOM kill.
+
+### Evidence
+**Lead integrated gate** (lead-trial worktree, slot 86, the fullstack lock held; run on
+`7fc89ee` itself):
+* ruff, format (247 files) and mypy (77 files) clean;
+* pytest **1599 passed, 152 skipped**, 0 failed. The skips are the 151 slow-mode cases of
+  the engine oracle (they run under `QUANTLAB_ORACLE_SLOW=1`, below) and the opt-in
+  `tests/stack` restart test (run against a live stack, below);
+* tests/unit alone 975 passed; `QUANTLAB_ORACLE_SLOW=1` oracle, noise-order and buy-scale
+  tests 219 passed, 1 skipped;
+* migrations on a fresh database: base → head `18869f6a1dae` → base (1 table left, the
+  version table) → head; `alembic check`: no new upgrade operations;
+* web: lint, typecheck, unit tests **21/21** and build clean;
+* serial Playwright **49/49**.
+
+**Upgrade and reproduction across the engine bump** (Agent 3, slot 31, under the lock):
+an experiment created on `73238c0` (engine 1.5.0) and reproduced on `7fc89ee`. No
+migrations were needed (`18869f6a1dae` before and after). `/reproducibility`:
+`same_inputs: false` with `engine_version` 1.5.0 → 1.6.0 as the only difference,
+`fingerprint_match: true`. `/integrity`: verified 6, warning 3, failed 0, unassessed 6, with
+reproducibility "unassessed" and the documented reason. `tests/stack`: 1 passed (reproduce
+and validate across an API and worker restart).
+
+**Independent assessment** (fresh clone, slot 88): **READY WITH CAVEATS**, no blockers.
+* Clean install: `make setup`, lint, typecheck, web lint/typecheck/build exit 0; web tests
+  21/21; `npm audit --omit=dev` 0 vulnerabilities (16 moderate, dev-only, in the full audit).
+* Migrations: fresh base → head → base → head and `alembic check` clean; on a database with
+  data, one revision down and back up kept every row (the downgrade drops
+  `jobs.attempt_started_at` by design).
+* Startup: `make app-up` in 21.8 s; health and readiness ok; every published port on
+  127.0.0.1; API docs 404 under `test` and `production`; a per-request CSP nonce.
+* Workflows (API): register, workspace, synthetic and CSV ingest, a momentum backtest
+  (engine 1.6.0), reproduction (`same_inputs` and `fingerprint_match` true), validation,
+  integrity (16 checks), HTML and Markdown exports (both labelled synthetic), the assistant
+  (`synthetic: true`), ML (best out-of-sample AUC 0.530), a portfolio and optimize.
+* Limits: 200 symbols daily for 2005–2023 → 422 `backtest_too_large` (1228.2 MB over 1228),
+  199 → 202; 2000 synthetic assets → 422 `dataset_too_large`; a 53,477,463-byte CSV → 413;
+  two concurrent optimizes on one API process → 200 and 503 `server_busy` with
+  `retry-after: 2`; the optimize rate limit 10 then 429.
+* Recovery: a SIGKILL of a worker's main process mid-job; Docker restarted it in about 3 s,
+  and the job completed on attempt 2. API restarts kept state.
+* Tests: pytest 1599 passed, 152 skipped; `make e2e-serial` 49 passed.
+
+### Merged since the 2026-10-31 status update
+Each behaviour change had an independent review, a lead trial on current main and green CI.
+* **Engine:** 1.5.0 (#209: #187 lot check at fill, #195 exact pro-rata factor with
+  `commission_min`, #196 large-account float tolerance) and 1.6.0 (#226, #215: no order for
+  a float-noise change in a holding). The differential oracle catches all 32 mutations.
+* **Admission:** #192 (#181) closes two fail-open cases; 7-day weeks cap daily runs at 137
+  symbols.
+* **Jobs:** #213 (#212) RQ timeouts take the timed-out path; #216 (#214) a horse the worker
+  killed is never classed as OOM; #208 (#200) explicit API Redis timeouts.
+* **Security and limits:** #204 (#201) API docs off outside development; #205 (#202) the
+  console logger; #211 (#207) the limiter breaker and floor (ADR-0007, #221); #219 (#217)
+  cash-only portfolios read only the trading dates (one valuation was +1085 MiB);
+  #228 (#223, #220) a non-blocking per-process bound on heavy requests (503 `server_busy`
+  with Retry-After), an optimize rate limit and an API memory limit.
+* **Labelling and verification:** #232 (#230) synthetic data labelled on every surface,
+  including assistant answers; #193 (#182) byte-identical outputs across processes, hash
+  seeds, threads and restarts; #222 (#210) a warning for several dividends on one ex-date;
+  #236 deterministic limiter tests; #229 and #234 RC docs audits.
+
+### Requirements
+* macOS or Linux with Docker; **Docker VM memory ≥ 5120 MiB** for the default stack (2 job
+  workers at 1536 MiB, the API at 1880 MiB with 2 uvicorn workers, about 110 MiB for
+  Postgres, Redis, web and the reaper; docs/RUNBOOK.md, "Resources"). The 4-worker API
+  override needs 2560M and a 5742 MiB VM. `scripts/stack-env.sh` warns below the minimum.
+  This development Mac's VM is 3918 MiB, so every run here was below the documented
+  minimum (they passed).
+* Python via `uv`, Node for the web app (`make setup`); Postgres 17 and Redis from compose.
+* Secrets set as in `.env.example` before any non-development use; the production guard
+  refuses placeholders and short secrets.
+
+### Known limitations (not release blockers for private use)
+* **No public exposure** until #39 closes; no password change or reset, and a plain logout
+  leaves a bearer token valid until it expires (#168).
+* **Synthetic and CSV data only.** The licensed vendor adapter and the reconciliation
+  against a second source are blocked on a licence and key (#11, #12). The assistant uses
+  the deterministic provider; a hosted model needs a key and approval (#15).
+* **Capacity:** heavy requests run one per API process (two per container by default);
+  extra concurrent ones get 503 `server_busy` and the web retries once. One optimize at 100
+  symbols costs 285–590 MiB (#225), and optimize still runs in the API (#224). Backtest
+  admission caps memory-heavy runs (about 199 symbols daily for 2005–2023).
+* **Benchmarks:** the published figures measured `da8767a` (engine 1.4.0); large/xl and
+  external load tests are not done (#24, #20).
+* Open: #237, #238, #239 (rc.2), and #218, #225, #227, #231, #233, #235 (owners and
+  priorities on each).
 
 ## Status update (later on 2026-10-31, main `6eaf2d9`)
+_Historical. Superseded by the section above: every issue listed below as open or in
+progress is now closed (#187, #195, #196, #181/#192, #200, #201, #202, #165, #166, #175),
+and #191's 4.5 GiB minimum became 5120 MiB in #228._
 **Both code-defect release blockers are fixed and merged.** Each had an independent
 review, a trial on current main (full pytest and serial Playwright) and green CI.
 
