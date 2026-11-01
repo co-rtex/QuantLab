@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import contextlib
 import contextvars
 import glob
 import hmac
 import logging
 import os
+import socketserver
 import sys
 import threading
 import time
@@ -175,28 +177,62 @@ def compact_dead_process(pid: int, directory: str | None = None) -> None:
     Every work horse is a new pid, and multiprocess mode keeps a file per kind per pid,
     so a worker accumulated about three files (20 KiB of tmpfs, charged to its memory
     limit) per job, and each scrape read them all. Counters and histograms are added to
-    the archive and so never go down; scrapes are held off while it happens.
+    the archive and so never go down; scrapes are held off while it happens. All or
+    nothing: a failure before the renames leaves every file as it was.
     """
-    from prometheus_client.mmap_dict import MmapedDict
-
     d = directory or os.environ["PROMETHEUS_MULTIPROC_DIR"]
     with _FILES:
+        # 1. Every merge, in memory: nothing on disk changes yet.
+        merged: dict[str, tuple[str, dict[str, Sample]]] = {}
         for kind, merge in _ARCHIVED.items():
             dead = os.path.join(d, f"{kind}_{pid}.db")
             if not os.path.exists(dead):
                 continue
-            values = MmapedDict.read_all_values_from_file(dead)  # type: ignore[no-untyped-call]
-            incoming = [(k, v, ts) for k, v, ts, _ in values]
-            archive = MmapedDict(os.path.join(d, f"{kind}_archive.db"))  # type: ignore[no-untyped-call]
-            try:
-                have = {k: (v, ts) for k, v, ts in archive.read_all_values()}  # type: ignore[no-untyped-call]
-                for key, value, ts in incoming:
-                    merged = merge(have[key], (value, ts)) if key in have else (value, ts)
-                    archive.write_value(key, *merged)  # type: ignore[no-untyped-call]
-                    have[key] = merged
-            finally:
-                archive.close()  # type: ignore[no-untyped-call]
+            archive = os.path.join(d, f"{kind}_archive.db")
+            have = _read(archive) if os.path.exists(archive) else {}
+            for key, sample in _read(dead).items():
+                have[key] = merge(have[key], sample) if key in have else sample
+            merged[kind] = (dead, have)
+        # 2. Each new archive complete in a temporary file the collector does not read (it
+        # reads *.db). An error here leaves the archives and the dead files as they were,
+        # so nothing is counted twice or lost; the dead files stay counted on their own.
+        staged: list[tuple[str, str, str]] = []
+        tmp = ""
+        try:
+            for kind, (dead, have) in merged.items():
+                tmp = os.path.join(d, f"{kind}_archive.db.tmp")
+                _write(tmp, have)
+                staged.append((tmp, os.path.join(d, f"{kind}_archive.db"), dead))
+        except BaseException:
+            for leftover in {t for t, _, _ in staged} | ({tmp} if tmp else set()):
+                with contextlib.suppress(FileNotFoundError):
+                    os.remove(leftover)
+            raise
+        # 3. Swap each archive in and drop its dead file, kind by kind: two renames on the
+        # same filesystem, with scrapes held off.
+        for tmp, archive, dead in staged:
+            os.replace(tmp, archive)
             os.remove(dead)
+
+
+def _read(path: str) -> dict[str, Sample]:
+    from prometheus_client.mmap_dict import MmapedDict
+
+    values = MmapedDict.read_all_values_from_file(path)  # type: ignore[no-untyped-call]
+    return {key: (value, ts) for key, value, ts, _ in values}
+
+
+def _write(path: str, samples: dict[str, Sample]) -> None:
+    from prometheus_client.mmap_dict import MmapedDict
+
+    with contextlib.suppress(FileNotFoundError):
+        os.remove(path)  # a leftover from a fold that failed before its rename
+    out = MmapedDict(path)  # type: ignore[no-untyped-call]
+    try:
+        for key, (value, ts) in samples.items():
+            out.write_value(key, value, ts)  # type: ignore[no-untyped-call]
+    finally:
+        out.close()  # type: ignore[no-untyped-call]
 
 
 def _has_header(path: str) -> bool:
@@ -247,8 +283,24 @@ def worker_metrics_app(token: str | None) -> WSGIApp:
 
 
 class _QuietHandler(WSGIRequestHandler):
+    # A connection that sends nothing is dropped after this long instead of holding its
+    # thread (any container on the network can open one, before any token is checked).
+    timeout = 10
+
     def log_message(self, format: str, *args: Any) -> None:
         return None  # one line per scrape on stderr is noise
+
+
+class _ThreadingServer(socketserver.ThreadingMixIn, WSGIServer):
+    """One thread per connection, so an idle or slow client cannot hold up a scrape."""
+
+    daemon_threads = True
+
+    def handle_error(self, request: Any, client_address: Any) -> None:
+        # A client that timed out or went away is not an error worth a traceback on stderr.
+        if isinstance(sys.exc_info()[1], TimeoutError | ConnectionError):
+            return
+        super().handle_error(request, client_address)
 
 
 def serve_worker_metrics(port: int, token: str | None) -> WSGIServer:
@@ -258,6 +310,12 @@ def serve_worker_metrics(port: int, token: str | None) -> WSGIServer:
     network, and the port is never published to the host.
     """
     app = worker_metrics_app(token)
-    server = make_server("0.0.0.0", port, app, handler_class=_QuietHandler)  # noqa: S104
+    server = make_server(
+        "0.0.0.0",  # noqa: S104
+        port,
+        app,
+        server_class=_ThreadingServer,
+        handler_class=_QuietHandler,
+    )
     threading.Thread(target=server.serve_forever, name="metrics", daemon=True).start()
     return server

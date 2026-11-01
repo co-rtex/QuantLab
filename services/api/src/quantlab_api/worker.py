@@ -11,6 +11,7 @@ import os
 from typing import Any
 
 from rq import Worker
+from rq.exceptions import StopRequested
 
 from quantlab_api import tasks  # noqa: F401 - registers job handlers
 from quantlab_api.config import get_settings
@@ -51,14 +52,23 @@ class QuantlabWorker(Worker):
                 try:
                     multiprocess.mark_process_dead(horse)  # type: ignore[no-untyped-call]
                     compact_dead_process(horse)
+                except StopRequested:
+                    # A SIGTERM during the fold: rq's warm shutdown must still happen, or the
+                    # worker would take a new job and be SIGKILLed in the middle of it.
+                    raise
                 except Exception:  # metrics bookkeeping must never stop the worker
                     log.exception("worker_metrics_compaction_failed", horse=horse)
 
 
 def main() -> None:
     settings = get_settings()
-    # The same rule as the API's /metrics (#165): no production worker without the token.
-    settings.require_metrics_token()
+    # A worker serves job metrics only with a multiprocess directory (compose sets one): the
+    # job metrics are recorded in the work horses, and without it they are lost with each
+    # horse, so there is nothing to serve. Serving, it follows the API's /metrics rule
+    # (#165): no production worker without the token, refused before it takes any work.
+    serving = bool(os.environ.get("PROMETHEUS_MULTIPROC_DIR"))
+    if serving:
+        settings.require_metrics_token()
     configure_logging(json=settings.environment != "development")
     setup_tracing("quantlab-worker", synchronous=True)
     # A new name per start unless QUANTLAB_WORKER_NAME fixes one (#162): see worker_identity.
@@ -71,9 +81,7 @@ def main() -> None:
         work_horse_killed_handler=horse_killed,  # out-of-memory kills (#163)
         **RQ_OPTIONS,
     )
-    if os.environ.get("PROMETHEUS_MULTIPROC_DIR"):
-        # Job metrics are recorded in the work horses; without a multiprocess directory they
-        # are lost with each horse, so there is nothing to serve.
+    if serving:
         port = int(os.environ.get("QUANTLAB_WORKER_METRICS_PORT", "9101"))
         token = settings.metrics_token.get_secret_value() if settings.metrics_token else None
         serve_worker_metrics(port, token)
