@@ -28,6 +28,38 @@ rq requeue --all -S rq.serializers.JSONSerializer   # only with both variables s
 Never point plain `rq` tools, or rq-dashboard (it reads jobs with the default serializer),
 at this Redis.
 
+## Resources
+
+**Docker VM memory: at least 4.5 GiB for the default stack (#175).** The default is 2 workers
+at 1536 MiB, 4 API processes, and the 1228 MB backtest admission cap.
+* **Measured, not configured.** Only the workers have a memory limit. Their two limits
+  alone are 3,072 MiB, and api, postgres, redis, web and the reaper have none. So the sum
+  of the limits doesn't bound the VM's use.
+* **The measurement** (2026-11-01, main e7cf4fd, a 3.83 GiB / 3,919 MiB VM): 3 rounds of
+  2 concurrent backtests at the admission cap (equal weight, 199 symbols, daily, 2005–2023).
+  * All 6 completed on their first attempt, with no OOM kill and no container restart.
+  * The VM's `MemAvailable` fell to 234 MB at worst: 94% of the VM in use (3,685 MiB).
+  * Each worker peaked at 1,083–1,160 MiB anonymous; the API at 335 MiB, the reaper 47,
+    Postgres 28, web 19, Redis 15.
+* **The minimum:** that peak, 3,685 MiB, plus 20% is 4,422 MiB, rounded up to 4.5 GiB
+  (4,608 MiB).
+* **Below it, as on this project's development machine (3.83 GiB):** the stack runs with
+  about 6% headroom at worst. A VM-level OOM, which would show in the VM's kernel log as
+  `Out of memory: Killed process` rather than `Memory cgroup out of memory`, wasn't
+  reproduced in those 6 jobs. That it can happen is unverified, not ruled out.
+* **Not measured on top:** the observability profile (Prometheus, Grafana, Jaeger), a
+  second stack, and Docker builds. Each adds to the same VM.
+* **The warning:** `scripts/stack-env.sh`, and so every `make` target, warns on stderr when
+  the VM is smaller than the minimum. It changes nothing; `QUANTLAB_SKIP_VM_CHECK=1`
+  silences it.
+* **To fit a smaller VM:** run 1 worker (`QUANTLAB_WORKERS=1`), or lower the worker limit
+  together with `QUANTLAB_MAX_BACKTEST_MEMORY_MB` (see "Backtests that don't fit the
+  worker's memory").
+* **Resource Saver:** Docker Desktop stops an idle VM (5 minutes by default here), and its
+  kernel log goes with it. To keep evidence of an OOM kill, read
+  `docker run --rm --cap-add SYSLOG --entrypoint dmesg redis:7-alpine` before every
+  container is stopped.
+
 ## Observability
 
 * **Logs**: JSON (structlog) with `request_id` and, when tracing is on, `trace_id`.
