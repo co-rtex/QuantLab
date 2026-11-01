@@ -97,6 +97,7 @@ def bench(
     skip_parallel: bool = False,
     skip_postgres: bool = False,
     skip_redis: bool = False,
+    settle_s: float = harness.SETTLE_S,
 ) -> dict[str, Any]:
     from quantlab.backtest.engine import BacktestConfig, run_backtest
     from quantlab.data.quality import assess_quality
@@ -222,7 +223,7 @@ def bench(
     if api:
         out["api"] = api_latency(api, repeats)
     out["peak_rss_mb"] = round(maxrss_mb(), 1)
-    return harness.finalize(out, start_load)
+    return harness.finalize(out, start_load, settle_s)
 
 
 def parallel(path: str, runs: int, repeats: int) -> dict[str, Any]:
@@ -393,6 +394,12 @@ def main() -> None:
     ap.add_argument("--skip-parallel", action="store_true")
     ap.add_argument("--skip-postgres", action="store_true")
     ap.add_argument("--skip-redis", action="store_true")
+    ap.add_argument(
+        "--settle",
+        type=float,
+        default=harness.SETTLE_S,
+        help="idle seconds before the load reading that decides contention (#160)",
+    )
     args = ap.parse_args()
     res = bench(
         args.profile,
@@ -402,6 +409,7 @@ def main() -> None:
         skip_parallel=args.skip_parallel,
         skip_postgres=args.skip_postgres,
         skip_redis=args.skip_redis,
+        settle_s=args.settle,
     )
     outdir = ROOT / "results"
     outdir.mkdir(exist_ok=True)

@@ -139,8 +139,11 @@ machine. They are kept for diagnosis only, and no figures are quoted from them:
 | `20261031T215853Z-scaling-contended.json` | scaling 1/2/4 workers | 3.47 → 7.17 |
 | `20261031T220408Z-scaling-contended.json` | scaling, rerun | 6.14 → 5.36 |
 
-Separating background load from the run's own load is a methodology follow-up; the rule
-was not changed for this window.
+The rule was not changed for this window. Since #160, the harness decides contention
+from the load at the start and after the run has settled for 180 idle seconds, not from
+the reading straight at the end (`benchmarks/README.md`). The files above were judged by
+the end-of-run rule, are not reclassified, and stay unpublished. large, xl, load and
+scaling can be published only from new runs under the new rule.
 
 ## Earlier figures withdrawn
 
@@ -158,7 +161,7 @@ dataset versions must be immutable files that DuckDB can also scan for analytics
 ## Not yet measured
 
 - Cold-cache reads (they need `sudo -n purge` on macOS or root on Linux).
-- large and xl under the publication rule.
+- large and xl under the publication rule (now with the settled reading, #160).
 - HTTP load from a separate generator host.
 - Worker scaling on hosts with headroom.
 - Failure-recovery timing.
