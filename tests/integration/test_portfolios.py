@@ -94,3 +94,79 @@ def test_portfolio_isolation(client, seeded):
         json={"trade_date": "2021-01-05", "kind": "deposit", "amount": 1},
     )
     assert r.status_code == 404
+
+
+def _unfiltered_reads(monkeypatch) -> list[str]:
+    """Each load of every symbol's bars or actions in a dataset version (#217)."""
+    from quantlab.data.store import DatasetStore
+
+    reads: list[str] = []
+    load_bars, load_actions = DatasetStore.load_bars, DatasetStore.load_actions
+
+    def bars(self, dv, symbols=None, **kw):
+        if not symbols:
+            reads.append("bars")
+        return load_bars(self, dv, symbols=symbols, **kw)
+
+    def actions(self, dv, symbols=None):
+        if not symbols:
+            reads.append("actions")
+        return load_actions(self, dv, symbols=symbols)
+
+    monkeypatch.setattr(DatasetStore, "load_bars", bars)
+    monkeypatch.setattr(DatasetStore, "load_actions", actions)
+    return reads
+
+
+def test_a_cash_only_ledger_never_reads_the_whole_dataset(client, seeded, monkeypatch):
+    """#217: with no symbol in the ledger and no benchmark, every portfolio route read the
+    version's every bar and action: on creation, on each valuation (the page opens with
+    one), and on each append, under the portfolio's row lock."""
+    reads = _unfiltered_reads(monkeypatch)
+    pid = _create(client, seeded, benchmark=None)
+    r = client.get(f"/api/v1/portfolios/{pid}/valuation", headers=seeded["headers"])
+    assert r.status_code == 200, r.text
+    deposit = tx(client, seeded, pid, trade_date="2021-02-01", kind="deposit", amount=500)
+    assert deposit.status_code == 201, deposit.text
+    assert reads == []
+
+
+def test_a_cash_only_valuation_is_unchanged(client, seeded):
+    """The same sessions and equity as when the ledger was valued against every bar."""
+    import uuid
+
+    from sqlalchemy import select
+
+    from quantlab.portfolio.valuation import value_portfolio
+    from quantlab_api.db import SessionLocal
+    from quantlab_api.models import DatasetVersion, Portfolio, PortfolioTransaction, User
+    from quantlab_api.routes import portfolios as P
+    from quantlab_api.tasks import dataset_store
+
+    pid = _create(client, seeded, benchmark=None, start_date="2020-01-02")
+    for body in (
+        {"trade_date": "2020-06-01", "kind": "deposit", "amount": 2_500},
+        {"trade_date": "2021-03-01", "kind": "withdrawal", "amount": 40_000},
+        {"trade_date": "2022-12-30", "kind": "deposit", "amount": 1},
+    ):
+        r = tx(client, seeded, pid, **body)
+        assert r.status_code == 201, r.text
+    with SessionLocal() as db:
+        p = db.get(Portfolio, uuid.UUID(pid))
+        dv = db.get(DatasetVersion, p.dataset_version_id)
+        txs = db.scalars(
+            select(PortfolioTransaction)
+            .where(PortfolioTransaction.portfolio_id == p.id)
+            .order_by(PortfolioTransaction.seq)
+        ).all()
+        entries = P._entries(list(txs))
+        store = dataset_store()
+        v = store.open(dv.dataset.slug, dv.version_hash)
+        before = value_portfolio(entries, store.load_bars(v), store.load_actions(v))
+        owner = db.scalar(select(User))
+        after = value_portfolio(entries, *P._market(db, owner, p, set())[:2])
+    assert after.equity.equals(before.equity)
+    out = client.get(f"/api/v1/portfolios/{pid}/valuation", headers=seeded["headers"]).json()
+    assert out["series"]["dates"] == [d.strftime("%Y-%m-%d") for d in before.equity.index]
+    assert out["series"]["equity"] == before.equity["equity"].round(2).tolist()
+    assert len(out["series"]["dates"]) > 700  # every session from 2020-01-02 to 2022-12-30
