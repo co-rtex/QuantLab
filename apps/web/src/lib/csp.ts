@@ -7,8 +7,15 @@
 // * Scripts: the nonce and 'strict-dynamic', so only the scripts Next renders run, plus
 //   what they load. No 'unsafe-inline'. 'unsafe-eval' only in development, where React
 //   uses eval to rebuild server error stacks.
-// * Style elements: the nonce too. Style attributes stay allowed (style-src-attr): Next's
-//   built-in error pages render them, and an attribute cannot run script.
+// * Style elements: the nonce too. Style attributes stay allowed (style-src-attr
+//   'unsafe-inline'), and only they:
+//   - Needed: Next's built-in error pages (_not-found, _global-error) render style
+//     attributes in their HTML, which no nonce can cover. React's own style={…} on the
+//     client sets properties through the CSSOM, which CSP does not govern.
+//   - Narrow: an attribute cannot run script, load a stylesheet or @import; url() in it
+//     is still held to img-src and font-src. A <style> element, which could carry
+//     selectors that probe the page, still needs the nonce.
+//   - Precondition for abuse: HTML injection, which React's escaping already prevents.
 // * Everything else from this origin only: the API is reached through /api, and fonts
 //   are self-hosted by next/font. No frames of this app anywhere (frame-ancestors).
 
