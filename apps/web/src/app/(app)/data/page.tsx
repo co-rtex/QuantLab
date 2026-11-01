@@ -151,7 +151,9 @@ export default function DataPage() {
                   <div className="flex flex-wrap items-baseline gap-2">
                     <h3 className="font-serif text-lg font-semibold">{d.name}</h3>
                     <span className="text-xs text-ink-2">{d.slug}</span>
-                    {d.provider === "synthetic" && <SyntheticTag />}
+                    {/* By its versions, not its provider (#230): a synthetic version can sit in a dataset
+                        whose provider is not "synthetic" (vendor fixture data). */}
+                    {(d.provider === "synthetic" || byDataset(d.id).some((v) => v.is_synthetic)) && <SyntheticTag />}
                   </div>
                   <p className="mt-0.5 max-w-prose text-sm text-ink-2">{d.description}</p>
                   <div className="mt-3 overflow-x-auto" tabIndex={0}>
@@ -170,9 +172,13 @@ export default function DataPage() {
                         {byDataset(d.id).map((v) => (
                           <tr key={v.id}>
                             <td>
-                              <Link href={`/data/${v.id}`} className="text-cobalt hover:underline">
+                              {/* Underlined, not only coloured: next to the tag's text the link
+                                  sits in a block of text, and must be told apart without colour
+                                  (WCAG 1.4.1, axe link-in-text-block). */}
+                              <Link href={`/data/${v.id}`} className="text-cobalt underline">
                                 {shortHash(v.version_hash, 12)}
                               </Link>
+                              {v.is_synthetic && <span className="ml-2"><SyntheticTag /></span>}
                             </td>
                             <td className="r">{compact(v.rows)}</td>
                             <td className="r">{v.symbol_count}</td>

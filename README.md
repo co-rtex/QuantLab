@@ -11,14 +11,13 @@ assumptions and are never investment advice.
 
 | Area | Capability |
 |---|---|
-| Market data | NYSE trading calendar, raw OHLCV with availability timestamps, splits and dividends, point-in-time total-return adjustment, 10 quality checks, content-addressed immutable Parquet versions, DuckDB retrieval with Redis caching, resumable throttled ingestion with backoff |
+| Market data | NYSE trading calendar, raw OHLCV with availability timestamps, splits and dividends, point-in-time total-return adjustment, 23 quality checks (blocking gates and warnings), content-addressed immutable Parquet versions, DuckDB retrieval with Redis caching, resumable throttled ingestion with backoff |
 | Accounting | Transaction ledger with replay audit, value conservation, corporate actions, rejection of impossible trades |
 | Backtesting | Daily event-driven engine with next-session fills, slippage, commissions, partial fills, rejections, delisting liquidation and deterministic fingerprints. Nine strategies: buy and hold, equal weight, SMA crossover, momentum, mean reversion, low volatility, minimum variance, risk parity, volatility target |
 | Analytics | Return, risk-adjusted, benchmark-relative and drawdown statistics with explicit undefined handling. Historical, Gaussian and Cornish-Fisher VaR/ES, risk contributions, stress scenarios, bootstrap Monte Carlo, FIFO trade statistics, cost attribution |
 | Reproducibility | Input hash, engine version, code version, dataset hash and output fingerprint for every experiment; one-click reproduction with automatic fingerprint comparison; downloadable manifest |
 | Platform | FastAPI with OpenAPI docs, Argon2id auth, JWT plus httpOnly cookie sessions, workspace roles, audit log, durable Postgres-backed jobs (leases, fencing, retries, cancellation, timeouts, reaper), Prometheus metrics, structured logs with request correlation |
 | Frontend | Next.js research workspace: market-data explorer, quality report, strategy builder, live job progress, results explorer (equity and drawdown, benchmark table, tail risk, attribution, monthly returns, trade blotter, holdings by date), comparison, workspace administration |
-
 | Validation | Walk-forward with in-sample parameter selection, parameter and cost sweeps, bootstrap confidence intervals, deflated Sharpe, regime breakdown, engine-level look-ahead check, and a Research Integrity Report |
 | ML research | Point-in-time features, purged and embargoed chronological CV, baselines against logistic regression, random forest and gradient boosting |
 | Assistant and reports | Evidence-grounded assistant with verified citations and a deterministic fallback ([eval](docs/AI_EVAL.md)); HTML and Markdown report export |
@@ -49,9 +48,11 @@ Details are in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md), the formulas in
 ## Quick start
 
 Requirements: Docker, Python 3.12 with [uv](https://docs.astral.sh/uv/), Node.js 22. The
-full stack (`make app-up`, 2 workers) needs at least **4.5 GiB of Docker VM memory**: that's
-the measured peak of 3,685 MiB with two backtests at the admission cap, plus 20% (#175;
-[RUNBOOK, Resources](docs/RUNBOOK.md#resources)). `make` warns on smaller VMs.
+full stack (`make app-up`, 2 workers) needs at least **5 GiB of Docker VM memory**: the sum
+of its memory limits (2 workers at 1,536 MiB and the API at 1,880 MiB) plus the measured
+peaks of Postgres, Redis, web and the reaper, about 110 MiB, is 5,062 MiB (#175, #220;
+[RUNBOOK, Resources](docs/RUNBOOK.md#resources)). `make` warns on smaller VMs. The earlier
+4.5 GiB predates the API's memory limit.
 
 ```bash
 make setup            # uv sync + npm ci
@@ -63,6 +64,12 @@ make web-dev          # frontend on :3000            (terminal 4)
 ```
 
 Or run everything in containers: `make app-up` (web on :3000, API on :8000, two workers).
+
+**Local only.** Every port is bound to 127.0.0.1. **Public exposure is prohibited until
+#39 is closed.** It needs the TLS edge on an address-preserving Linux host, its verification
+from a second machine, and the lead's rerun ([RUNBOOK, Exposing a
+deployment](docs/RUNBOOK.md#exposing-a-deployment)). Never publish the web tier, the API,
+Postgres, Redis, Prometheus, Grafana or Jaeger directly.
 
 Open http://localhost:3000, create an account, generate a synthetic dataset under
 **Market data**, then create an experiment. API docs: http://localhost:8000/api/v1/docs, served only with `QUANTLAB_ENVIRONMENT=development`

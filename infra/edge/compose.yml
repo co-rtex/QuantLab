@@ -7,7 +7,9 @@
 # and only the edge and web share the `edge` network, so a client can reach the web tier
 # (which trusts the edge's X-Forwarded-For) only through Caddy. The web tier also refuses
 # any request without the edge secret, so a mistakenly published web port fails closed.
-# QUANTLAB_EDGE_BIND stays 127.0.0.1 until the edge is verified (infra/edge/verify.sh).
+# QUANTLAB_EDGE_BIND stays 127.0.0.1 until #39 is closed: verify.sh, the remote probe from a
+# second machine on an address-preserving host, and the lead's rerun (docs/RUNBOOK.md,
+# "Exposing a deployment"). Public exposure is prohibited until then.
 
 services:
   edge:

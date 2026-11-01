@@ -86,6 +86,7 @@ def test_report_export_html_and_markdown(client, seeded):
     assert md.headers["content-disposition"].endswith('.md"')
     assert md.text.startswith("# Momentum test")
     assert "| Sharpe ratio |" in md.text
+    assert "> **Synthetic data.**" in md.text  # labelled in Markdown too (#230)
     exp = client.get(f"/api/v1/experiments/{exp_id}", headers=h).json()
     assert exp["fingerprint"] in md.text  # report cites the exact output fingerprint
 
@@ -117,12 +118,15 @@ def test_assistant_answers_from_evidence_and_declines_advice(client, seeded):
     exp = client.get(f"/api/v1/experiments/{exp_id}", headers=h).json()
     sharpe = next(f for f in a["facts"] if f["label"] == "Sharpe ratio")
     assert abs(sharpe["value"] - exp["summary"]["sharpe"]) < 1e-12  # same number as analytics
+    # Synthetic data, so the answer says so, whatever was asked (#230).
+    assert a["synthetic"] is True and "synthetic data" in a["text"].lower()
     adv = client.post(
         f"/api/v1/experiments/{exp_id}/assistant",
         headers=h,
         json={"question": "Should I invest in this strategy?"},
     ).json()
     assert adv["declined"] is True
+    assert adv["synthetic"] is True and "synthetic data" in adv["text"].lower()
     assert adv["citations"] == []
     bad = client.post(f"/api/v1/experiments/{exp_id}/assistant", headers=h, json={"question": ""})
     assert bad.status_code == 422

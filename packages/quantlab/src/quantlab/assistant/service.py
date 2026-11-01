@@ -110,10 +110,32 @@ class AnthropicProvider:
         return text
 
 
+# Appended to every answer about an experiment on synthetic data (#230): the project's rule is
+# that synthetic data is always labelled. The facts carried it only as an integrity check, so
+# "What was the Sharpe?" returned figures with no word of it, and the model's prompt asked for
+# it without any check.
+SYNTHETIC_NOTE = (
+    "\n\nThese results come from synthetic data, generated for research and testing, "
+    "not from real market prices."
+)
+
+
 def answer_question(
-    question: str, facts: list[Fact], provider: LLMProvider | None = None
+    question: str, facts: list[Fact], provider: LLMProvider | None = None, *, synthetic: bool
 ) -> Answer:
-    """Answer from evidence. The LLM only rephrases facts; its output is verified."""
+    """Answer from evidence. The LLM only rephrases facts; its output is verified.
+
+    ``synthetic`` is the experiment's dataset version's flag, and required: whatever path
+    the answer takes (assembled, declined, out of scope, or the model's), it then ends
+    with ``SYNTHETIC_NOTE`` and says ``synthetic=True``."""
+    ans = _answer(question, facts, provider)
+    if synthetic:
+        ans.text += SYNTHETIC_NOTE
+        ans.synthetic = True
+    return ans
+
+
+def _answer(question: str, facts: list[Fact], provider: LLMProvider | None) -> Answer:
     question = question.strip()[:1000]
     base = deterministic_answer(question, facts)
     base.verification = verify_answer(base.text, facts)

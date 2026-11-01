@@ -1,3 +1,5 @@
+import { sendRetryingBusy } from "./busy";
+
 export class ApiError extends Error {
   constructor(
     public status: number,
@@ -10,14 +12,25 @@ export class ApiError extends Error {
   }
 }
 
-export async function api<T>(path: string, init: RequestInit & { json?: unknown } = {}): Promise<T> {
-  const headers = new Headers(init.headers);
-  let body = init.body;
-  if (init.json !== undefined) {
+export interface ApiInit extends RequestInit {
+  json?: unknown;
+  /** Told when the server is busy (503 server_busy, #223) and the request will be sent
+   * again, once, in `seconds` (busy.ts). */
+  onBusy?: (seconds: number) => void;
+}
+
+export async function api<T>(path: string, init: ApiInit = {}): Promise<T> {
+  const { onBusy, json, ...rest } = init;
+  const headers = new Headers(rest.headers);
+  let body = rest.body;
+  if (json !== undefined) {
     headers.set("content-type", "application/json");
-    body = JSON.stringify(init.json);
+    body = JSON.stringify(json);
   }
-  const res = await fetch(`/api/v1${path}`, { ...init, headers, body, credentials: "same-origin" });
+  const res = await sendRetryingBusy(
+    () => fetch(`/api/v1${path}`, { ...rest, headers, body, credentials: "same-origin" }),
+    onBusy,
+  );
   if (res.status === 204) return undefined as T;
   const data = await res.json().catch(() => null);
   if (!res.ok) {

@@ -3,7 +3,7 @@
 import { useState, type FormEvent } from "react";
 import { SERIES } from "@/components/charts";
 import { PageHeader } from "@/components/Shell";
-import { ErrorNote, Panel, QueryError, SyntheticTag } from "@/components/ui";
+import { BusyNote, ErrorNote, Panel, QueryError, SyntheticTag } from "@/components/ui";
 import { api, ApiError, type DatasetVersion } from "@/lib/api";
 import { num, pct, shortHash } from "@/lib/format";
 import { useInstruments } from "@/lib/instruments";
@@ -51,6 +51,7 @@ export default function OptimizePage() {
   const [res, setRes] = useState<Response>();
   const [err, setErr] = useState<ApiError>();
   const [busy, setBusy] = useState(false);
+  const [serverBusy, setServerBusy] = useState<number>();
 
   async function run(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();
@@ -59,10 +60,12 @@ export default function OptimizePage() {
     const symbols = text ? text.split(/[\s,]+/).filter(Boolean) : assets.slice(0, 12).map((a) => a.symbol);
     setBusy(true);
     setErr(undefined);
+    setServerBusy(undefined);
     try {
       setRes(
         await api<Response>(`/dataset-versions/${dvId}/optimize`, {
           method: "POST",
+          onBusy: setServerBusy, // the server is busy: api() tries once more after this wait
           json: {
             symbols,
             as_of: f.get("as_of") || null,
@@ -76,6 +79,7 @@ export default function OptimizePage() {
     } catch (x) {
       setErr(x as ApiError);
     }
+    setServerBusy(undefined);
     setBusy(false);
   }
 
@@ -128,7 +132,11 @@ export default function OptimizePage() {
               </label>
             </div>
             <ErrorNote error={err} />
-            <button className="btn btn-primary" disabled={busy || !dvId}>
+            <BusyNote seconds={serverBusy} />
+            {/* Disabled while a request is pending (a busy server's wait included), and before the
+                instruments load: the default symbols are their first 12, and a click before then
+                sent "symbols": [] and got 422 "Request validation failed" (seen in #232's CI). */}
+            <button className="btn btn-primary" disabled={busy || !dvId || !inst.data}>
               {busy ? "Optimizing…" : "Compare allocations"}
             </button>
           </form>

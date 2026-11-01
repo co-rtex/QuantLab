@@ -307,6 +307,8 @@ def assistant(
     facts = build_facts(
         ev["analysis"], build_integrity_report(ev), ev["validation"], exp.config.get("benchmark")
     )
-    ans = answer_question(body.question, facts, _provider())
+    ans = answer_question(
+        body.question, facts, _provider(), synthetic=bool(ev["dataset"]["is_synthetic"])
+    )
     cited = [f for f in facts_payload(facts) if f["id"] in set(ans.citations)]
     return {**ans.to_dict(), "facts": cited, "available_facts": len(facts)}

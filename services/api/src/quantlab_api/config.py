@@ -20,8 +20,8 @@ def _shared_dev_secret(data_dir: Path) -> SecretStr:
     """A development signing key shared by every process using ``data_dir``.
 
     A random per-process key breaks as soon as the API runs more than one worker
-    (``uvicorn --workers 4``): a token signed by one worker is rejected by the others, so
-    roughly three requests in four fail. Processes take an exclusive lock on a separate
+    (``uvicorn --workers N``): a token signed by one worker is rejected by the others, so
+    about (N-1)/N of requests fail. Processes take an exclusive lock on a separate
     lock file, so exactly one of them creates (or repairs) the key while the others wait
     and then read it. The key is written to a private temporary file and renamed into
     place, so even a reader that ignores the lock never sees half a key.
@@ -115,6 +115,11 @@ class Settings(BaseSettings):
     max_backtest_memory_mb: int = Field(1228, ge=64)
     max_dataset_assets: int = Field(2000, ge=1)
     rate_limit_login_per_minute: int = Field(10, ge=1)
+    # Heavy request-time work (#223): optimize and the portfolio ledger, at most this many
+    # at once per API process (more get 503 server_busy), and optimize at most this many
+    # times per user and minute (429). Defaults from docs/RUNBOOK.md, "Resources".
+    heavy_requests_per_process: int = Field(1, ge=1, le=16)
+    rate_limit_optimize_per_minute: int = Field(10, ge=1)
     # Peers allowed to state the client address in X-Forwarded-For: IPs, CIDRs or hostnames
     # (e.g. the compose service "web"). Requests from anyone else use the socket address.
     trusted_proxies: list[str] = []

@@ -9,7 +9,7 @@
 | Workers | `docker compose --profile app ps worker` / `rq info` as below | workers listening on `quantlab` |
 | Reaper | logs contain `reaper_cycle` lines when it recovers anything | process running |
 | Metrics (API) | `curl -H "Authorization: Bearer $QUANTLAB_METRICS_TOKEN" localhost:8000/metrics` | Prometheus text |
-| Metrics (each worker; job, dataset, cache, ingest) | for each replica N (1, 2, …): `docker compose exec --index N worker python -c "import os,urllib.request as u; r=u.Request('http://localhost:9101/metrics', headers={'Authorization': 'Bearer ' + os.environ.get('QUANTLAB_METRICS_TOKEN', '')}); print(u.urlopen(r).read().decode())"` (port 9101 is never published; without `--index`, compose picks one replica) | Prometheus text with `quantlab_job_outcomes_total`; Prometheus target `quantlab-worker` up for every replica |
+| Metrics (each worker; job, dataset, ingest) | for each replica N (1, 2, …): `docker compose exec --index N worker python -c "import os,urllib.request as u; r=u.Request('http://localhost:9101/metrics', headers={'Authorization': 'Bearer ' + os.environ.get('QUANTLAB_METRICS_TOKEN', '')}); print(u.urlopen(r).read().decode())"` (port 9101 is never published; without `--index`, compose picks one replica) | Prometheus text with `quantlab_job_outcomes_total`; Prometheus target `quantlab-worker` up for every replica |
 | Metrics (reaper; lease-loss retries, the outcomes it decides) | `docker compose exec reaper python -c "import os,urllib.request as u; r=u.Request('http://localhost:9102/metrics', headers={'Authorization': 'Bearer ' + os.environ.get('QUANTLAB_METRICS_TOKEN', '')}); print(u.urlopen(r).read().decode())"` (port 9102 is never published) | Prometheus text with `quantlab_job_retries_total`; Prometheus target `quantlab-reaper` up |
 
 ### Inspecting the job queue
@@ -31,23 +31,32 @@ at this Redis.
 
 ## Resources
 
-**Docker VM memory: at least 4.5 GiB for the default stack (#175).** The default is 2 workers
-at 1536 MiB, 4 API processes, and the 1228 MB backtest admission cap.
-* **Measured, not configured.** Only the workers have a memory limit. Their two limits
-  alone are 3,072 MiB, and api, postgres, redis, web and the reaper have none. So the sum
-  of the limits doesn't bound the VM's use.
+**Docker VM memory: at least 5 GiB (5,120 MiB) for the default stack (#175, #220).** The
+default is 2 workers at 1536 MiB, 2 API processes in a 1880 MiB container, and the 1228 MB
+backtest admission cap.
+* **The contract:** the sum of the memory limits, plus the measured peaks of the services
+  without one, must fit the VM. Then no container can push the VM itself into an OOM:
+  3,072 (workers) + 1,880 (API) + about 110 (Postgres, Redis, web, the reaper, measured
+  below) = 5,062 MiB, rounded up to 5 GiB.
+  * The previous minimum, 4.5 GiB, predates the API's limit. The API then had none, and
+    16 concurrent optimizations drove the VM into a global OOM (#223; see "503
+    `server_busy` and the API's memory limit").
+  * With 4 API processes (`QUANTLAB_API_WORKERS=4`), the API needs
+    `QUANTLAB_API_MEMORY=2560M` (measured peak 2,121 MiB plus 20%), and the VM about
+    5.6 GiB (3,072 + 2,560 + 110 = 5,742 MiB).
 * **The measurement** (2026-11-01, main e7cf4fd, a 3.83 GiB / 3,919 MiB VM): 3 rounds of
   2 concurrent backtests at the admission cap (equal weight, 199 symbols, daily, 2005–2023).
   * All 6 completed on their first attempt, with no OOM kill and no container restart.
   * The VM's `MemAvailable` fell to 234 MB at worst: 94% of the VM in use (3,685 MiB).
   * Each worker peaked at 1,083–1,160 MiB anonymous; the API at 335 MiB, the reaper 47,
     Postgres 28, web 19, Redis 15.
-* **The minimum:** that peak, 3,685 MiB, plus 20% is 4,422 MiB, rounded up to 4.5 GiB
-  (4,608 MiB).
-* **Below it, as on this project's development machine (3.83 GiB):** the stack runs with
-  about 6% headroom at worst. A VM-level OOM, which would show in the VM's kernel log as
-  `Out of memory: Killed process` rather than `Memory cgroup out of memory`, wasn't
-  reproduced in those 6 jobs. That it can happen is unverified, not ruled out.
+* **The previous minimum** was derived from that peak: 3,685 MiB plus 20% is 4,422 MiB,
+  rounded up to 4.5 GiB (4,608 MiB).
+* **Below the minimum, as on this project's development machine (3.83 GiB):** the limits
+  don't fit, so a VM-level OOM is possible again. It shows in the VM's kernel log as
+  `Out of memory: Killed process` with `global_oom`, rather than `Memory cgroup out of
+  memory` with `CONSTRAINT_MEMCG`. It happened there on 2026-11-01, with the API still
+  unlimited (#223).
 * **Not measured on top:** the observability profile (Prometheus, Grafana, Jaeger), a
   second stack, and Docker builds. Each adds to the same VM.
 * **The warning:** `scripts/stack-env.sh`, and so every `make` target, warns on stderr when
@@ -60,6 +69,65 @@ at 1536 MiB, 4 API processes, and the 1228 MB backtest admission cap.
   kernel log goes with it. To keep evidence of an OOM kill, read
   `docker run --rm --cap-add SYSLOG --entrypoint dmesg redis:7-alpine` before every
   container is stopped.
+
+### 503 `server_busy` and the API's memory limit (#223, #220)
+* **What `server_busy` means:** a heavy request reached an API process whose heavy-work
+  slots were all taken. It was refused at once, before doing any of its work, never queued:
+  `503`, `{"error": {"code": "server_busy", …}}`, with `Retry-After: 2`.
+  * **The web app** says "The server is busy with other analyses. Retrying in N s…" and
+    sends the request again once after that wait, which is safe because nothing was done.
+  * **Heavy routes:** `POST /dataset-versions/{id}/optimize`, and the portfolio ledger,
+    which values a ledger over full price histories: `POST /workspaces/{id}/portfolios`,
+    `POST /portfolios/{id}/transactions` (its slot is taken before the row lock) and
+    `GET /portfolios/{id}/valuation`.
+  * **Counted in** `quantlab_heavy_requests_refused_total{route}`.
+* **The settings:**
+
+  | Setting | Default | What it sets |
+  |---|---|---|
+  | `QUANTLAB_HEAVY_REQUESTS_PER_PROCESS` | 1 | heavy requests at once per API process |
+  | `QUANTLAB_API_WORKERS` | 2 | API processes |
+  | `QUANTLAB_API_MEMORY` | 1880M | the API container's memory limit |
+  | `QUANTLAB_RATE_LIMIT_OPTIMIZE_PER_MINUTE` | 10 | optimizations per user and minute; beyond it `429 rate_limited` |
+
+* **The AWS deployment** (`infra/terraform`) has the same shape: the ECS API task has 2048 MiB
+  (`ecs.tf`), `api_workers` defaults to 2 (`variables.tf`), and the heavy bound is the app's
+  default of 1. That fits the 1,542 MiB measured below.
+* **When to raise `QUANTLAB_HEAVY_REQUESTS_PER_PROCESS` or `QUANTLAB_API_WORKERS`:** only when
+  `server_busy` refusals are frequent, and only together with `QUANTLAB_API_MEMORY`,
+  measured again as below.
+  * An optimization at its maximum (100 symbols, `lookback` 1260, 4.6M bars) took
+    285–590 MiB of anonymous memory each (#225).
+  * Example: 4 processes at 2 slots each in 2048M were OOM-killed inside the API (below).
+  * The VM must hold the sum of all limits plus the other services ("Resources").
+* **An API OOM kill**, measured with 4 processes at 2 slots in 2048M, 16 concurrent
+  optimizations:
+  * **What happens:** the kernel kills one or more API processes inside the container, not
+    any other container. The VM's kernel log shows `CONSTRAINT_MEMCG` (`Memory cgroup out of
+    memory`), never `global_oom`, and `docker inspect` sets `OOMKilled: true`.
+  * **Recovery:** uvicorn logs `Child process [N] died`, then starts a new process
+    (`Started server process [M]`). The container keeps running (`RestartCount` 0) and
+    serves the next requests.
+  * **What the user sees:** the requests that the killed process was serving fail. The
+    client sees a dropped connection, and the web app shows "The server could not be
+    reached" with Retry.
+  * **If the container itself exits** (its first process killed), its restart policy brings
+    it back: `unless-stopped`, or not on a worktree slot (`no`).
+* **The measurement behind the defaults** (2026-11-01, slot 21, 4.6M-bar version):
+  * Each optimization: 100 symbols, `lookback` 1260, 4 methods, sent all at once.
+  * Every run had an API limit set, so an OOM could only be the API's. The figures are
+    anonymous memory: page cache fills `memory.current` up to the limit and is reclaimed.
+
+  | Configuration | Request load | Outcome | Anonymous memory |
+  |---|---|---|---|
+  | **Before** (no bound), 2048M | 16 optimizations | 12 dropped connections, `oom_kill +3`, `CONSTRAINT_MEMCG +3`, `global_oom +0` | peak 1933 MiB |
+  | 2 processes, 1 slot each, 2048M, first run (the limit's source: 1,566 × 1.2 = 1,879.2, so 1880M) | 4 optimizations | 2 × 200, 2 × 503 | peak 1566 MiB, idle 394 |
+  | Defaults, `QUANTLAB_RATE_LIMIT_OPTIMIZE_PER_MINUTE=1000` (many users) | 16 optimizations | 2 × 200, 14 × 503 | peak 1529–1542 MiB, idle 392; within 1880M |
+  | Defaults, `QUANTLAB_RATE_LIMIT_OPTIMIZE_PER_MINUTE=1000` (many users) | 8 optimizations + 8 valuations of a 50-symbol portfolio | 2 × 200, 14 × 503 | peak 657 MiB |
+  | Defaults, as shipped (one user) | 16 optimizations | 1 × 200, 6 × 429, 9 × 503 | peak 1008 MiB |
+  | 4 processes, 1 slot each, 2280M | 16 optimizations | 4 × 200, 12 × 503 | peak 2121 MiB; hence 2560M for that override |
+
+  * **No OOM** of any kind in any run with the bound at 1 per process.
 
 ## Observability
 
@@ -121,7 +189,7 @@ A worker, reaper or API host with a skewed clock no longer moves any job deadlin
     quitting".
 * **New submissions** are still recorded, and readiness reports 503 (see "Jobs stuck in
   `queued`" for what is redelivered once Redis is back).
-* **Rate limits** (logins, registration, invitations, the assistant): each API process's
+* **Rate limits** (logins, registration, invitations, the assistant, optimize): each API process's
   limiter breaker opens at its first connection error (#207): breaker open = counting
   in-process, still limiting. See the hung-Redis entry below.
 * **RQ's own records** in Redis, of jobs that finished during the outage, stay incomplete
@@ -157,7 +225,7 @@ A worker, reaper or API host with a skewed clock no longer moves any job deadlin
   * **The API:** each call gives up after 5 s (`QUANTLAB_REDIS_SOCKET_TIMEOUT_SECONDS`),
     once, without retries (#200). Then:
     * `/api/v1/ready` reports 503 with `redis: error`;
-    * the rate limits (logins, registration, invitations, the assistant) are counted in
+    * the rate limits (logins, registration, invitations, the assistant, optimize) are counted in
       each API process instead. Breaker open = counting in-process, still limiting (#207):
       a connection error or a timeout opens each process's limiter breaker, which skips
       Redis for 10 s, then lets one call try it again. Any other Redis error (a bad
@@ -406,7 +474,8 @@ Deleting a workspace removes its files after the database commit (#21,
   versions are content-addressed; after a restore, `DatasetStore.verify()` recomputes each
   hash to detect corruption.
 * Redis holds no durable state: only queue messages (including retries scheduled for later
-  delivery), the login rate-limit counters, and caches. After a loss:
+  delivery), the rate-limit counters (logins, registration, invitations, the assistant,
+  optimize), and caches. After a loss:
   * the reaper re-delivers queued jobs from PostgreSQL, a retry once its backoff has passed;
   * rate limits start again from zero;
   * caches refill on demand.
@@ -429,6 +498,14 @@ instead of using a development key. Terminate TLS at the trusted edge (below). R
 (`alembic -c services/api/alembic.ini upgrade head`) before starting new API versions.
 Keep every clock synchronised (NTP), the database server's above all: every job deadline
 follows it (#130). Hosts' clocks still date tokens and the storage sweep's file times.
+
+Two settings exposure depends on, which no startup guard checks:
+* **`QUANTLAB_TRUSTED_PROXIES`:** the peers allowed to state the client address. It defaults
+  to `[]`, and compose sets `["web"]`. Outside compose, set it to the web tier's address, or
+  every production login fails closed with 503 `edge_required`.
+* **`QUANTLAB_EDGE_SECRET`:** the secret the edge adds and the web tier checks. Caddy
+  requires 32+ characters (`infra/edge/compose.yml`), but the web tier accepts any non-empty
+  value. Generate it as in "Exposing a deployment", step 1.
 
 In production, login and registration accept only requests that arrive through the web
 tier (a trusted proxy); a direct call to the API, such as
@@ -455,9 +532,17 @@ behaviour is unverified (no test makes a network call).
 
 ## Exposing a deployment
 
-**Precondition: the edge is verified.** Never publish the web tier, the API, Postgres or
-Redis directly; every port in the base `docker-compose.yml` is bound to 127.0.0.1 for that
-reason. A client that reaches the web tier without the edge would choose the address the
+> **Public exposure is prohibited until #39 is closed.** The steps below are what #39
+> requires on the host: the edge overlay on an address-preserving Linux host,
+> `infra/edge/verify.sh`, and the remote probe from a second machine. #39 also requires the
+> lead's independent rerun of both, and, for AWS, a real NLB sending PROXY v2. Passing them
+> yourself does not lift the prohibition; closing #39 does.
+
+**Precondition: the edge is verified.** Never publish the web tier, the API, Postgres,
+Redis, or the observability profile's services directly: Prometheus (`:9090`, no
+authentication), Grafana (`:3001`, with anonymous Viewer access) and Jaeger (`:16686`, and
+its unauthenticated OTLP ingest on `:4318`). Every port in the base `docker-compose.yml` is
+bound to 127.0.0.1 for that reason, and the edge overlay publishes none of them. A client that reaches the web tier without the edge would choose the address the
 API throttles on: it could exhaust a victim's per-address bucket and, by rotating
 addresses, spend a victim account's failed-login budget (#3).
 
@@ -468,7 +553,10 @@ the same host) replace it with a gateway address. Every user would then share on
 and ten failed logins would lock everyone out. Step 3 checks this.
 
 1. Start the stack with the edge overlay, which publishes only the edge and runs the API
-   in production mode:
+   in production mode. Its default is `QUANTLAB_ENVIRONMENT=production`
+   (`infra/edge/compose.yml`), so an exported or `.env` value overrides it: leave
+   `QUANTLAB_ENVIRONMENT` unset, or set it to `production`. Under `development`, the API
+   docs are served and none of the production guards run.
    ```
    export QUANTLAB_EDGE_SECRET=$(openssl rand -hex 32)   # store it like the JWT secret
    export QUANTLAB_JWT_SECRET=$(openssl rand -hex 32) QUANTLAB_METRICS_TOKEN=$(openssl rand -hex 24)
@@ -494,7 +582,8 @@ and ten failed logins would lock everyone out. Step 3 checks this.
    REMOTE_IP is that machine's address as the host should see it. It passes only on an
    exact match; any other recorded address fails. Docker Desktop and rootless Docker can
    record addresses outside Docker's subnets.
-4. Only then bind the edge publicly: `QUANTLAB_EDGE_BIND=0.0.0.0 QUANTLAB_EDGE_PORT=443`.
+4. Only then, and only after #39 is closed, bind the edge publicly:
+   `QUANTLAB_EDGE_BIND=0.0.0.0 QUANTLAB_EDGE_PORT=443`.
 
 Behind a CDN or load balancer, the hop that faces the internet must overwrite
 `X-Forwarded-For` with its TCP peer. Configure Caddy's `trusted_proxies` with only that

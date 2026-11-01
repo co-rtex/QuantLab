@@ -60,8 +60,11 @@ $QUANTLAB_DATA_DIR/
 * Authorization at every data-access boundary through workspace membership
   (`require_workspace`); non-members get 404. Roles: viewer < editor < owner.
 * Login throttling per client address and per account (failures only), shared via Redis.
-* Production settings refuse placeholder secrets, insecure cookies and an unprotected
-  `/metrics` endpoint.
+* Production settings refuse placeholder secrets, insecure cookies, a Redis URL without a
+  real password, and an unprotected `/metrics` endpoint.
+* Every published port binds to 127.0.0.1. A deployment is reached only through the TLS edge
+  (`infra/edge`, ADR-0008), and public exposure is prohibited until #39 is closed
+  (docs/RUNBOOK.md, "Exposing a deployment").
 * No user or AI code is ever executed; strategies are selected from a registry and
   parameterized through validated schemas.
 
@@ -74,10 +77,14 @@ Prometheus scrapes three kinds of process, all behind the same bearer token
   `quantlab_rate_limiter_breaker_open{limiter="login"}` (#207, `livemax`): 1 while any
   live API process's rate limiter counts in-process after a Redis error, still limiting.
   The API never marks a dead uvicorn process, so a process that died with its breaker
-  open leaves 1 until the container restarts.
+  open leaves 1 until the container restarts. Also
+  `quantlab_heavy_requests_refused_total{route}` (#223): heavy requests refused with
+  `503 server_busy`, `route` being `optimize`, `portfolio_create`, `portfolio_transaction`
+  or `portfolio_valuation`. And `quantlab_cache_events_total{cache,result}`: the bars
+  cache's `hit`, `miss` and `error`.
 * **Each worker replica**, at `<replica>:9101/metrics` (#165): queue wait, job run time and
-  outcomes, retries, running jobs, DB statement latency, cache hit/miss, latest dataset rows
-  and freshness, ingestion quality.
+  outcomes, retries, running jobs, DB statement latency, latest dataset rows and freshness,
+  ingestion quality.
   * A worker serves only when `PROMETHEUS_MULTIPROC_DIR` is set (compose sets it); without
     it the job metrics are lost with each horse, and the worker needs no token.
   * Prometheus finds the replicas through DNS on the `worker` service name. The port is

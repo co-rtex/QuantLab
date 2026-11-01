@@ -13,6 +13,10 @@ import pytest
 from sqlalchemy import event, select
 
 from tests.integration.conftest import accept_token, join_workspace, register, workspace_id
+from tests.limiter_clock import limiter_clock  # noqa: F401 - the fixture below
+
+# Fixed-window limits: counted against a frozen clock, never across a window boundary.
+pytestmark = pytest.mark.usefixtures("limiter_clock")
 
 ACCEPT = "/api/v1/auth/invitations/accept"
 DECLINE = "/api/v1/auth/invitations/decline"
