@@ -401,7 +401,9 @@ def test_an_idle_connection_does_not_block_a_scrape(
     from quantlab_api import observability as O
 
     monkeypatch.setenv("PROMETHEUS_MULTIPROC_DIR", str(tmp_path))
-    monkeypatch.setattr(O._QuietHandler, "timeout", 1)
+    # Long enough that a single-threaded server would visibly hold the scrape behind the
+    # idle connection, short enough that the drop is seen within the test.
+    monkeypatch.setattr(O._QuietHandler, "timeout", 3)
     with socket.socket() as s:
         s.bind(("127.0.0.1", 0))
         port = s.getsockname()[1]
@@ -411,8 +413,8 @@ def test_an_idle_connection_does_not_block_a_scrape(
         t = time.monotonic()
         with urllib.request.urlopen(f"http://127.0.0.1:{port}/metrics", timeout=5) as r:
             assert r.status == 200
-        assert time.monotonic() - t < 2  # not held up by the idle connection
-        idle.settimeout(5)
+        assert time.monotonic() - t < 1  # its own thread: not held behind the idle one
+        idle.settimeout(6)
         assert idle.recv(1) == b""  # closed by the server after its timeout
         idle.close()
     finally:
