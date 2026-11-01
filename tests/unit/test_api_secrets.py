@@ -1,7 +1,8 @@
 """Only the API needs the JWT signing key (#117). The metrics token is needed by each
-process that serves /metrics: the API, and a worker only when it serves job metrics
-(PROMETHEUS_MULTIPROC_DIR set, as in compose; tests/unit/test_worker_metrics.py, #165).
-A worker without that directory, such as the Terraform ECS task, needs neither secret.
+process that serves /metrics: the API, a worker only when it serves job metrics
+(PROMETHEUS_MULTIPROC_DIR set, as in compose; tests/unit/test_worker_metrics.py, #165),
+and the reaper only when QUANTLAB_REAPER_METRICS_PORT is set (test_reaper_metrics.py,
+#179). Without those, as in the Terraform ECS tasks, they need neither secret.
 Both are checked when the process starts, not when its modules are imported."""
 
 from __future__ import annotations
