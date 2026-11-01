@@ -22,7 +22,7 @@ from quantlab_api.jobs import (
     request_fingerprint,
     submit_job,
 )
-from quantlab_api.limits import heavy_slot
+from quantlab_api.limits import check_optimize_memory, heavy_slot, optimize_cost
 from quantlab_api.models import Instrument, Job, OptimizationRun, Role
 from quantlab_api.optimization import OptimizeIn, OptimizeInputError, compute
 from quantlab_api.routes.datasets import load_version
@@ -122,6 +122,14 @@ def submit_optimization(
     if unknown:
         raise ApiError(
             422, "unknown_symbols", "Symbols not in this dataset version", sorted(unknown)[:20]
+        )
+    # A job that cannot fit the worker is refused here, not OOM-killed later, as backtests
+    # are (#163). The benchmark counts as a series. A version without dates isn't estimated.
+    if dv.start_date and dv.end_date:
+        series = len({s.upper() for s in body.symbols}) + (1 if body.benchmark else 0)
+        check_optimize_memory(
+            optimize_cost(series, dv.start_date, dv.end_date, body.as_of),
+            get_settings().max_backtest_memory_mb,
         )
     receipt = login_limiter.reserve_receipt(
         f"optimize:user:{user.id}", get_settings().rate_limit_optimize_per_minute

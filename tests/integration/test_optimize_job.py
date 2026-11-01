@@ -158,3 +158,24 @@ def test_deleting_the_workspace_deletes_its_optimizations(client, seeded) -> Non
     with SessionLocal() as db:
         assert db.scalar(select(func.count()).select_from(OptimizationRun)) == 0
     assert client.get(f"/api/v1/optimizations/{run}", headers=h).status_code == 404
+
+
+def test_an_optimization_outside_the_measured_range_is_refused_before_a_job(
+    client, seeded, monkeypatch
+) -> None:
+    import quantlab_api.limits as limits
+
+    h, dv = seeded["headers"], seeded["dv"]
+    monkeypatch.setattr(get_settings(), "rate_limit_optimize_per_minute", 1)
+    # The seeded version: 2020-01-02 to 2022-12-30, 756 sessions; 8 symbols and a benchmark.
+    monkeypatch.setattr(limits, "OPTIMIZE_MEASURED_MAX_SYMBOL_SESSIONS", 9 * 756 - 1)
+    body = {"symbols": SYMS, "benchmark": "SYNIDX"}  # no as_of: the whole history
+    r = submit(client, h, dv, body)
+    assert r.status_code == 422, r.text
+    err = r.json()["error"]
+    assert err["code"] == "optimization_too_large"
+    assert err["details"]["reason"] == "outside_measured_range"
+    assert (err["details"]["symbols"], err["details"]["sessions"]) == (9, 756)
+    assert jobs_count() == 0
+    monkeypatch.setattr(limits, "OPTIMIZE_MEASURED_MAX_SYMBOL_SESSIONS", 9 * 756)
+    assert submit(client, h, dv, body).status_code == 202  # the budget's only one

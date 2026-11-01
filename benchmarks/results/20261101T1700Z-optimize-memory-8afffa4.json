@@ -1,0 +1,237 @@
+{
+  "mode": "optimize_memory",
+  "stack_commit": "8afffa4",
+  "environment": {
+    "timestamp": "2026-11-01T15:35:29.503125+00:00",
+    "platform": "macOS-26.6.2-arm64-arm-64bit",
+    "machine": "arm64",
+    "cpu_count": 8,
+    "memory_gb": 8.0,
+    "docker_vm_memory_gb": 3.83,
+    "python": "3.12.16",
+    "git_sha": "8afffa4823c3019aa4fba437d125e63aefe0642a",
+    "git_dirty": false
+  },
+  "data_is_synthetic": true,
+  "datasets": [
+    {
+      "start": "2020-01-02",
+      "end": "2022-12-30",
+      "rows": 83828,
+      "symbols": 121,
+      "sessions": 756,
+      "is_synthetic": true
+    },
+    {
+      "start": "2010-01-04",
+      "end": "2022-12-30",
+      "rows": 369245,
+      "symbols": 121,
+      "sessions": 3275,
+      "is_synthetic": true
+    },
+    {
+      "start": "1995-01-03",
+      "end": "2022-12-30",
+      "rows": 771640,
+      "symbols": 121,
+      "sessions": 7056,
+      "is_synthetic": true
+    }
+  ],
+  "rows": [
+    {
+      "span": "2020-01-02:2022-12-30",
+      "sessions": 756,
+      "symbols": 10,
+      "symbol_sessions": 8316,
+      "status": "failed",
+      "attempts": 1,
+      "error": {
+        "type": "OptimizeInputError",
+        "message": "Fewer than two symbols have enough history in the look-back window",
+        "retryable": false
+      },
+      "container": "bc7d4ffa65ff",
+      "wall_s": 1.8,
+      "idle_anon_mb": 63.3,
+      "anon_peak_mb": 162.0,
+      "anon_samples": 8,
+      "memory_peak_mb": 265.3,
+      "memory_max_mb": 1536.0,
+      "oom_kills": 0
+    },
+    {
+      "span": "2020-01-02:2022-12-30",
+      "sessions": 756,
+      "symbols": 50,
+      "symbol_sessions": 38556,
+      "status": "failed",
+      "attempts": 1,
+      "error": {
+        "type": "OptimizeInputError",
+        "message": "Fewer than two symbols have enough history in the look-back window",
+        "retryable": false
+      },
+      "container": "3b533844fadf",
+      "wall_s": 1.2,
+      "idle_anon_mb": 78.1,
+      "anon_peak_mb": 249.5,
+      "anon_samples": 6,
+      "memory_peak_mb": 265.9,
+      "memory_max_mb": 1536.0,
+      "oom_kills": 0
+    },
+    {
+      "span": "2020-01-02:2022-12-30",
+      "sessions": 756,
+      "symbols": 100,
+      "symbol_sessions": 76356,
+      "status": "failed",
+      "attempts": 1,
+      "error": {
+        "type": "OptimizeInputError",
+        "message": "Fewer than two symbols have enough history in the look-back window",
+        "retryable": false
+      },
+      "container": "adb17925f817",
+      "wall_s": 1.8,
+      "idle_anon_mb": 62.7,
+      "anon_peak_mb": 257.5,
+      "anon_samples": 10,
+      "memory_peak_mb": 278.7,
+      "memory_max_mb": 1536.0,
+      "oom_kills": 0
+    },
+    {
+      "span": "2010-01-04:2022-12-30",
+      "sessions": 3275,
+      "symbols": 10,
+      "symbol_sessions": 36025,
+      "status": "completed",
+      "attempts": 1,
+      "error": null,
+      "container": "7746529edd15",
+      "wall_s": 1.7,
+      "idle_anon_mb": 68.3,
+      "anon_peak_mb": 263.4,
+      "anon_samples": 8,
+      "memory_peak_mb": 338.3,
+      "memory_max_mb": 1536.0,
+      "oom_kills": 0
+    },
+    {
+      "span": "2010-01-04:2022-12-30",
+      "sessions": 3275,
+      "symbols": 50,
+      "symbol_sessions": 167025,
+      "status": "completed",
+      "attempts": 1,
+      "error": null,
+      "container": "89abae1068ca",
+      "wall_s": 2.2,
+      "idle_anon_mb": 63.4,
+      "anon_peak_mb": 409.7,
+      "anon_samples": 10,
+      "memory_peak_mb": 420.5,
+      "memory_max_mb": 1536.0,
+      "oom_kills": 0
+    },
+    {
+      "span": "2010-01-04:2022-12-30",
+      "sessions": 3275,
+      "symbols": 100,
+      "symbol_sessions": 330775,
+      "status": "completed",
+      "attempts": 1,
+      "error": null,
+      "container": "f859c4dd1da5",
+      "wall_s": 3.3,
+      "idle_anon_mb": 74.3,
+      "anon_peak_mb": 429.9,
+      "anon_samples": 15,
+      "memory_peak_mb": 440.5,
+      "memory_max_mb": 1536.0,
+      "oom_kills": 0
+    },
+    {
+      "span": "1995-01-03:2022-12-30",
+      "sessions": 7056,
+      "symbols": 10,
+      "symbol_sessions": 77616,
+      "status": "completed",
+      "attempts": 1,
+      "error": null,
+      "container": "43a213d29a29",
+      "wall_s": 1.8,
+      "idle_anon_mb": 64.6,
+      "anon_peak_mb": 354.9,
+      "anon_samples": 9,
+      "memory_peak_mb": 365.1,
+      "memory_max_mb": 1536.0,
+      "oom_kills": 0
+    },
+    {
+      "span": "1995-01-03:2022-12-30",
+      "sessions": 7056,
+      "symbols": 50,
+      "symbol_sessions": 359856,
+      "status": "completed",
+      "attempts": 1,
+      "error": null,
+      "container": "e75486bdbd09",
+      "wall_s": 2.2,
+      "idle_anon_mb": 68.9,
+      "anon_peak_mb": 481.5,
+      "anon_samples": 10,
+      "memory_peak_mb": 506.2,
+      "memory_max_mb": 1536.0,
+      "oom_kills": 0
+    },
+    {
+      "span": "1995-01-03:2022-12-30",
+      "sessions": 7056,
+      "symbols": 100,
+      "symbol_sessions": 712656,
+      "status": "completed",
+      "attempts": 1,
+      "error": null,
+      "container": "75330b47d49d",
+      "wall_s": 4.3,
+      "idle_anon_mb": 62.7,
+      "anon_peak_mb": 525.5,
+      "anon_samples": 17,
+      "memory_peak_mb": 537.3,
+      "memory_max_mb": 1536.0,
+      "oom_kills": 0
+    }
+  ],
+  "load": {
+    "start": {
+      "load_1m": 3.02,
+      "load_5m": 2.79,
+      "load_15m": 3.54,
+      "uptime": "9:34  up 7 days, 19:40, 5 users, load averages: 3.02 2.79 3.54",
+      "contended": false
+    },
+    "end": {
+      "load_1m": 3.69,
+      "load_5m": 3.01,
+      "load_15m": 3.59,
+      "uptime": "9:35  up 7 days, 19:41, 5 users, load averages: 3.69 3.01 3.59",
+      "contended": false
+    },
+    "settled": {
+      "load_1m": 2.0,
+      "load_5m": 2.53,
+      "load_15m": 3.28,
+      "uptime": "9:38  up 7 days, 19:44, 5 users, load averages: 2.00 2.53 3.28",
+      "contended": false
+    },
+    "settle_s": 180.0,
+    "residue_fraction": 0.0498,
+    "run_load_estimate": 1.69,
+    "rule": "contended if the 1-minute load exceeds half the cores at the start or after settling (#160)"
+  },
+  "contended": false
+}
