@@ -121,7 +121,7 @@ def test_quantlab_worker_registers_under_worker_identity(container: pytest.Monke
         def work(self, **_: object) -> None:
             return None
 
-    container.setattr(worker, "Worker", Recorder)
+    container.setattr(worker, "QuantlabWorker", Recorder)
     container.setattr(worker, "redis_conn", fakeredis.FakeRedis)
     container.setattr(
         worker, "get_queue", lambda: Queue("q", connection=fakeredis.FakeRedis(), **RQ_OPTIONS)

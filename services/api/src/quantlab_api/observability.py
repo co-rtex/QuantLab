@@ -3,12 +3,15 @@
 from __future__ import annotations
 
 import contextvars
+import hmac
 import logging
 import sys
+import threading
 import time
 import uuid
-from collections.abc import Awaitable, Callable, MutableMapping
+from collections.abc import Awaitable, Callable, Iterable, MutableMapping
 from typing import Any
+from wsgiref.simple_server import WSGIRequestHandler, WSGIServer, make_server
 
 import structlog
 from prometheus_client import Counter, Gauge, Histogram
@@ -135,3 +138,58 @@ async def request_context_middleware(
                 duration_ms=round(elapsed * 1000, 2),
             )
         request_id_var.reset(token)
+
+
+# ------------------------------------------------------------------- worker metrics (#165)
+# Job metrics are recorded in RQ's forked work horses, so a worker's own registry never
+# sees them: each worker container keeps a multiprocess directory of its own (pids are
+# unique within it, and every container's worker is pid 1, so the directory is never
+# shared with another container or the API) and serves it from the worker process.
+
+WSGIApp = Callable[[dict[str, Any], Callable[..., Any]], Iterable[bytes]]
+
+
+def worker_metrics_app(token: str | None) -> WSGIApp:
+    """``GET /metrics`` with this container's samples, behind the API's bearer token.
+
+    ``token`` None (development) serves without one, as the API does.
+    """
+    from prometheus_client import CONTENT_TYPE_LATEST, CollectorRegistry, generate_latest
+    from prometheus_client.multiprocess import MultiProcessCollector
+
+    registry = CollectorRegistry()
+    MultiProcessCollector(registry)  # type: ignore[no-untyped-call]
+
+    def app(environ: dict[str, Any], start_response: Callable[..., Any]) -> Iterable[bytes]:
+        if environ.get("PATH_INFO") != "/metrics" or environ.get("REQUEST_METHOD") != "GET":
+            start_response("404 Not Found", [("Content-Length", "0")])
+            return [b""]
+        if token is not None:
+            given = environ.get("HTTP_AUTHORIZATION", "").removeprefix("Bearer ").strip()
+            if not token or not hmac.compare_digest(given.encode(), token.encode()):
+                start_response("401 Unauthorized", [("Content-Length", "0")])
+                return [b""]
+        body = generate_latest(registry)
+        start_response(
+            "200 OK", [("Content-Type", CONTENT_TYPE_LATEST), ("Content-Length", str(len(body)))]
+        )
+        return [body]
+
+    return app
+
+
+class _QuietHandler(WSGIRequestHandler):
+    def log_message(self, format: str, *args: Any) -> None:
+        return None  # one line per scrape on stderr is noise
+
+
+def serve_worker_metrics(port: int, token: str | None) -> WSGIServer:
+    """Serve :func:`worker_metrics_app` from a daemon thread of the worker process.
+
+    All interfaces inside the container: Prometheus reaches each replica over the compose
+    network, and the port is never published to the host.
+    """
+    app = worker_metrics_app(token)
+    server = make_server("0.0.0.0", port, app, handler_class=_QuietHandler)  # noqa: S104
+    threading.Thread(target=server.serve_forever, name="metrics", daemon=True).start()
+    return server

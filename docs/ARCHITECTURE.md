@@ -67,7 +67,19 @@ $QUANTLAB_DATA_DIR/
 
 ## Observability
 
-Prometheus metrics at `/metrics`: HTTP latency by route template, DB statement latency,
-queue wait, job run time and outcomes, retries, running jobs, cache hit/miss, latest
-dataset rows and freshness, ingestion quality. Structured JSON logs (structlog) carry
+Prometheus scrapes two kinds of process, both behind the same bearer token
+(`QUANTLAB_METRICS_TOKEN`, required in production):
+* **The API**, at `api:8000/metrics`: HTTP latency by route template and DB statement
+  latency, aggregated over its uvicorn processes.
+* **Each worker replica**, at `<replica>:9101/metrics` (#165): queue wait, job run time and
+  outcomes, retries, running jobs, cache hit/miss, latest dataset rows and freshness,
+  ingestion quality.
+  * Prometheus finds the replicas through DNS on the `worker` service name. The port is
+    never published.
+  * Jobs run in RQ's forked work horses, so each worker container keeps its own Prometheus
+    multiprocess directory, on a tmpfs, and its worker process serves that directory.
+  * The directory is never shared with another container, where every worker is pid 1 and
+    the per-pid files would collide, or with the API.
+  * After each horse exits, its live gauges are removed (`mark_process_dead`), so a horse
+    killed mid-job doesn't leave `quantlab_jobs_running` raised. Structured JSON logs (structlog) carry
 `request_id`, and job logs carry the originating request id.

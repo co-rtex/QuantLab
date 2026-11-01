@@ -204,6 +204,16 @@ class Settings(BaseSettings):
             raise ValueError("QUANTLAB_JWT_SECRET must be at least 32 characters")
         if any(m in secret.lower() for m in ("insecure", "change-me", "changeme", "dev-only")):
             raise ValueError("QUANTLAB_JWT_SECRET is a placeholder; generate a real secret")
+        self.require_metrics_token()
+
+    def require_metrics_token(self) -> None:
+        """Refuse to serve metrics in production without a real token (#117, #165).
+
+        One rule for every process that serves ``/metrics``: the API (from
+        :meth:`require_api_secrets`) and each worker (``quantlab-worker``).
+        """
+        if self.environment != "production":
+            return
         if self.metrics_token is None or len(self.metrics_token.get_secret_value()) < 16:
             raise ValueError("QUANTLAB_METRICS_TOKEN (16+ characters) must be set in production")
 

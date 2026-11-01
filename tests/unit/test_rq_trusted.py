@@ -178,7 +178,7 @@ def test_the_worker_uses_the_trusted_options(monkeypatch: pytest.MonkeyPatch) ->
         def work(self, **_: object) -> None:
             return None
 
-    monkeypatch.setattr(worker, "Worker", Recorder)
+    monkeypatch.setattr(worker, "QuantlabWorker", Recorder)
     monkeypatch.setattr(worker, "redis_conn", fakeredis.FakeRedis)
     monkeypatch.setattr(
         worker, "get_queue", lambda: Queue("q", connection=fakeredis.FakeRedis(), **RQ_OPTIONS)
