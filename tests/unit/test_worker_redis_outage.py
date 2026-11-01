@@ -33,22 +33,48 @@ def failing(exc: Exception) -> Any:
 @pytest.mark.parametrize("exc", DOWN, ids=["connection", "timeout"])
 @pytest.mark.parametrize(
     ("method", "args"),
-    [("heartbeat", ()), ("maintain_heartbeats", (None, None)), ("run_maintenance_tasks", ())],
+    [
+        ("heartbeat", ()),
+        ("maintain_heartbeats", (None, None)),
+        ("run_maintenance_tasks", ()),
+        ("check_for_suspension", (False,)),
+        ("set_state", ("idle",)),
+        ("register_death", ()),
+    ],
 )
 def test_an_unreachable_redis_does_not_stop_the_worker(
     monkeypatch: pytest.MonkeyPatch, method: str, args: tuple, exc: Exception
 ) -> None:
-    """These are what quit a busy worker: the horse monitor's heartbeat, the loop's
-    heartbeat after a job, and periodic maintenance."""
+    """These are what quit a worker in an outage: the horse monitor's heartbeat, the
+    loop's heartbeat after a job, periodic maintenance, the suspension check at the top of
+    every loop pass, the idle state the dequeue writes before its own reconnecting loop,
+    and the death a stopping worker registers."""
     monkeypatch.setattr(Worker, method, failing(exc))
     getattr(worker(), method)(*args)  # logged, not raised
 
 
-@pytest.mark.parametrize("method", ["heartbeat", "maintain_heartbeats", "run_maintenance_tasks"])
+ARGS = {
+    "maintain_heartbeats": (None, None),
+    "check_for_suspension": (False,),
+    "set_state": ("idle",),
+}
+
+
+@pytest.mark.parametrize(
+    "method",
+    [
+        "heartbeat",
+        "maintain_heartbeats",
+        "run_maintenance_tasks",
+        "check_for_suspension",
+        "set_state",
+        "register_death",
+    ],
+)
 def test_any_other_error_still_propagates(monkeypatch: pytest.MonkeyPatch, method: str) -> None:
     monkeypatch.setattr(Worker, method, failing(ValueError("a bug")))
     with pytest.raises(ValueError, match="a bug"):
-        getattr(worker(), method)(*((None, None) if method == "maintain_heartbeats" else ()))
+        getattr(worker(), method)(*ARGS.get(method, ()))
 
 
 @pytest.mark.parametrize("exc", DOWN, ids=["connection", "timeout"])

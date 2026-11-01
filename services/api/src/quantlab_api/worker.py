@@ -41,10 +41,12 @@ class QuantlabWorker(Worker):
     It also outlasts a Redis outage (#185). RQ's horse monitor heartbeats through Redis,
     and an error there quit the worker: in a container, pid 1 exited, the running horse died
     with it, the job lost an attempt and waited out its lease, and the container restarted
-    in a loop until Redis came back. Here a heartbeat or maintenance task that cannot reach
-    Redis is logged and skipped, so the monitor keeps waiting on the horse. RQ's own
-    bookkeeping after the horse exits is skipped the same way: the job's outcome is already
-    in PostgreSQL. The next dequeue then waits for Redis, as an idle worker's always did.
+    in a loop until Redis came back. Here every write of RQ's own bookkeeping that cannot
+    reach Redis is logged and skipped: heartbeats (so the monitor keeps waiting on the
+    horse), maintenance, the suspension check and the worker's state at the top of each
+    pass, the record of the job after the horse exits (its outcome is already in
+    PostgreSQL), and a stopping worker's death. The next dequeue then waits for Redis, as
+    an idle worker's always did.
     """
 
     _last_horse: int = 0
@@ -70,6 +72,29 @@ class QuantlabWorker(Worker):
             super().run_maintenance_tasks()  # type: ignore[no-untyped-call]
         except REDIS_DOWN as exc:
             self._redis_down("maintenance", exc)
+
+    def check_for_suspension(self, burst: bool) -> None:
+        # At the top of every pass of the work loop. Unreachable, Redis is taken as not
+        # suspended: the dequeue that follows waits for it anyway.
+        try:
+            super().check_for_suspension(burst)
+        except REDIS_DOWN as exc:
+            self._redis_down("suspension_check", exc)
+
+    def set_state(self, state: str, pipeline: Any = None) -> None:
+        # The dequeue sets the worker idle before its own reconnecting loop. With a
+        # pipeline nothing is sent here, so only a direct write can fail.
+        try:
+            super().set_state(state, pipeline=pipeline)
+        except REDIS_DOWN as exc:
+            self._redis_down("worker_state", exc)
+
+    def register_death(self) -> None:
+        # A worker stopped during an outage: its registration expires in Redis by itself.
+        try:
+            super().register_death()  # type: ignore[no-untyped-call]
+        except REDIS_DOWN as exc:
+            self._redis_down("register_death", exc)
 
     def fork_work_horse(self, job: Any, queue: Any) -> None:
         super().fork_work_horse(job, queue)  # the horse itself never returns (os._exit)
