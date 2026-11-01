@@ -52,10 +52,11 @@ emit QUANTLAB_DATABASE_URL "postgresql+psycopg://quantlab:quantlab@localhost:$pg
 emit QUANTLAB_REDIS_URL "redis://:${QUANTLAB_REDIS_PASSWORD:-quantlab-dev}@localhost:$redis/0"
 emit E2E_BASE_URL "http://localhost:$web"
 
-# The default stack's minimum Docker VM memory (#175, docs/RUNBOOK.md "Resources"): a warning
-# on stderr only, because stdout is eval'd. The worker count is not changed. Silent when
-# docker is unavailable or QUANTLAB_SKIP_VM_CHECK=1.
-min_vm_mib=4608
+# The default stack's minimum Docker VM memory (#175, #220, docs/RUNBOOK.md "Resources"): the
+# sum of the memory limits (2 workers at 1536 MiB, the API at 1880 MiB) plus the measured
+# peaks of the services without one, rounded up. A warning on stderr only, because stdout
+# is eval'd. Nothing is changed. Silent when docker is unavailable or QUANTLAB_SKIP_VM_CHECK=1.
+min_vm_mib=5120
 if [ "${QUANTLAB_SKIP_VM_CHECK:-}" != 1 ]; then
   vm_bytes=$(docker info --format '{{.MemTotal}}' 2>/dev/null || true)
   case "$vm_bytes" in
@@ -63,7 +64,7 @@ if [ "${QUANTLAB_SKIP_VM_CHECK:-}" != 1 ]; then
     *)
       vm_mib=$((vm_bytes / 1048576))
       if [ "$vm_mib" -lt "$min_vm_mib" ]; then
-        echo "stack-env: warning: the Docker VM has ${vm_mib} MiB; the default stack (2 workers at 1536 MiB) needs ${min_vm_mib} MiB (4.5 GiB). See docs/RUNBOOK.md, Resources (#175)." >&2
+        echo "stack-env: warning: the Docker VM has ${vm_mib} MiB; the default stack (2 workers at 1536 MiB, the API at 1880 MiB) needs ${min_vm_mib} MiB (5 GiB). See docs/RUNBOOK.md, Resources (#175, #220)." >&2
       fi
       ;;
   esac

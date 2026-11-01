@@ -31,23 +31,31 @@ at this Redis.
 
 ## Resources
 
-**Docker VM memory: at least 4.5 GiB for the default stack (#175).** The default is 2 workers
-at 1536 MiB, 4 API processes, and the 1228 MB backtest admission cap.
-* **Measured, not configured.** Only the workers have a memory limit. Their two limits
-  alone are 3,072 MiB, and api, postgres, redis, web and the reaper have none. So the sum
-  of the limits doesn't bound the VM's use.
+**Docker VM memory: at least 5 GiB (5,120 MiB) for the default stack (#175, #220).** The
+default is 2 workers at 1536 MiB, 2 API processes in a 1880 MiB container, and the 1228 MB
+backtest admission cap.
+* **The contract:** the sum of the memory limits, plus the measured peaks of the services
+  without one, must fit the VM. Then no container can push the VM itself into an OOM:
+  3,072 (workers) + 1,880 (API) + about 110 (Postgres, Redis, web, the reaper, measured
+  below) = 5,062 MiB, rounded up to 5 GiB.
+  * The previous minimum, 4.5 GiB, predates the API's limit. The API then had none, and
+    16 concurrent optimizations drove the VM into a global OOM (#223; see "503
+    `server_busy` and the API's memory limit").
+  * With 4 API processes (`QUANTLAB_API_WORKERS=4`), the API needs
+    `QUANTLAB_API_MEMORY=2280M`, and the VM about 5.4 GiB (5,462 MiB).
 * **The measurement** (2026-11-01, main e7cf4fd, a 3.83 GiB / 3,919 MiB VM): 3 rounds of
   2 concurrent backtests at the admission cap (equal weight, 199 symbols, daily, 2005–2023).
   * All 6 completed on their first attempt, with no OOM kill and no container restart.
   * The VM's `MemAvailable` fell to 234 MB at worst: 94% of the VM in use (3,685 MiB).
   * Each worker peaked at 1,083–1,160 MiB anonymous; the API at 335 MiB, the reaper 47,
     Postgres 28, web 19, Redis 15.
-* **The minimum:** that peak, 3,685 MiB, plus 20% is 4,422 MiB, rounded up to 4.5 GiB
-  (4,608 MiB).
-* **Below it, as on this project's development machine (3.83 GiB):** the stack runs with
-  about 6% headroom at worst. A VM-level OOM, which would show in the VM's kernel log as
-  `Out of memory: Killed process` rather than `Memory cgroup out of memory`, wasn't
-  reproduced in those 6 jobs. That it can happen is unverified, not ruled out.
+* **The previous minimum** was derived from that peak: 3,685 MiB plus 20% is 4,422 MiB,
+  rounded up to 4.5 GiB (4,608 MiB).
+* **Below the minimum, as on this project's development machine (3.83 GiB):** the limits
+  don't fit, so a VM-level OOM is possible again. It shows in the VM's kernel log as
+  `Out of memory: Killed process` with `global_oom`, rather than `Memory cgroup out of
+  memory` with `CONSTRAINT_MEMCG`. It happened there on 2026-11-01, with the API still
+  unlimited (#223).
 * **Not measured on top:** the observability profile (Prometheus, Grafana, Jaeger), a
   second stack, and Docker builds. Each adds to the same VM.
 * **The warning:** `scripts/stack-env.sh`, and so every `make` target, warns on stderr when
