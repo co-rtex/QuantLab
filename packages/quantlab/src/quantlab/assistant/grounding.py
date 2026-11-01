@@ -60,6 +60,7 @@ class Answer:
     declined: bool = False
     notes: list[str] = field(default_factory=list)
     verification: dict[str, Any] = field(default_factory=dict)
+    synthetic: bool = False  # set by service.answer_question (#230)
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)

@@ -169,3 +169,47 @@ test("a result whose dataset cannot be checked is never shown as real", async ({
   await expect(page.getByRole("region", { name: "Evidence" }).getByText("Synthetic status unknown")).toBeVisible();
   await expect(page.locator("section").filter({ hasText: "Ask about this experiment" }).getByText("Synthetic status unknown")).toBeVisible();
 });
+
+test("synthetic data is labelled on the pages that had no test for it (#230)", async ({ page }) => {
+  test.setTimeout(240_000);
+  const { ws, dv } = await workspaceWithExperiment(page, "pages");
+  const label = () => page.getByText("Synthetic data").first();
+
+  // The catalog: the dataset's heading, by its versions, and the version's own row.
+  await page.goto("/data");
+  const versionRow = page.getByRole("row").filter({ has: page.locator(`a[href="/data/${dv}"]`) });
+  await expect(versionRow.getByText("Synthetic data")).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Completeness data" }).locator("..").getByText("Synthetic data")).toBeVisible();
+  await page.goto(`/data/${dv}`);
+  await expect(label()).toBeVisible();
+
+  // The new-experiment picker names synthetic versions in its options.
+  await page.goto("/experiments/new");
+  await expect(page.locator("option", { hasText: "(synthetic)" }).first()).toBeAttached();
+
+  // Portfolios: the list and the portfolio page.
+  const pf = await (
+    await page.request.post(`/api/v1/workspaces/${ws}/portfolios`, {
+      data: { name: "Labelled portfolio", dataset_version_id: dv, initial_deposit: 10_000, start_date: "2021-01-04" },
+    })
+  ).json();
+  await page.goto("/portfolios");
+  await expect(page.getByRole("row").filter({ hasText: "Labelled portfolio" }).getByText("Synthetic data")).toBeVisible();
+  await page.goto(`/portfolios/${pf.id}`);
+  await expect(label()).toBeVisible();
+
+  // Optimize: its result.
+  await page.goto("/optimize");
+  await page.getByRole("button", { name: "Compare allocations" }).click();
+  await expect(page.getByRole("cell", { name: "Expected volatility" })).toBeVisible({ timeout: 60_000 });
+  await expect(label()).toBeVisible();
+
+  // ML: a run, in the list and its panel.
+  const ml = await page.request.post(`/api/v1/workspaces/${ws}/ml-runs`, {
+    data: { name: "Labelled ML", dataset_version_id: dv, config: { folds: 2, min_train_dates: 6, sample_every: 10, models: ["majority", "logistic"] } },
+  });
+  expect(ml.status()).toBe(202);
+  await page.goto("/ml");
+  await expect(page.getByText("Out-of-sample AUC")).toBeVisible({ timeout: 90_000 });
+  await expect(page.getByRole("listitem").filter({ hasText: "Labelled ML" }).getByText("Synthetic data")).toBeVisible();
+});

@@ -97,9 +97,42 @@ def test_advice_questions_never_reach_the_model(facts):
             calls.append(question)
             return "irrelevant"
 
-    ans = answer_question("Should I invest my savings in this?", facts, Spy())
+    ans = answer_question("Should I invest my savings in this?", facts, Spy(), synthetic=True)
     assert ans.declined
     assert calls == []
+
+
+QUESTIONS = [
+    "What was the Sharpe ratio?",  # facts only: no integrity, validation or summary intent
+    "What was the maximum drawdown?",
+    "Should I buy this strategy?",  # declined
+    "What is the weather today?",  # out of scope
+]
+
+
+@pytest.mark.parametrize("question", QUESTIONS)
+@pytest.mark.parametrize("provider", [None, FaithfulProvider()], ids=["deterministic", "model"])
+def test_an_answer_on_synthetic_data_always_says_so(facts, question, provider):
+    """#230: "What was the Sharpe?" on synthetic data returned figures with no word of it."""
+    from quantlab.assistant.service import SYNTHETIC_NOTE
+
+    ans = answer_question(question, facts, provider, synthetic=True)
+    assert ans.text.endswith(SYNTHETIC_NOTE) and ans.synthetic
+    assert "synthetic data" in ans.text.lower()
+
+
+@pytest.mark.parametrize("provider", [None, FaithfulProvider()], ids=["deterministic", "model"])
+def test_an_answer_on_real_data_carries_no_synthetic_note(facts, provider):
+    from quantlab.assistant.service import SYNTHETIC_NOTE
+
+    ans = answer_question("What was the Sharpe ratio?", facts, provider, synthetic=False)
+    assert SYNTHETIC_NOTE not in ans.text and not ans.synthetic
+
+
+def test_the_synthetic_flag_is_required():
+    """A new caller cannot forget it: there is no default to fall back on."""
+    with pytest.raises(TypeError):
+        answer_question("What was the Sharpe ratio?", [])  # type: ignore[call-arg]
 
 
 def test_verifier_flags_invented_numbers_and_unknown_citations():
