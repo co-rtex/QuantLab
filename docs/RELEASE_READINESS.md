@@ -52,14 +52,35 @@ review, a trial on current main (full pytest and serial Playwright) and green CI
 * web: lint, typecheck, unit tests 6/6 and build clean;
 * serial Playwright **45/45** at load about 4.5.
 
-**Found after the fixes (open):**
-* #184: rejection-log defects, a fix in progress (engine 1.4.1, economics identical).
-* #187: phantom whole-share top-ups after splits shrink real buys, up to +0.61% of final
-  equity in 8 of 800 adversarial runs. A fix is planned (engine 1.5.0).
-* Both were found by the new independent reference backtester (#180).
-* #181: two fail-open cases in the admission bound (ticker reuse; rebalances on 7-day-week
-  data). Fixes are in progress.
-* #185, #186: Redis-outage and reaper redelivery defects.
+**Merged since (each with independent review, trial on current main, CI green):**
+* **#190 (#180, #184):** an independent reference backtester with a differential test and
+  a mutation harness (25/25 mutations caught), and engine **1.4.1**: dust cash is no cash,
+  and buys cut to nothing are rejected `insufficient_cash`.
+* **#191 (#175):** a documented minimum of 4.5 GiB of Docker VM memory, measured, with a
+  warning-only check. A VM-level OOM was not reproduced.
+* **#189 (#179, #194):** reaper metrics exported, each terminal outcome counted once.
+* **#197 (#185):** busy workers survive a Redis outage without losing the job's attempt,
+  including a SIGTERM during the outage.
+* **#198 (#186):** no double delivery from the reaper.
+* **#199 (#166):** a per-request nonce Content-Security-Policy.
+* **#183:** web unit tests in CI.
+
+**Found by the reference backtester and its reviews (open, engine 1.5.0 in progress, one
+release):**
+* #187: phantom whole-share top-ups shrink real buys. Fix: the lot check at fill time.
+* #195: pro-rata ignores `commission_min` on sells, and the scaling factor double-counts
+  it. Fix: an exact factor, defined in METHODOLOGY.
+* #196: large-account buys rejected whole for float-level shortfalls (shares vs dollars
+  tolerance).
+
+**Other open defects:**
+* #181/#192: two fail-open admission cases (ticker reuse; 7-day-week rebalances). Fixed in
+  #192, merging after 1.5.0.
+* #201 (P1, security): Swagger UI served same-origin without a CSP. A fix is in progress
+  (docs off outside development).
+* #202 (P1, local stacks): `log.exception` raises under the console logger. A fix is in
+  progress.
+* #200: explicit API Redis timeouts. Today they are 5 s by redis-py default.
 
 **Still blocking public deployment** (unchanged; none of these are code defects):
 * #39: external infrastructure;
