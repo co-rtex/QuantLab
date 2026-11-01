@@ -381,6 +381,30 @@ replay); equity equals cash plus marked positions every day; cash never negative
 positions never negative; deterministic fingerprints for identical inputs; truncating
 data after a decision date leaves that decision unchanged (no look-ahead).
 
+**Memory and size limits (#163).**
+* **Storage:** the engine keeps trades, position rows and decisions by column while it
+  simulates (float columns in float64 arrays), instead of one Python dict per trade.
+  * The frames it returns are the same, with the same dtypes and column order, and so are
+    the ledger, the meta and the fingerprint (`ENGINE_VERSION` is unchanged).
+  * In the 1536 MB worker container, equal weight over 2005–2023 with 400 symbols at a daily
+    rebalance was killed for memory before. Now it completes, still near the limit.
+* **Admission:** a backtest is refused at submission (`422 backtest_too_large`) when its
+  estimated peak memory exceeds the configured limit, or when it lies outside the range
+  the estimate was measured on.
+  * The estimate grows with symbols × sessions and symbols × rebalances. It ignores the
+    strategy, so one that holds few names is overestimated.
+  * It is an envelope over the jobs measured in the real worker container: 100–400 symbols
+    with equal weight, which trades every name at every rebalance, over 2005–2023.
+  * **Larger backtests are refused outright,** not estimated: more than 400 symbols, or
+    symbols × sessions or symbols × rebalances above the measured 400 × 4,785.
+    * Sessions are the larger of the exchange calendar's count and the dataset version's
+      distinct bar dates, from the data's first bar to the end date. The engine loads that
+      whole history whatever the start.
+    * A long history of few symbols is inside the range.
+  * For 2005–2023 the effective caps are 199 symbols daily and 400 weekly, monthly or
+    quarterly.
+  * Details are in `docs/RUNBOOK.md` and `benchmarks/results/*-worker-memory-*.json`.
+
 **Reproduction.** The input hash covers the dataset version, strategy, parameters,
 config and `ENGINE_VERSION`. Re-running an experiment from an older engine therefore has
 different inputs even when nothing else changed. The reproducibility comparison lists

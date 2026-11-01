@@ -4,7 +4,9 @@
   median and interquartile range, with the raw samples kept.
 * **Machine and load:** every result records the 1/5/15-minute load, CPU count, memory,
   Docker VM memory, the git commit, and ``contended: true`` when the 1-minute load
-  exceeds half the cores at the start or the end of the run. Contended numbers are not
+  exceeds half the cores at the start of the run, or after it has settled for
+  ``SETTLE_S`` idle seconds (#160: read straight at the end, the load is the benchmark's
+  own). The end reading is kept beside the settled one. Contended numbers are not
   published (docs/BENCHMARKS.md).
 * **Cache state:** reads are *warm* (OS page cache as it is) unless ``--cold`` is given
   and the platform lets this process drop caches, in which case each repeat starts cold.
@@ -132,11 +134,44 @@ def machine() -> dict[str, Any]:
     }
 
 
-def finalize(result: dict[str, Any], start_load: dict[str, Any]) -> dict[str, Any]:
-    """Attach load at both ends; contended if either end was."""
+#: Idle seconds after a run before the reading that decides contention (#160).
+SETTLE_S = 180.0
+#: Time constant of the 1-minute load average, in seconds.
+LOAD_1M_TAU_S = 60.0
+
+
+def finalize(
+    result: dict[str, Any],
+    start_load: dict[str, Any],
+    settle_s: float = SETTLE_S,
+    sleep: Callable[[float], None] = time.sleep,
+) -> dict[str, Any]:
+    """Attach the load at the start, at the end and after settling. The run is contended
+    if the start or the settled end was (#160).
+
+    The load average counts every runnable task: the run's own work, and what it caused
+    in the Docker VM, as much as anything else. Read at the end, it measures the
+    benchmark, so a ``large`` run could never pass on 8 cores. After ``settle_s`` idle
+    seconds, the run's contribution has decayed by ``exp(-settle_s / 60)`` (about 5% after
+    180 s), so the settled reading is the background load plus that residue, and decides.
+    The end reading is kept, and their difference estimates the run's own load.
+    """
     end_load = load_snapshot()
-    result["load"] = {"start": start_load, "end": end_load}
-    result["contended"] = bool(start_load["contended"] or end_load["contended"])
+    settled = end_load
+    if settle_s > 0:
+        sleep(settle_s)
+        settled = load_snapshot()
+    result["load"] = {
+        "start": start_load,
+        "end": end_load,
+        "settled": settled,
+        "settle_s": settle_s,
+        "residue_fraction": round(float(np.exp(-settle_s / LOAD_1M_TAU_S)), 4),
+        "run_load_estimate": round(end_load["load_1m"] - settled["load_1m"], 2),
+        "rule": "contended if the 1-minute load exceeds half the cores at the start or "
+        "after settling (#160)",
+    }
+    result["contended"] = bool(start_load["contended"] or settled["contended"])
     return result
 
 

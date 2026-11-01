@@ -253,7 +253,12 @@ function Builder() {
   if (versions.data?.length === 0) {
     return <ErrorNote error={new Error("Add a dataset version under Market data before creating an experiment.")} />;
   }
-  const details = err?.details as { loc?: (string | number)[]; msg: string }[] | undefined;
+  // Field errors are a list; other refusals (#163 backtest_too_large) carry an object, and
+  // their message already says what to change.
+  const errDetails: unknown = err?.details;
+  const details = Array.isArray(errDetails)
+    ? (errDetails as { loc?: (string | number)[]; msg: string }[])
+    : undefined;
 
   return (
     <form onSubmit={submit} className="grid gap-6 text-sm xl:grid-cols-[3fr_2fr]">
@@ -442,9 +447,24 @@ function Builder() {
                 }
               />
             )}
-            <button type="submit" className="btn btn-primary" disabled={busy || !dvId}>
+            <button
+              type="submit"
+              className="btn btn-primary"
+              disabled={busy || !dvId}
+              aria-describedby="backtest-size-note"
+            >
               {busy ? "Submitting…" : "Run backtest"}
             </button>
+            {/* #163: these caps follow from QUANTLAB_MAX_BACKTEST_MEMORY_MB (default 1228) and
+                the estimate's coefficients and measured range in services/api/src/quantlab_api/
+                limits.py; tests/unit/test_backtest_admission.py pins them. Update this text
+                whenever those change. */}
+            <p id="backtest-size-note" className="text-xs text-ink-2">
+              One backtest must fit a worker&apos;s memory. Under the default limits, a
+              2005–2023 backtest can have at most 199 symbols with a daily rebalance and 400
+              with a weekly, monthly or quarterly one. An earlier end date allows more; a
+              later start does not reduce the history loaded.
+            </p>
           </div>
         </Panel>
       </div>

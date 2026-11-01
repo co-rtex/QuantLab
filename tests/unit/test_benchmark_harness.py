@@ -27,14 +27,52 @@ def test_contended_means_one_minute_load_above_half_the_cores(load, cpus, expect
     assert harness.is_contended(load, cpus) is expected
 
 
-def test_a_run_is_contended_if_either_end_was(monkeypatch):
-    quiet = {"load_1m": 0.1, "contended": False}
-    busy = {"load_1m": 9.0, "contended": True}
-    monkeypatch.setattr(harness, "load_snapshot", lambda: busy)
-    assert harness.finalize({}, quiet)["contended"] is True
-    monkeypatch.setattr(harness, "load_snapshot", lambda: quiet)
-    done = harness.finalize({}, quiet)
-    assert done["contended"] is False and set(done["load"]) == {"start", "end"}
+def _load(l1: float, cpus: int = 8) -> dict:
+    return {"load_1m": l1, "contended": harness.is_contended(l1, cpus)}
+
+
+def _finalize(monkeypatch, start: float, end: float, settled: float, settle_s=None):
+    """finalize with synthetic readings: ``end`` straight after the run, ``settled`` after
+    the settle period. Returns the result and the sleeps it asked for."""
+    readings = iter([_load(end), _load(settled)])
+    monkeypatch.setattr(harness, "load_snapshot", lambda: next(readings))
+    slept: list[float] = []
+    kw = {} if settle_s is None else {"settle_s": settle_s}
+    return harness.finalize({}, _load(start), sleep=slept.append, **kw), slept
+
+
+def test_a_runs_own_load_at_the_end_does_not_make_it_contended(monkeypatch):
+    # #160: the --skip-parallel large run started at 2.98 and ended at 4.76 on 8 cores
+    # because of its own work. Once that has decayed, the background is quiet.
+    res, slept = _finalize(monkeypatch, start=2.98, end=4.76, settled=1.4)
+    assert res["contended"] is False and slept == [harness.SETTLE_S] == [180.0]
+    load = res["load"]
+    assert load["end"]["load_1m"] == 4.76 and load["end"]["contended"] is True  # kept
+    assert load["settled"]["load_1m"] == 1.4 and load["run_load_estimate"] == 3.36
+    assert load["residue_fraction"] == pytest.approx(0.0498, abs=1e-4)  # exp(-180/60)
+
+
+@pytest.mark.parametrize(
+    ("start", "end", "settled", "contended"),
+    [
+        (2.0, 6.0, 4.5, True),  # background still above half the cores after settling
+        (4.5, 4.6, 1.0, True),  # contended before the run started
+        (1.0, 2.0, 4.0, False),  # at the threshold is not above it
+        (1.0, 2.0, 4.01, True),
+    ],
+)
+def test_the_start_and_the_settled_end_decide(monkeypatch, start, end, settled, contended):
+    res, _ = _finalize(monkeypatch, start, end, settled)
+    assert res["contended"] is contended
+
+
+def test_no_settling_is_the_old_rule_and_does_not_wait(monkeypatch):
+    readings = iter([_load(4.76)])
+    monkeypatch.setattr(harness, "load_snapshot", lambda: next(readings))
+    slept: list[float] = []
+    res = harness.finalize({}, _load(2.98), settle_s=0, sleep=slept.append)
+    assert res["contended"] is True and slept == []
+    assert res["load"]["settled"] is res["load"]["end"] and res["load"]["residue_fraction"] == 1.0
 
 
 def test_machine_metadata_names_the_commit_and_resources():
@@ -70,7 +108,14 @@ def test_retrieval_samples_are_distinct_and_fresh_per_repeat():
 def test_a_cold_run_without_privileges_stays_labelled_warm(monkeypatch):
     monkeypatch.setattr(run_all.harness, "cold_capability", lambda: (None, "needs root"))
     out = run_all.bench(
-        "tiny", None, repeats=2, cold=True, skip_parallel=True, skip_postgres=True, skip_redis=True
+        "tiny",
+        None,
+        repeats=2,
+        cold=True,
+        skip_parallel=True,
+        skip_postgres=True,
+        skip_redis=True,
+        settle_s=0,  # the settle wait itself is tested above
     )
     assert out["cache"] == {"mode": "warm", "note": "needs root"}
     duck = out["retrieval"]["duckdb_parquet"]

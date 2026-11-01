@@ -211,12 +211,19 @@ def main() -> None:
     ap.add_argument("--workers", type=int, nargs="+", default=[1, 2, 4])
     ap.add_argument("--jobs", type=int, default=24)
     ap.add_argument("--repeats", type=int, default=3)
+    ap.add_argument(
+        "--settle",
+        type=float,
+        default=harness.SETTLE_S,
+        help="idle seconds before the load reading that decides contention (#160)",
+    )
     a = ap.parse_args()
     start = harness.load_snapshot()
     body = load(a.repeats) if a.mode == "load" else scaling(a.workers, a.jobs)
     res = harness.finalize(
         {"mode": a.mode, "environment": harness.machine(), "data_is_synthetic": True, **body},
         start,
+        a.settle,
     )
     OUT.mkdir(exist_ok=True)
     tag = "-contended" if res["contended"] else ""

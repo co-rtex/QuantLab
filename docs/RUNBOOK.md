@@ -44,7 +44,8 @@ at this Redis.
 ## Incidents
 
 Job timing runs on PostgreSQL's clock, not any host's (#130). That covers leases,
-heartbeats, retry backoffs, the reaper's cutoffs, claims and `created_at`. When reading
+heartbeats, retry backoffs, the reaper's cutoffs, claims (`started_at`,
+`attempt_started_at`) and `created_at`. When reading
 these columns, compare them with `SELECT now()` in the database, not with `date` on a host.
 A worker, reaper or API host with a skewed clock no longer moves any job deadline.
 
@@ -74,9 +75,23 @@ A worker, reaper or API host with a skewed clock no longer moves any job deadlin
 A worker died mid-job. Its lease (default 60 s, `QUANTLAB_JOB_LEASE_SECONDS`) expires in
 database time. The reaper then does one of four things:
 * marks the job `cancelled` if a cancel was requested;
-* marks it `timed_out` once it has run past `timeout_seconds`;
+* marks it `timed_out` if its current attempt ran past `timeout_seconds`;
 * fails it once `max_attempts` is reached;
 * otherwise requeues it to run at once, with no backoff.
+
+**The timeout counts each attempt's run time (#167)**, from `attempt_started_at` (the
+attempt's claim) to when its lease ran out (`lease_expires_at`).
+* Two kinds of time don't count: waiting for a worker between attempts, and the time since
+  the lease expired. So a job requeued after an outage, even one the reaper was down for,
+  is retried, not timed out.
+* The lease's end counts, rather than the last heartbeat, because with a long
+  `QUANTLAB_JOB_LEASE_SECONDS` the keepalive beats only every lease/3. An attempt killed
+  for overrunning may have last beaten before the timeout. Measuring to the lease's end
+  over-counts by at most one lease.
+* `started_at` stays the job's first claim. Rows from before `attempt_started_at` existed
+  are timed from `started_at`.
+* The worker checks the same limit at each progress heartbeat, and RQ kills an attempt at
+  timeout + 60 s.
 
 A late heartbeat or commit from the dead worker is fenced out by the attempt counter, so
 no duplicate result can be written.
@@ -112,6 +127,63 @@ no duplicate result can be written.
 Retryable errors are retried with the backoff above until `max_attempts`. Permanent
 errors (invalid input, missing dataset) are not retried. Fix the input and submit a new
 experiment; results of failed jobs are never stored.
+
+### Backtests that don't fit the worker's memory (#163)
+* **At submission:** `422 backtest_too_large`, for either of two reasons, given in
+  `details.reason`.
+  * **`estimated_memory`:** the estimated peak memory exceeds
+    `QUANTLAB_MAX_BACKTEST_MEMORY_MB`.
+    * The estimate grows with symbols × sessions loaded and symbols × rebalances in the
+      window.
+    * Sessions are the larger of the exchange calendar's count and the version's distinct
+      bar dates.
+    * It ignores the strategy, so a strategy that holds few names is overestimated.
+    * The default limit is 1228 MB, which is 80% of the compose worker's 1536 MB limit.
+    * `details` give the estimate, the limit, and the symbols, sessions and rebalances.
+  * **`outside_measured_range`:** the backtest has more than 400 symbols, or symbols ×
+    sessions or symbols × rebalances above 400 × 4,785. Those products are what was
+    measured, so larger backtests are refused rather than estimated.
+    * A long history of few symbols stays inside: per-session costs that don't scale with
+      symbols are about 1 KB a session.
+    * A new measurement (below) can widen the range.
+* **What reduces a backtest's memory:** fewer symbols, a less frequent rebalance or an
+  earlier end date. The job loads the data from its first bar up to the end date, whatever
+  the start. So a later start doesn't reduce what is loaded, and helps only by cutting
+  rebalances.
+* **Effective caps for 2005–2023** (4,785 sessions) under the defaults, of the 1,500-symbol
+  universe limit:
+
+  | Rebalance | Most symbols | What decides it |
+  |---|---|---|
+  | daily | 199 | the estimate |
+  | weekly | 400 | the measured range (the estimate alone would allow 407) |
+  | monthly | 400 | the measured range (the estimate alone would allow 514) |
+  | quarterly | 400 | the measured range (the estimate alone would allow 542) |
+
+  An earlier end date allows more, as does a dataset with less history.
+* **Older experiments:** reproducing one that is larger than these now returns the same
+  422, although it ran before #163.
+* **If a job still runs out of memory:** the kernel kills its work horse, and the job fails at
+  once as `ResourceExhausted` ("out of memory: the job was stopped after using N MB of the
+  worker's M MB limit"), not retryable.
+  * **The evidence:** a SIGKILL, plus either a rise in the container's `memory.events`
+    `oom_kill` count, or the horse's peak resident set (`ru_maxrss`) at 95% or more of
+    `memory.max`.
+  * **It needs cgroup v2** (`/sys/fs/cgroup/memory.events`, as in the compose workers). On a
+    host with cgroup v1, possibly AWS Fargate, those files don't exist, and the
+    classification silently never fires: such jobs fail as `LeaseExpired` after their
+    retries, as before. Check before relying on it there.
+  * **Before #163,** such a job was retried twice into the same wall and then failed as
+    `LeaseExpired`.
+  * A worker lost for any other reason still recovers through the reaper as above.
+* **Raise the limit only together with the worker's memory.**
+  * Measure first with `benchmarks/worker_memory.py` on the new worker: it samples each job's
+    anonymous memory in the real container.
+  * Then set `QUANTLAB_MAX_BACKTEST_MEMORY_MB` to keep the same 20% headroom.
+  * Widening the measured range (`MEASURED_MAX_SYMBOLS`, `MEASURED_MAX_SESSIONS`) also
+    needs measured jobs out there, with sessions varied as well as symbols. Then refit.
+  * The estimate's coefficients (`quantlab_api/limits.py`) come from the measured envelope
+    in `benchmarks/results/*-worker-memory-after-*.json`.
 
 ### ML runs fail with "submitted for pipeline version N"
 Deploy the API and the workers together, at the same release. The API stamps its
