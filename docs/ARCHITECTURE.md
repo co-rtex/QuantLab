@@ -81,5 +81,11 @@ Prometheus scrapes two kinds of process, both behind the same bearer token
   * The directory is never shared with another container, where every worker is pid 1 and
     the per-pid files would collide, or with the API.
   * After each horse exits, its live gauges are removed (`mark_process_dead`), so a horse
-    killed mid-job doesn't leave `quantlab_jobs_running` raised. Structured JSON logs (structlog) carry
+    killed mid-job doesn't leave `quantlab_jobs_running` raised.
+  * Its other files are folded into one archive file per kind
+    (`observability.compact_dead_process`). Counters and histograms are added, so they
+    never go down, and scrapes wait while a fold runs. Without this, every job (a new pid)
+    left three files and about 20 KiB of tmpfs, which counts against the worker's memory
+    limit, and every scrape read them all: 466 ms at 5000 jobs. With it, the directory
+    holds five files and a scrape takes about 0.4 ms however many jobs have run. Structured JSON logs (structlog) carry
 `request_id`, and job logs carry the originating request id.
