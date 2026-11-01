@@ -53,26 +53,32 @@ def _times(jid: uuid.UUID) -> tuple[datetime | None, datetime | None]:
 
 
 def _start(
-    flag: Path, kind: str, interval: int, mode: str, *jobs: uuid.UUID
+    flag: Path, kind: str, interval: int, mode: str, *jobs: uuid.UUID, log: Path | None = None
 ) -> subprocess.Popen[str]:
+    """The worker, its output piped, or written to `log` when given."""
     env = {**os.environ, "PYTHONPATH": str(ROOT)}
-    return subprocess.Popen(
-        [
-            sys.executable,
-            "-m",
-            "tests.integration.redis_outage_child",
-            str(flag),
-            kind,
-            str(interval),
-            mode,
-            *map(str, jobs),
-        ],
-        cwd=ROOT,
-        env=env,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-        text=True,
-    )
+    out = log.open("w") if log else subprocess.PIPE
+    try:
+        return subprocess.Popen(
+            [
+                sys.executable,
+                "-m",
+                "tests.integration.redis_outage_child",
+                str(flag),
+                kind,
+                str(interval),
+                mode,
+                *map(str, jobs),
+            ],
+            cwd=ROOT,
+            env=env,
+            stdout=out,
+            stderr=subprocess.STDOUT,
+            text=True,
+        )
+    finally:
+        if log:
+            out.close()  # the worker has its own copy
 
 
 def _wait_for(flag: Path) -> None:
@@ -130,15 +136,20 @@ def test_a_sigterm_during_an_outage_waits_for_the_running_job(seeded, tmp_path):
     a long monitoring interval no heartbeat runs meanwhile: the handler alone is tested."""
     flag = tmp_path / "redis-down"
     job = _job({"outage": True, "seconds": 6})
-    proc = _start(flag, "quantlab", 30, "serve", job)
+    log = tmp_path / "worker.log"
+    proc = _start(flag, "quantlab", 30, "serve", job, log=log)
     _wait_for(flag)
     time.sleep(1.5)  # mid-job, in the outage
     proc.send_signal(signal.SIGTERM)
-    out, _ = proc.communicate(timeout=90)
+    # The worker's own exit, not its output's end: the forked horse holds a copy of the
+    # worker's stdout, so communicate() returned only once the horse was done too, however
+    # early the worker had left it (#197 review).
+    proc.wait(timeout=90)
     # The worker stopped only once the job was done: a worker that left the horse would
     # have exited about 4 s before it finished.
     status_at_exit = _status(job)
     flag.unlink()
+    out = log.read_text()
     assert status_at_exit == ("completed", 1), out[-3000:]
     assert proc.returncode == 0, out[-3000:]
     assert "during=shutdown_request" in out, out[-3000:]
