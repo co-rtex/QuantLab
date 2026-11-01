@@ -5,7 +5,10 @@ set before prometheus_client creates the metrics, when quantlab_api is imported.
 is a forked child recording what a horse records; the parent then does what QuantlabWorker
 does after a horse exits. A thread scrapes the endpoint all along, as Prometheus might.
 
-    python -m tests.unit.metrics_compaction_child <jobs> <compact|keep>
+    python -m tests.unit.metrics_compaction_child <jobs> <compact|slow|keep>
+
+``slow`` compacts with a 20 ms pause before each dead file is removed, so a scrape that
+did not wait for the compaction would see that horse's samples twice.
 
 Prints JSON: the files left, the outcome total after each job and every total a concurrent
 scrape saw, and the final samples.
@@ -19,6 +22,7 @@ import os
 import re
 import sys
 import threading
+import time
 
 assert os.environ.get("PROMETHEUS_MULTIPROC_DIR"), "set by the test"
 
@@ -57,7 +61,16 @@ def horse(i: int) -> None:
 
 
 def main() -> None:
-    jobs, compact = int(sys.argv[1]), sys.argv[2] == "compact"
+    jobs, mode = int(sys.argv[1]), sys.argv[2]
+    compact = mode in ("compact", "slow")
+    if mode == "slow":
+        remove = os.remove
+
+        def slow_remove(path: str) -> None:
+            time.sleep(0.02)
+            remove(path)
+
+        O.os.remove = slow_remove  # type: ignore[attr-defined]
     seen: list[float] = []
     stop = threading.Event()
 
