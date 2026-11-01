@@ -315,10 +315,11 @@ class DatasetStore:
                     stats = [
                         md.row_group(i).column(col).statistics for i in range(md.num_row_groups)
                     ]
-                    bounds = [
-                        (st.min, st.max) if st is not None and st.has_min_max else (None, None)
-                        for st in stats
-                    ]
+                    with contextlib.suppress(UnicodeDecodeError):  # undecodable: unprovable
+                        bounds = [
+                            (st.min, st.max) if st is not None and st.has_min_max else (None, None)
+                            for st in stats
+                        ]
                 if all(isinstance(lo, str) and isinstance(hi, str) for lo, hi in bounds):
                     groups = [
                         i
@@ -331,7 +332,11 @@ class DatasetStore:
                         f.read_row_group(i, use_pandas_metadata=True).filter(keep) for i in groups
                     ]
                     table = pa.concat_tables(parts) if parts else f.schema_arrow.empty_table()
+                    # As read_parquet converts (pandas/io/parquet.py). pyarrow 26 restores
+                    # attrs itself; pandas sets them explicitly too, for older versions.
                     df = table.to_pandas()
+                    if b"PANDAS_ATTRS" in (table.schema.metadata or {}):
+                        df.attrs = json.loads(table.schema.metadata[b"PANDAS_ATTRS"])
         if df is None:
             df = pd.read_parquet(path, filters=filters or None)
         df["symbol"] = df["symbol"].astype(str)

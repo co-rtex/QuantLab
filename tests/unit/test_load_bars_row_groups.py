@@ -172,6 +172,26 @@ def test_with_symbol_statistics_the_full_read_is_never_taken(
         store.load_bars(dv, symbols, start, end)
 
 
+def test_frame_attrs_survive_as_read_parquet_restores_them(dv: DatasetVersion) -> None:
+    path = dv.path / "bars.parquet"
+    frame = pd.read_parquet(path)
+    frame.attrs = {"adjusted": False, "source": "probe"}
+    frame.to_parquet(path, index=False, row_group_size=7)
+    for symbols, start, end in CASES:
+        got = DatasetStore(dv.path.parents[1]).load_bars(dv, symbols, start, end)
+        want = reference(dv, symbols, start, end)
+        pd.testing.assert_frame_equal(got, want)
+        assert got.attrs == want.attrs == {"adjusted": False, "source": "probe"}
+
+
+def test_a_file_without_rows_gives_the_same_empty_frame(dv: DatasetVersion) -> None:
+    path = dv.path / "bars.parquet"
+    pq.write_table(pq.read_table(path).slice(0, 0), path)
+    got = DatasetStore(dv.path.parents[1]).load_bars(dv, ["S01"])
+    pd.testing.assert_frame_equal(got, reference(dv, ["S01"]))
+    assert got.empty
+
+
 def test_a_dictionary_encoded_symbol_column_gives_the_same_frame(dv: DatasetVersion) -> None:
     path = dv.path / "bars.parquet"
     frame = pd.read_parquet(path)
