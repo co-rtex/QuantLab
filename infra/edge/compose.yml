@@ -49,7 +49,9 @@ services:
     restart: unless-stopped  # never a dev stack's "no" (#162)
     ports: !reset []
     environment: &edge-env
-      QUANTLAB_ENVIRONMENT: ${QUANTLAB_ENVIRONMENT:-production}
+      # Pinned, never ${QUANTLAB_ENVIRONMENT:-…}: a shell or .env "development" (.env.example's
+      # value) would otherwise turn off every production guard behind the edge (#235).
+      QUANTLAB_ENVIRONMENT: production
       QUANTLAB_COOKIE_SECURE: "true"
 
   worker:
