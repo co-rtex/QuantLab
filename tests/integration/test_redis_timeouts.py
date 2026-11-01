@@ -93,6 +93,40 @@ def test_a_login_still_succeeds_after_one_redis_wait(client, silent, monkeypatch
     assert elapsed < 1 + T, elapsed
 
 
+def test_a_device_cookie_login_works_with_the_breaker_open(client, monkeypatch) -> None:
+    """A browser that signed in before is throttled per device (#55): with Redis hung,
+    its login still succeeds, after one Redis wait, and its locally counted reservation
+    is never refunded to Redis (#211 review)."""
+    import redis
+
+    from quantlab_api import jobs
+    from quantlab_api.config import get_settings
+    from tests.integration.conftest import register
+
+    creds = {"email": "alice@example.com", "password": "Correct-horse-9"}
+    register(client, **creds)
+    assert client.post("/api/v1/auth/login", json=creds).status_code == 200
+    assert client.cookies.get("quantlab_device")
+    commands: list[str] = []
+    real = redis.Redis.execute_command
+
+    def counted(self, *args, **kwargs):  # type: ignore[no-untyped-def]
+        commands.append(str(args[0]))
+        return real(self, *args, **kwargs)
+
+    with silent_redis() as url:
+        s = get_settings()
+        monkeypatch.setattr(s, "redis_url", url)
+        monkeypatch.setattr(s, "redis_connect_timeout_seconds", T)
+        monkeypatch.setattr(s, "redis_socket_timeout_seconds", T)
+        jobs.set_redis(None)
+        monkeypatch.setattr(redis.Redis, "execute_command", counted)
+        r = client.post("/api/v1/auth/login", json=creds)
+        jobs.set_redis(None)
+    assert r.status_code == 200, r.text
+    assert commands == ["INCRBY"], commands  # the device reserve; the refund stays local
+
+
 def test_bars_are_served_bypassing_the_cache(client, seeded, silent) -> None:
     h, dv = seeded["headers"], seeded["dv"]
     r = client.get(f"/api/v1/dataset-versions/{dv}/bars/SYN001?start=2021-01-01", headers=h)
