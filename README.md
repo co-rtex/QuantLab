@@ -48,7 +48,10 @@ Details are in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md), the formulas in
 
 ## Quick start
 
-Requirements: Docker, Python 3.12 with [uv](https://docs.astral.sh/uv/), Node.js 22.
+Requirements: Docker, Python 3.12 with [uv](https://docs.astral.sh/uv/), Node.js 22. The
+full stack (`make app-up`, 2 workers) needs at least **4.5 GiB of Docker VM memory**: that's
+the measured peak of 3,685 MiB with two backtests at the admission cap, plus 20% (#175;
+[RUNBOOK, Resources](docs/RUNBOOK.md#resources)). `make` warns on smaller VMs.
 
 ```bash
 make setup            # uv sync + npm ci
