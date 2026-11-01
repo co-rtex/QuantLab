@@ -15,6 +15,10 @@ from quantlab_api.config import get_settings
 from quantlab_api.db import SessionLocal
 from quantlab_api.models import Job, OptimizationRun
 from tests.integration.conftest import join_workspace, register, run_pending_jobs
+from tests.limiter_clock import limiter_clock  # noqa: F401 - the fixture below
+
+# Fixed-window limits: counted against a frozen clock, never across a window boundary.
+pytestmark = pytest.mark.usefixtures("limiter_clock")
 
 SYMS = [f"SYN{i:03d}" for i in range(1, 9)]
 BODIES: list[dict[str, Any]] = [
