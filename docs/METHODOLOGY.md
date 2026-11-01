@@ -314,6 +314,8 @@ Per session `k`:
    * **Known limitation of 1.4.1** (fixed in 1.5.0, #187): with whole shares, a buy under
      one share that no shortfall caused is still dropped with no record. That is the
      top-up of a holding a split left fractional, and it still counts toward the need.
+     When a shortfall scales such a top-up too, it is logged `insufficient_cash` like
+     the other scaled buys.
    **A bar printed with zero volume is not tradable** (#149, engine 1.4.0): a vendor may
    repeat the last open and close with volume 0 through a halt, and nobody could trade at
    those prices.
@@ -411,6 +413,11 @@ from `quantlab`.
 It is evidence that the engine implements these rules as written. It is not evidence that
 the rules match any vendor's data.
 
+The generated universes cap capital at 1e6, because until #196 both implementations
+emulate the same cliff. A buy is rejected whole for a shortfall of a fraction of a cent,
+and that shortfall starts to occur from about 1e7 of cash. Larger capital is added with
+the #196 fix.
+
 **Memory and size limits (#163).**
 * **Storage:** the engine keeps trades, position rows and decisions by column while it
   simulates (float columns in float64 arrays), instead of one Python dict per trade.
@@ -451,13 +458,22 @@ names changed-input re-runs and leaves the check "not assessed" if they are the 
   * 1.4.1 (#184): a buy the cash cuts to nothing is rejected `insufficient_cash` instead
     of dropped or logged `InvalidOrder`, and rounding dust does not count as cash.
     * **Economics.** 1.4.0 scaled buys to dust quantities when cash was dust. In a large
-      fractional account that bought dust positions. 1.4.1 buys nothing then. So trades
-      and fingerprints can change at dust level in large fractional accounts: the
-      #190 review found 3 of 2,748 runs, all with capital 3e9 and fractional shares,
-      the largest a $1,705 difference (3.5e-7 relative). Elsewhere the economics are
-      identical: equity, trades, positions, ledger and fingerprints match 1.4.0 in all
-      962 runs of `tests/oracle/ab.py`, including 54 with capital 3e9 and fractional
-      shares.
+      fractional account that bought dust positions; 1.4.1 buys nothing then. The
+      difference starts at dust level but need not stay there.
+      * **The mechanism:** a dust trade changes later float rounding. With #196's cliff (a
+        whole buy rejected for a rounding-level shortfall), that can turn into a whole
+        buy filled by one version and rejected by the other.
+      * **On the final 1.4.1 code**, the #190 review's re-check against 1.4.0 found 5 of
+        480 large-account runs that differ: seeds 1000-1119, capital 3e9, fractional,
+        two strategies × two modes. They are seed 1015 random (both modes) and seeds
+        1074, 1081 and 1094 momentum.
+      * **The worst** is seed 1094 at `next_close`: $2.47M, 5.6e-4 relative. On
+        2022-02-03, 1.4.0 bought 2.66e-9 shares of dust. Later it rejected a whole $32M
+        buy for a rounding-level shortfall, which 1.4.1 fills.
+      * 1.5.0 removes the cliff (#196).
+      * **Elsewhere the economics are identical:** equity, trades, positions, ledger and
+        fingerprints match 1.4.0 in all 962 runs of `tests/oracle/ab.py`, including 54
+        with capital 3e9 and fractional shares.
     * **The rejection log** differs in 134 of those runs: 105 of the 800 differential
       runs, and 29 of the library-strategy runs (not broken down: the reference does not
       run those strategies).
