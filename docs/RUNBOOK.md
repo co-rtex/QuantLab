@@ -9,7 +9,7 @@
 | Workers | `docker compose --profile app ps worker` / `rq info` as below | workers listening on `quantlab` |
 | Reaper | logs contain `reaper_cycle` lines when it recovers anything | process running |
 | Metrics (API) | `curl -H "Authorization: Bearer $QUANTLAB_METRICS_TOKEN" localhost:8000/metrics` | Prometheus text |
-| Metrics (each worker; job, dataset, cache, ingest) | for each replica N (1, 2, …): `docker compose exec --index N worker python -c "import os,urllib.request as u; r=u.Request('http://localhost:9101/metrics', headers={'Authorization': 'Bearer ' + os.environ.get('QUANTLAB_METRICS_TOKEN', '')}); print(u.urlopen(r).read().decode())"` (port 9101 is never published; without `--index`, compose picks one replica) | Prometheus text with `quantlab_job_outcomes_total`; Prometheus target `quantlab-worker` up for every replica |
+| Metrics (each worker; job, dataset, ingest) | for each replica N (1, 2, …): `docker compose exec --index N worker python -c "import os,urllib.request as u; r=u.Request('http://localhost:9101/metrics', headers={'Authorization': 'Bearer ' + os.environ.get('QUANTLAB_METRICS_TOKEN', '')}); print(u.urlopen(r).read().decode())"` (port 9101 is never published; without `--index`, compose picks one replica) | Prometheus text with `quantlab_job_outcomes_total`; Prometheus target `quantlab-worker` up for every replica |
 | Metrics (reaper; lease-loss retries, the outcomes it decides) | `docker compose exec reaper python -c "import os,urllib.request as u; r=u.Request('http://localhost:9102/metrics', headers={'Authorization': 'Bearer ' + os.environ.get('QUANTLAB_METRICS_TOKEN', '')}); print(u.urlopen(r).read().decode())"` (port 9102 is never published) | Prometheus text with `quantlab_job_retries_total`; Prometheus target `quantlab-reaper` up |
 
 ### Inspecting the job queue
@@ -189,7 +189,7 @@ A worker, reaper or API host with a skewed clock no longer moves any job deadlin
     quitting".
 * **New submissions** are still recorded, and readiness reports 503 (see "Jobs stuck in
   `queued`" for what is redelivered once Redis is back).
-* **Rate limits** (logins, registration, invitations, the assistant): each API process's
+* **Rate limits** (logins, registration, invitations, the assistant, optimize): each API process's
   limiter breaker opens at its first connection error (#207): breaker open = counting
   in-process, still limiting. See the hung-Redis entry below.
 * **RQ's own records** in Redis, of jobs that finished during the outage, stay incomplete
@@ -225,7 +225,7 @@ A worker, reaper or API host with a skewed clock no longer moves any job deadlin
   * **The API:** each call gives up after 5 s (`QUANTLAB_REDIS_SOCKET_TIMEOUT_SECONDS`),
     once, without retries (#200). Then:
     * `/api/v1/ready` reports 503 with `redis: error`;
-    * the rate limits (logins, registration, invitations, the assistant) are counted in
+    * the rate limits (logins, registration, invitations, the assistant, optimize) are counted in
       each API process instead. Breaker open = counting in-process, still limiting (#207):
       a connection error or a timeout opens each process's limiter breaker, which skips
       Redis for 10 s, then lets one call try it again. Any other Redis error (a bad
@@ -474,7 +474,8 @@ Deleting a workspace removes its files after the database commit (#21,
   versions are content-addressed; after a restore, `DatasetStore.verify()` recomputes each
   hash to detect corruption.
 * Redis holds no durable state: only queue messages (including retries scheduled for later
-  delivery), the login rate-limit counters, and caches. After a loss:
+  delivery), the rate-limit counters (logins, registration, invitations, the assistant,
+  optimize), and caches. After a loss:
   * the reaper re-delivers queued jobs from PostgreSQL, a retry once its backoff has passed;
   * rate limits start again from zero;
   * caches refill on demand.
@@ -497,6 +498,14 @@ instead of using a development key. Terminate TLS at the trusted edge (below). R
 (`alembic -c services/api/alembic.ini upgrade head`) before starting new API versions.
 Keep every clock synchronised (NTP), the database server's above all: every job deadline
 follows it (#130). Hosts' clocks still date tokens and the storage sweep's file times.
+
+Two settings exposure depends on, which no startup guard checks:
+* **`QUANTLAB_TRUSTED_PROXIES`:** the peers allowed to state the client address. It defaults
+  to `[]`, and compose sets `["web"]`. Outside compose, set it to the web tier's address, or
+  every production login fails closed with 503 `edge_required`.
+* **`QUANTLAB_EDGE_SECRET`:** the secret the edge adds and the web tier checks. Caddy
+  requires 32+ characters (`infra/edge/compose.yml`), but the web tier accepts any non-empty
+  value. Generate it as in "Exposing a deployment", step 1.
 
 In production, login and registration accept only requests that arrive through the web
 tier (a trusted proxy); a direct call to the API, such as
@@ -523,9 +532,17 @@ behaviour is unverified (no test makes a network call).
 
 ## Exposing a deployment
 
-**Precondition: the edge is verified.** Never publish the web tier, the API, Postgres or
-Redis directly; every port in the base `docker-compose.yml` is bound to 127.0.0.1 for that
-reason. A client that reaches the web tier without the edge would choose the address the
+> **Public exposure is prohibited until #39 is closed.** The steps below are what #39
+> requires on the host: the edge overlay on an address-preserving Linux host,
+> `infra/edge/verify.sh`, and the remote probe from a second machine. #39 also requires the
+> lead's independent rerun of both, and, for AWS, a real NLB sending PROXY v2. Passing them
+> yourself does not lift the prohibition; closing #39 does.
+
+**Precondition: the edge is verified.** Never publish the web tier, the API, Postgres,
+Redis, or the observability profile's services directly: Prometheus (`:9090`, no
+authentication), Grafana (`:3001`, with anonymous Viewer access) and Jaeger (`:16686`, and
+its unauthenticated OTLP ingest on `:4318`). Every port in the base `docker-compose.yml` is
+bound to 127.0.0.1 for that reason, and the edge overlay publishes none of them. A client that reaches the web tier without the edge would choose the address the
 API throttles on: it could exhaust a victim's per-address bucket and, by rotating
 addresses, spend a victim account's failed-login budget (#3).
 
@@ -536,7 +553,10 @@ the same host) replace it with a gateway address. Every user would then share on
 and ten failed logins would lock everyone out. Step 3 checks this.
 
 1. Start the stack with the edge overlay, which publishes only the edge and runs the API
-   in production mode:
+   in production mode. Its default is `QUANTLAB_ENVIRONMENT=production`
+   (`infra/edge/compose.yml`), so an exported or `.env` value overrides it: leave
+   `QUANTLAB_ENVIRONMENT` unset, or set it to `production`. Under `development`, the API
+   docs are served and none of the production guards run.
    ```
    export QUANTLAB_EDGE_SECRET=$(openssl rand -hex 32)   # store it like the JWT secret
    export QUANTLAB_JWT_SECRET=$(openssl rand -hex 32) QUANTLAB_METRICS_TOKEN=$(openssl rand -hex 24)
@@ -562,7 +582,8 @@ and ten failed logins would lock everyone out. Step 3 checks this.
    REMOTE_IP is that machine's address as the host should see it. It passes only on an
    exact match; any other recorded address fails. Docker Desktop and rootless Docker can
    record addresses outside Docker's subnets.
-4. Only then bind the edge publicly: `QUANTLAB_EDGE_BIND=0.0.0.0 QUANTLAB_EDGE_PORT=443`.
+4. Only then, and only after #39 is closed, bind the edge publicly:
+   `QUANTLAB_EDGE_BIND=0.0.0.0 QUANTLAB_EDGE_PORT=443`.
 
 Behind a CDN or load balancer, the hop that faces the internet must overwrite
 `X-Forwarded-For` with its TCP peer. Configure Caddy's `trusted_proxies` with only that
