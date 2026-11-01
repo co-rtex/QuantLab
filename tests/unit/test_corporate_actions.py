@@ -463,6 +463,26 @@ def test_legitimate_patterns_warn_but_do_not_block(case):
     enforce_gates(report)
 
 
+def test_several_dividends_on_one_ex_date_warn_without_blocking():
+    # #210. A regular and a special dividend on one ex-date are legitimate, but so would be
+    # a source that appends a correction (0.25, then 0.26) as a second row: both are paid.
+    # Different amounts on one ex-date are therefore reported, not blocked.
+    bars = make_bars({"B": [10.0, 10.1, 10.2, 10.1, 10.0, 10.1, 10.2, 10.1]})
+    d = _sessions(bars)
+    div = {"symbol": "B", "ex_date": d[4], "kind": "dividend"}
+    report = assess_quality(bars, _acts([{**div, "value": 0.25}, {**div, "value": 0.26}]))
+    by = {c.name: c for c in report.checks}
+    check = by["multiple_dividends_on_ex_date"]
+    assert (check.status, check.count) == ("warn", 2)
+    assert sorted(r["value"] for r in check.sample) == [0.25, 0.26]
+    assert by["duplicate_corporate_actions"].status == "pass"
+    enforce_gates(report)
+    # One dividend is not reported, and an identical repeat still blocks.
+    one = {c.name: c for c in assess_quality(bars, _acts([{**div, "value": 0.25}])).checks}
+    assert one["multiple_dividends_on_ex_date"].status == "pass"
+    assert "duplicate_corporate_actions" in _failing(bars, _acts([{**div, "value": 0.25}] * 2))
+
+
 def test_dividend_on_a_symbols_first_bar_passes():
     # A download window that starts on an ex-date has no previous close to compare with.
     bars = make_bars({"Y": [50.0, 50.5, 50.2, 50.4]})
