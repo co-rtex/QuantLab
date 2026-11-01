@@ -500,7 +500,9 @@ from `quantlab`.
 * `tests/unit/test_engine_oracle.py` requires the engine to agree with it to 1e-9 on 200
   seeded adversarial synthetic universes, plus twelve hand-computed cases.
 * A mutation harness (`tests/oracle/mutate.py`) shows the comparison catches 32 injected
-  engine and adjuster defects.
+  engine and adjuster defects. A 33rd, M33, keeps the allocators' solver residue (#227).
+  The comparison can't see it, because none of its strategies uses an optimizer.
+  `tests/unit/test_allocator_dust.py` catches it.
 * **What is independent and what is not** (#209 review).
   * Since 1.5.0 the sell proceeds and the pro-rata factor are written from this text; the
     reference finds the factor by bisection, where the engine solves it in closed form.
@@ -804,6 +806,17 @@ weight of about 1e-20 to 1e-14 instead of 0.
   scaling in `_solve_qp`. If either changes, measure again.
   `tests/unit/test_allocator_dust.py` fails if a raw weight falls in [1e-13, 1e-7) for
   the strategy's or the optimize API's default inputs.
+* **What changed in backtests** (the A/B, `tests/oracle/ab.py`): 18 of 1,002 runs, all
+  `min_variance`.
+  * **Whole shares at 1e6 (6 runs):** only the recorded decisions changed, losing the dust
+    rows.
+  * **Fractional at 3e9 (6 runs):** 566 to 894 fills under $0.01 per run are gone, and
+    none remain. Equity moved by at most 2.3e-15 relative.
+  * **Fractional at 20,000 (6 runs):** float-level changes only, at most 7.6e-15
+    relative, with fingerprints unchanged. Two mechanisms:
+    * a dust target turned a full exit into a sell about 2 ulp short of the holding;
+    * dust pushed a target sum a few ulp over 1, so the engine scaled every weight down
+      by about 1e-16.
 * **The optimize API** now returns exact zeros for these weights. On the API's defaults
   over the three markets (156 solves, all with residue), the sum of weights, expected
   volatility, historical mean return, risk shares and HHI moved by at most 1.3e-14
