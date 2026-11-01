@@ -270,3 +270,24 @@ TLS edge that keeps ADR-0008's guarantee: only a trusted hop states the client a
   * the NLB health check is TCP only, since a PROXY-protocol HTTP check was not
     verified;
   * cross-region backup copies are not configured.
+
+## ADR-0013 Optimization runs as a job; submitting needs the editor role
+
+**Context.** `POST /dataset-versions/{id}/optimize` ran up to four optimizers over full
+histories inside an API process. Concurrent requests drove the Docker VM into a global OOM
+(#223); #228 bounded it with one heavy slot per API process. Any workspace member, viewers
+included, could run it, because it stored nothing.
+**Decision (2026-11-01, #224).** Optimization is a durable job, like validation:
+`POST /dataset-versions/{id}/optimizations` (202, optional Idempotency-Key), then
+`GET /optimizations/{id}`, with cancellation through the jobs API. The synchronous route is
+removed. Results persist in `optimization_runs` (migration M6), deleted with their workspace
+or dataset version. Submitting needs the **editor** role: a run now writes a job and a
+result, and a viewer has never created persistent rows. Reading results needs viewer.
+Admission refuses requests outside the measured memory range (422
+`optimization_too_large`).
+**Consequences.** Viewers can no longer run an optimization (the web says why, next to the
+disabled button). Results arrive after a queue and a poll, not in the request. Optimize
+leaves the API's heavy-request bound, which now covers only the portfolio ledger routes.
+The job's result equals the old synchronous response exactly on one platform; across
+macOS (Accelerate) and Linux (OpenBLAS) it agrees to about 2e-15 (the equivalence test's
+tolerance).
