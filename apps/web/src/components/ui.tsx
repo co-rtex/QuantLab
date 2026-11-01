@@ -173,6 +173,22 @@ export function Empty({ title, children }: { title: string; children?: ReactNode
   );
 }
 
+/** The server refused a heavy request as busy (503 server_busy, #223) and it is sent again
+ * once after `seconds`: said so, instead of a generic failure or a skeleton. */
+export function BusyNote({ seconds }: { seconds: number | undefined }) {
+  // The live region stays mounted and only its content changes: a region added together
+  // with its text is not reliably announced.
+  return (
+    <div role="status">
+      {seconds !== undefined && (
+        <p className="rounded border border-rule bg-sunken px-3 py-2 text-sm text-ink-2">
+          The server is busy with other analyses. Retrying in {seconds} s…
+        </p>
+      )}
+    </div>
+  );
+}
+
 export function Skeleton({ h = "h-40" }: { h?: string }) {
   return <div className={`${h} animate-pulse rounded bg-sunken`} role="status" aria-busy="true" aria-label="Loading" />;
 }

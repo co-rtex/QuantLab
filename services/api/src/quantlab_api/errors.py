@@ -14,12 +14,20 @@ from quantlab_api.observability import log
 
 
 class ApiError(Exception):
-    def __init__(self, status: int, code: str, message: str, details: Any = None) -> None:
+    def __init__(
+        self,
+        status: int,
+        code: str,
+        message: str,
+        details: Any = None,
+        headers: dict[str, str] | None = None,
+    ) -> None:
         super().__init__(message)
         self.status = status
         self.code = code
         self.message = message
         self.details = details
+        self.headers = headers
 
 
 def _body(request: Request, code: str, message: str, details: Any = None) -> dict[str, Any]:
@@ -36,7 +44,8 @@ def _body(request: Request, code: str, message: str, details: Any = None) -> dic
 def install_error_handlers(app: FastAPI) -> None:
     @app.exception_handler(ApiError)
     async def _api(request: Request, exc: ApiError) -> JSONResponse:
-        headers = {"WWW-Authenticate": "Bearer"} if exc.status == 401 else None
+        headers = {"WWW-Authenticate": "Bearer"} if exc.status == 401 else {}
+        headers.update(exc.headers or {})
         return JSONResponse(
             _body(request, exc.code, exc.message, exc.details),
             status_code=exc.status,

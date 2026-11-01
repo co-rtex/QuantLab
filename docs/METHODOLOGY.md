@@ -468,8 +468,8 @@ from `quantlab`.
 * It applies the same rules: placement and ordering of corporate actions, both delisting
   rules, fills, costs, pro-rata buys, stale marks and the as-of strategy view.
 * `tests/unit/test_engine_oracle.py` requires the engine to agree with it to 1e-9 on 200
-  seeded adversarial synthetic universes, plus eleven hand-computed cases.
-* A mutation harness (`tests/oracle/mutate.py`) shows the comparison catches 31 injected
+  seeded adversarial synthetic universes, plus twelve hand-computed cases.
+* A mutation harness (`tests/oracle/mutate.py`) shows the comparison catches 32 injected
   engine and adjuster defects.
 * **What is independent and what is not** (#209 review).
   * Since 1.5.0 the sell proceeds and the pro-rata factor are written from this text; the
@@ -528,6 +528,31 @@ different inputs even when nothing else changed. The reproducibility comparison 
 each differing input (`input_differences`, for example `engine_version 1.2.0 → 1.3.0`).
 The integrity report only uses same-input re-runs to verify or fail reproducibility; it
 names changed-input re-runs and leaves the check "not assessed" if they are the only ones.
+
+**An experiment recorded on an older engine, reproduced after an upgrade** (for example
+1.5.0 → 1.6.0):
+* **What runs.** *Reproduce* submits the experiment again with its stored dataset version,
+  strategy, parameters and config, on the deployment's current engine. The reproduction is
+  stamped 1.6.0 and gets a new input hash. There is no way to run the old engine again; the
+  original keeps its 1.5.0 results.
+* **What the API reports.** `/experiments/{id}/reproducibility` returns:
+  * `same_inputs: false`;
+  * `input_differences: [{"input": "engine_version", "original": "1.5.0",
+    "reproduction": "1.6.0"}]`;
+  * `fingerprint_match`: true when the outputs are identical, false when the engine change
+    altered them.
+* **Fingerprint differences.** Neither value is a reproducibility failure. Most runs match:
+  1.6.0 changed 2 of the 1,002 runs in its A/B. The reason a run moved is in the version
+  history below.
+* **The integrity report** leaves *Reproducibility* "not assessed", with the finding "1
+  re-run used different inputs (engine_version 1.5.0 → 1.6.0), so they do not test
+  reproducibility: only re-runs with the same inputs are assessed. Reproduce the re-run
+  itself to check it on the current engine; its own report then shows the result." A
+  same-input re-run, if one exists, still decides the status.
+* **A job queued before the upgrade** and stamped 1.5.0 is refused by a 1.6.0 worker
+  (#152), not run on the new rules. Submit or reproduce it again.
+* **A validation of the 1.5.0 experiment** runs on 1.6.0 and is flagged as not comparable
+  (`comparable_engine: false`, see *Engine versions*).
 
 Identical inputs give byte-identical outputs across processes (#182), with no tolerance
 needed. That covers the backtest frames and fingerprint, the analysis, the validation
@@ -608,8 +633,17 @@ dependencies; CI checks it on Linux (`tests/unit/test_reproducibility_processes.
       * Hand cases: `test_a_rounding_level_overdraw_cuts_the_buy_instead_of_rejecting_it`
         and `test_a_sell_whose_commission_exceeds_its_proceeds_says_so`.
   * 1.6.0 (#215): no order for a float-noise change in a holding (step 6). **Economics
-    change:** each skipped noise order saves its commission. In the A/B against 1.5.0 (`tests/oracle/ab.py`, 1,002 runs, with 40 large fractional runs at 3e9 and a minimum commission of 5 added for this), 2 runs change. Both made noise orders on 1.5.0, and none changed without one. The noise orders' fills paid 15 in commission, which 1.6.0 saves. The largest position difference between the versions is 0.501059 shares: the saved cash carries into later fractional targets. The #209 review's reproducer (seed 1064, price weight, 3e9, fractional, minimum commission 5) is a hand case: on 1.5.0 a -2^-29-share order on ID2 filled for a notional of 3.1e-7 and paid 5. Tests:
-    `tests/unit/test_order_noise.py`.
+    change:** each skipped noise order saves its commission.
+    * **A/B against 1.5.0** (`tests/oracle/ab.py`, 1,002 runs, with 40 large fractional
+      runs at 3e9 and a minimum commission of 5 added for this): 2 runs change. Both made
+      noise orders on 1.5.0, and none changed without one.
+    * **Size:** the noise orders' fills paid 15 in commission, which 1.6.0 saves. The
+      largest position difference between the versions is 0.501059 shares, the saved
+      cash carrying into later fractional targets.
+    * **Hand case:** the #209 review's reproducer (seed 1064, price weight, 3e9,
+      fractional, minimum commission 5). On 1.5.0 a -2^-29-share order on ID2 filled for a
+      notional of 3.1e-7 and paid 5.
+    * Tests: `tests/unit/test_order_noise.py`.
 * A worker refuses a backtest stamped for another engine version (#152).
 * A validation run re-runs backtests on the worker's current engine, so it records that
   engine (`engine_version`) beside the experiment's (`experiment_engine_version`), plus
