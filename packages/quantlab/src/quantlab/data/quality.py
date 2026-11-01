@@ -266,6 +266,10 @@ def _action_checks(
     repeated = actions.duplicated([*key, "value"], keep=False) | (
         splits & actions.duplicated(key, keep=False)
     )
+    # Several cash dividends on one ex-date are paid as separate payments. That is right for a
+    # regular and a special dividend, but a source that appends a correction as a second row
+    # would have it paid twice (#210), so they warn without blocking.
+    several = (actions["kind"] == "dividend") & actions.duplicated(key, keep=False)
     v = actions["value"]
     bad_ratio = splits & (
         ((v - 1.0).abs() < 1e-12) | (v > max_split_ratio) | (v < 1.0 / max_split_ratio)
@@ -287,6 +291,13 @@ def _action_checks(
             actions.loc[repeated, show],
             "Corporate actions repeated on one ex-date (would be applied twice)",
             True,
+        ),
+        _check(
+            "multiple_dividends_on_ex_date",
+            actions.loc[several, show],
+            "Several cash dividends on one ex-date, each paid: confirm a regular and a special "
+            "dividend, or remove a superseded (corrected) row, which would be paid twice",
+            False,
         ),
         _check(
             "orphan_corporate_actions",

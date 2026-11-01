@@ -58,6 +58,10 @@ values computed by hand or published elsewhere; `tests/unit` covers the rest.
   The following are warnings only:
   * Missing sessions, a bar dated on a non-session day, stale prices.
   * An ex-date without a bar (the action applies at the next bar).
+  * Several cash dividends on one ex-date (#210). Each is paid, which is right for a
+    regular and a special dividend. A correction supplied as a second row would be paid
+    twice, so the operator should confirm the pair or remove the superseded row. An
+    identical repeat still blocks.
   * Actions the engine never applies: for a symbol without bars, or dated before its first
     or after its last bar. Full-history vendor action files with windowed bars, announced
     future actions and terminal distributions all look like this.
