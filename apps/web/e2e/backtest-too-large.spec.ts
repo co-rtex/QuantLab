@@ -39,9 +39,14 @@ test("a backtest refused for its memory shows why, and the form stays usable", a
       : route.continue(),
   );
   await page.goto("/experiments/new");
+  const errors: string[] = []; // the .map on an object threw during render: catch that itself
+  page.on("pageerror", (e) => errors.push(e.message));
   await page.getByLabel("Experiment name").fill("Too large");
-  await page.getByRole("button", { name: "Run backtest" }).click();
+  const run = page.getByRole("button", { name: "Run backtest" });
+  await expect(run).toHaveAccessibleDescription(/must fit a worker's memory/);
+  await run.click();
   await expect(page.getByText("needs an estimated 2084 MB, over the 1228 MB limit")).toBeVisible();
-  await expect(page.getByRole("button", { name: "Run backtest" })).toBeEnabled(); // still rendered
+  await expect(run).toBeEnabled(); // still rendered
   await expect(page).toHaveURL(/\/experiments\/new$/);
+  expect(errors).toEqual([]);
 });

@@ -447,11 +447,20 @@ function Builder() {
                 }
               />
             )}
-            <button type="submit" className="btn btn-primary" disabled={busy || !dvId}>
+            <button
+              type="submit"
+              className="btn btn-primary"
+              disabled={busy || !dvId}
+              aria-describedby="backtest-size-note"
+            >
               {busy ? "Submitting…" : "Run backtest"}
             </button>
-            <p className="text-xs text-ink-2">
-              One backtest must fit a worker&apos;s memory (#163). Under the default limits, a
+            {/* #163: these caps follow from QUANTLAB_MAX_BACKTEST_MEMORY_MB (default 1228) and
+                the estimate's coefficients and measured range in services/api/src/quantlab_api/
+                limits.py; tests/unit/test_backtest_admission.py pins them. Update this text
+                whenever those change. */}
+            <p id="backtest-size-note" className="text-xs text-ink-2">
+              One backtest must fit a worker&apos;s memory. Under the default limits, a
               2005–2023 backtest can have at most 199 symbols with a daily rebalance and 400
               with a weekly, monthly or quarterly one; a shorter period allows more.
             </p>
