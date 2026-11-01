@@ -278,10 +278,41 @@ def worker_metrics_app(token: str | None) -> WSGIApp:
 
     ``token`` None (development) serves without one, as the API does.
     """
-    from prometheus_client import CONTENT_TYPE_LATEST, CollectorRegistry, generate_latest
+    from prometheus_client import CollectorRegistry
 
     registry = CollectorRegistry()
     worker_collector()(registry)
+    return _metrics_app(token, registry)
+
+
+# What the reaper records (#179): lease-loss retries, the outcomes it decides, and its DB
+# statements. Its endpoint serves only these, not the zero-valued rest of the registry
+# (an extra quantlab_dataset_rows 0 series, for one).
+REAPER_METRICS = (JOB_RETRIES, JOB_OUTCOMES, DB_QUERY_SECONDS)
+
+
+def reaper_metrics_app(token: str | None) -> WSGIApp:
+    """``GET /metrics`` for the reaper, behind the API's bearer token (#179).
+
+    The reaper is one process that never forks, so its samples are in its own registry: no
+    multiprocess directory is needed. Its counters start from zero when it restarts, which
+    Prometheus reads as a reset, as for any process.
+    """
+    from prometheus_client import REGISTRY, CollectorRegistry
+
+    names = {next(iter(m.describe())).name for m in REAPER_METRICS}
+
+    class Only:
+        def collect(self) -> Iterable[Any]:
+            return (family for family in REGISTRY.collect() if family.name in names)
+
+    registry = CollectorRegistry(auto_describe=False)
+    registry.register(Only())
+    return _metrics_app(token, registry)
+
+
+def _metrics_app(token: str | None, registry: Any) -> WSGIApp:
+    from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 
     def app(environ: dict[str, Any], start_response: Callable[..., Any]) -> Iterable[bytes]:
         if environ.get("PATH_INFO") != "/metrics" or environ.get("REQUEST_METHOD") != "GET":
@@ -324,12 +355,18 @@ class _ThreadingServer(socketserver.ThreadingMixIn, WSGIServer):
 
 
 def serve_worker_metrics(port: int, token: str | None) -> WSGIServer:
-    """Serve :func:`worker_metrics_app` from a daemon thread of the worker process.
+    """Serve :func:`worker_metrics_app` from a daemon thread of the worker process."""
+    return _serve(port, worker_metrics_app(token))
 
-    All interfaces inside the container: Prometheus reaches each replica over the compose
-    network, and the port is never published to the host.
-    """
-    app = worker_metrics_app(token)
+
+def serve_reaper_metrics(port: int, token: str | None) -> WSGIServer:
+    """Serve :func:`reaper_metrics_app` from a daemon thread of the reaper (#179)."""
+    return _serve(port, reaper_metrics_app(token))
+
+
+def _serve(port: int, app: WSGIApp) -> WSGIServer:
+    """All interfaces inside the container: Prometheus reaches it over the compose network,
+    and the port is never published to the host."""
     server = make_server(
         "0.0.0.0",  # noqa: S104
         port,
