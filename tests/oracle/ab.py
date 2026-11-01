@@ -7,8 +7,9 @@ Usage::
     uv run python -m tests.oracle.ab compare before.json after.json
 
 It runs the 800 differential runs (``default_runs`` over seeds 0-199) and every library
-strategy on three synthetic markets (both execution modes, whole shares and fractional
-shares with a small capital, so cash runs short). For each run it stores a hash of each
+strategy on three synthetic markets (both execution modes; whole shares, fractional shares
+with a small capital so cash runs short, and a 3e9 fractional account), 962 runs in all.
+For each run it stores a hash of each
 output separately: equity, trades, positions, decisions, ledger transactions, meta
 (without ``engine_version``), the fingerprint and the rejections. ``compare`` lists the
 outputs that differ in any run.
@@ -83,7 +84,10 @@ def runs() -> dict[str, dict[str, str]]:
             fields = cls.Params.model_fields
             params = {k: v for k, v in small.items() if k in fields}
             for execution in ("next_open", "next_close"):
-                for fractional, capital in ((False, 1_000_000.0), (True, 20_000.0)):
+                # A large fractional account too: its rounding residue is dollars, not
+                # fractions of a cent (#184 review).
+                accounts = ((False, 1_000_000.0), (True, 20_000.0), (True, 3e9))
+                for fractional, capital in accounts:
                     cfg = BacktestConfig(
                         execution=execution,
                         rebalance="weekly",
@@ -98,7 +102,9 @@ def runs() -> dict[str, dict[str, str]]:
                         cfg,
                         instruments=master,
                     )
-                    out[f"synthetic/{mseed}/{key}/{execution}/{fractional}"] = digest(res)
+                    out[f"synthetic/{mseed}/{key}/{execution}/{fractional}/{capital:g}"] = digest(
+                        res
+                    )
     return out
 
 

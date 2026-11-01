@@ -112,7 +112,7 @@ MUTATIONS = [
     Mutation(
         "M9",
         ENG,
-        "if need > cash > need * 1e-9:",
+        "if cash < need:",
         "if False:",
         "buys not scaled when cash is short (sort order decides)",
     ),
@@ -221,6 +221,13 @@ MUTATIONS = [
         "last_px[j] = last_px[j]",
         "last close not restated across a split",
     ),
+    Mutation(
+        "M27",
+        ENG,
+        "if cash <= need * 1e-9:",
+        "if False:",
+        "rounding-dust cash scaled into dust buys and spent (#184 review)",
+    ),
 ]
 
 
@@ -239,6 +246,13 @@ def _stop(signum: int, frame: object) -> None:
 
 def run(keys: list[str], seeds: int, others: bool = True) -> int:
     signal.signal(signal.SIGTERM, _stop)
+    signal.signal(signal.SIGHUP, _stop)  # a closed terminal must not leave a file mutated
+    # The suites must test these files: an installed copy elsewhere would make every
+    # mutation look missed.
+    import quantlab
+
+    if not Path(quantlab.__file__).resolve().is_relative_to(ROOT):
+        raise SystemExit(f"quantlab is imported from {quantlab.__file__}, outside {ROOT}")
     sys.stdout.reconfigure(line_buffering=True)  # type: ignore[attr-defined]  # rows as they finish
     env = {**os.environ, "QUANTLAB_ORACLE_SEEDS": str(seeds), "PYTHONPATH": str(ROOT)}
     chosen = [m for m in MUTATIONS if not keys or m.key in keys]

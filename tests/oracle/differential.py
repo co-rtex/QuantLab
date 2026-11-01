@@ -1,10 +1,17 @@
 """Run the engine and the reference on one scenario and list every difference (#180).
 
-Values match when ``|a - b| <= 1e-9 * max(|a|, |b|, floor)``. The floor is the initial
-capital for money columns, so a cash balance of about 0 is compared at the run's scale,
-and 1 for share counts, prices and weights. Rows are compared after sorting by their keys:
-the engine records same-session trades and positions in the order its dicts hold them,
-which carries no meaning.
+Values match when ``|a - b| <= 1e-9 * max(|a|, |b|, floor)``. The floor is a millionth of
+the initial capital for money columns (an absolute tolerance of 1e-15 of it, so a cash
+balance of about 0 is compared at the run's scale), and 1 for share counts, prices and
+weights. Rows are compared after sorting by their keys: the engine records same-session
+trades and positions in the order its dicts hold them, which carries no meaning.
+
+What is compared: every column of the equity record; every trade (all columns, notes
+reduced to "is a delisting"); every rejection; every position row; every decision; the
+final ledger's cash and positions (not its transaction list); and these meta entries:
+sessions, first and last session, corporate-action placement counts, delisting counts,
+zero-volume bars, no-volume rejections, symbols with bars, never-traded symbols and the
+stale-mark statistics.
 """
 
 from __future__ import annotations
@@ -19,6 +26,7 @@ from tests.oracle.reference import Result, run_reference
 from tests.oracle.universes import Scenario, scenario
 
 RTOL = 1e-9
+MONEY_FLOOR = 1e-6  # x the initial capital: an absolute tolerance of 1e-15 of it
 STRATEGIES = ("equal_weight", "momentum", "random", "buy_and_hold", "price_weight")
 MONEY = {
     "equity",
@@ -100,7 +108,7 @@ def _compare_rows(what, eng, ref, keys, cols, cap, out) -> None:
             if isinstance(ev, pd.Timestamp) or isinstance(rv, pd.Timestamp):
                 same = pd.Timestamp(ev) == pd.Timestamp(rv)
             else:
-                same = _close(ev, rv, cap if c in MONEY else 1.0)
+                same = _close(ev, rv, cap * MONEY_FLOOR if c in MONEY else 1.0)
             if not same:
                 where = ", ".join(f"{k}={e.get(k)}" for k in keys)
                 out.append(f"{what}[{i}] ({where}) {c}: engine {ev!r} vs reference {rv!r}")
@@ -198,7 +206,7 @@ def diff(eng: Any, ref: Result, cap: float) -> list[str]:
         cap,
         out,
     )
-    if not _close(eng.ledger.cash, ref.meta["final_cash"], cap):
+    if not _close(eng.ledger.cash, ref.meta["final_cash"], cap * MONEY_FLOOR):
         out.append(f"ledger cash {eng.ledger.cash!r} vs reference {ref.meta['final_cash']!r}")
     held = {s: q for s, q in eng.ledger.positions.items()}
     if set(held) != set(ref.meta["final_positions"]) or not all(
