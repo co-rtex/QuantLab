@@ -39,6 +39,9 @@ async function checkPage(response: Response | null, path: string): Promise<strin
   expect(scripts, path).not.toContain("'unsafe-inline'");
   expect(scripts, path).not.toContain("'unsafe-eval'");
   expect(directive(policy, "frame-ancestors"), path).toEqual(["'none'"]);
+  // Never cached: a cached page would replay its nonce, which then no longer proves that
+  // a script came from this response.
+  expect(response!.headers()["cache-control"] ?? "", `${path}: cacheable`).toContain("no-store");
   const html = await response!.text();
   const tags = html.match(/<script\b[^>]*>/g) ?? [];
   expect(tags.length, `${path}: no scripts?`).toBeGreaterThan(0);
@@ -78,6 +81,31 @@ test("pages are sent with a nonce policy and the browser refuses nothing on them
     await checkPage(await page.goto(path), path);
     await expect(page.locator("main")).toBeVisible();
     expect(await violations(page), path).toEqual([]);
+  }
+
+  // The not-found page, signed in (signed out it is a redirect to /login). Next's built-in
+  // one carried a <style> element without the nonce, which was refused: it is ours now.
+  const missing = await page.goto("/no-such-page");
+  expect(missing?.status()).toBe(404);
+  await checkPage(missing, "/no-such-page");
+  await expect(page.getByRole("heading", { name: "Page not found" })).toBeVisible();
+  expect(await violations(page), "/no-such-page").toEqual([]);
+
+  // The chart pages, once their charts have rendered: an experiment and a portfolio.
+  const run = await (await page.request.post(`/api/v1/workspaces/${ws}/experiments`, {
+    data: { name: "CSP run", dataset_version_id: dv, strategy_key: "equal_weight", config: { start: "2020-03-02", benchmark: "SYNIDX" } },
+  })).json();
+  await expect.poll(async () => (await (await page.request.get(`/api/v1/jobs/${run.job.id}`)).json()).status, { timeout: 90_000 }).toBe("completed");
+  const pf = await (await page.request.post(`/api/v1/workspaces/${ws}/portfolios`, {
+    data: { name: "CSP portfolio", dataset_version_id: dv, initial_deposit: 100_000, start_date: "2020-01-02" },
+  })).json();
+  expect((await page.request.post(`/api/v1/portfolios/${pf.id}/transactions`, {
+    data: { trade_date: "2020-01-03", kind: "buy", symbol: "SYN001", quantity: 100 },
+  })).ok()).toBe(true);
+  for (const path of [`/experiments/${run.experiment.id}`, `/portfolios/${pf.id}`]) {
+    await checkPage(await page.goto(path), path);
+    await expect(page.getByRole("figure", { name: "Portfolio value and drawdown over time" })).toBeVisible({ timeout: 30_000 });
+    expect(await violations(page), `${path} after its chart rendered`).toEqual([]);
   }
 
   // A client-side navigation loads further chunks: allowed through 'strict-dynamic'.

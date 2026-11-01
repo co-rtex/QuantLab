@@ -94,19 +94,31 @@ def _add_request_id(_: Any, __: str, event: MutableMapping[str, Any]) -> Mutable
 
 def configure_logging(level: str = "INFO", json: bool = True) -> None:
     logging.basicConfig(format="%(message)s", stream=sys.stdout, level=level)
+    # Tracebacks without frame locals, in both formats: structlog's defaults (dict_tracebacks,
+    # and the console's rich tracebacks) log them, so any logged 500 printed request bodies
+    # such as passwords (#8). The exception is rendered to frames for JSON only: the console
+    # renderer prints a traceback itself, and given those frames it raised TypeError instead,
+    # inside the handler that was logging (#202).
+    renderer: list[Any] = (
+        [
+            structlog.processors.ExceptionRenderer(ExceptionDictTransformer(show_locals=False)),
+            structlog.processors.JSONRenderer(),
+        ]
+        if json
+        else [structlog.dev.ConsoleRenderer(exception_formatter=structlog.dev.plain_traceback)]
+    )
     structlog.configure(
         processors=[
             structlog.contextvars.merge_contextvars,
             _add_request_id,
             structlog.processors.add_log_level,
             structlog.processors.TimeStamper(fmt="iso", utc=True),
-            # Frames without their local variables: structlog's default (dict_tracebacks)
-            # logs them, so any logged 500 printed request bodies such as passwords.
-            structlog.processors.ExceptionRenderer(ExceptionDictTransformer(show_locals=False)),
-            structlog.processors.JSONRenderer() if json else structlog.dev.ConsoleRenderer(),
+            *renderer,
         ],
         wrapper_class=structlog.make_filtering_bound_logger(logging.getLevelName(level)),
-        cache_logger_on_first_use=True,
+        # Not cached: a cached logger keeps the configuration it first logged with, so one
+        # used before this call never got it, and which call came first decided the format.
+        cache_logger_on_first_use=False,
     )
 
 

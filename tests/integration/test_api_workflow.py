@@ -36,7 +36,7 @@ def test_health_ready_openapi(client):
     assert client.get("/api/v1/health").json() == {"status": "ok"}
     r = client.get("/api/v1/ready")
     assert r.status_code == 200, r.text
-    spec = client.get("/api/v1/openapi.json").json()
+    spec = client.app.openapi()  # built, though not served outside development (#201)
     assert "/api/v1/workspaces/{workspace_id}/experiments" in spec["paths"]
     assert "X-Request-ID" in client.get("/api/v1/health").headers
     assert "quantlab_http_request_duration_seconds" in client.get("/metrics").text

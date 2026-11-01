@@ -123,9 +123,6 @@ def _csv(w: World) -> dict[str, Any]:
 W = "/api/v1/workspaces/{workspace_id}"
 ROUTES: dict[str, Spec] = {
     # system
-    "GET /api/v1/openapi.json": Spec(PUBLIC, caller="anon"),
-    "GET /api/v1/docs": Spec(PUBLIC, caller="anon"),
-    "GET /docs/oauth2-redirect": Spec(PUBLIC, caller="anon"),
     "GET /api/v1/health": Spec(PUBLIC, caller="anon"),
     "GET /api/v1/ready": Spec(PUBLIC, caller="anon"),
     "GET /api/v1/version": Spec(PUBLIC, caller="anon"),
@@ -299,21 +296,18 @@ ROUTES: dict[str, Spec] = {
 FINDINGS: dict[tuple[str, str], str] = {}
 
 
-DOCS = {"/api/v1/openapi.json", "/api/v1/docs", "/docs/oauth2-redirect"}  # FastAPI's own
-
-
 def routes_of(routes: Sequence[BaseRoute]) -> set[str]:
     """``METHOD path`` for every HTTP route the app serves, through included routers.
 
-    Anything else (a mount, a websocket route, a plain Starlette route besides FastAPI's
-    docs) comes out as ``<Type> path``, which no ``ROUTES`` key matches: it fails the
-    classification, because these checks cannot reach it."""
+    Anything else (a mount, a websocket route, a plain Starlette route such as FastAPI's
+    docs, which are served only in development, #201) comes out as ``<Type> path``, which
+    no ``ROUTES`` key matches: it fails the classification, because these checks cannot
+    reach it."""
     out = set()
     for ctx in iter_route_contexts(routes):
         route, path = ctx.original_route, getattr(ctx.original_route, "path", "?")
         methods = (ctx.methods or set()) - {"HEAD"}  # HEAD rides along with GET
-        http = isinstance(route, APIRoute) or (type(route) is Route and ctx.path in DOCS)
-        if http and methods:
+        if isinstance(route, APIRoute) and methods:
             out.update(f"{method} {ctx.path}" for method in methods)
         else:
             out.add(f"{type(route).__name__} {ctx.path or path}")

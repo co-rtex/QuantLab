@@ -65,7 +65,8 @@ make web-dev          # frontend on :3000            (terminal 4)
 Or run everything in containers: `make app-up` (web on :3000, API on :8000, two workers).
 
 Open http://localhost:3000, create an account, generate a synthetic dataset under
-**Market data**, then create an experiment. API docs: http://localhost:8000/api/v1/docs.
+**Market data**, then create an experiment. API docs: http://localhost:8000/api/v1/docs, served only with `QUANTLAB_ENVIRONMENT=development`
+(the default) and never through the web app's `/api` proxy (#201).
 
 ### Several git worktrees at once
 
