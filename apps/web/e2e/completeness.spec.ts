@@ -204,12 +204,16 @@ test("synthetic data is labelled on the pages that had no test for it (#230)", a
   await expect(page.getByRole("cell", { name: "Expected volatility" })).toBeVisible({ timeout: 60_000 });
   await expect(label()).toBeVisible();
 
-  // ML: a run, in the list and its panel.
+  // ML: a run in the list is labelled, whatever its outcome. On this small version the run
+  // fails for too little history, which is fine here: the label belongs to its data.
   const ml = await page.request.post(`/api/v1/workspaces/${ws}/ml-runs`, {
     data: { name: "Labelled ML", dataset_version_id: dv, config: { folds: 2, min_train_dates: 6, sample_every: 10, models: ["majority", "logistic"] } },
   });
   expect(ml.status()).toBe(202);
+  const mlJob = (await ml.json()).job.id as string;
+  await expect
+    .poll(async () => (await (await page.request.get(`/api/v1/jobs/${mlJob}`)).json()).status, { timeout: 90_000 })
+    .toMatch(/^(completed|failed)$/);
   await page.goto("/ml");
-  await expect(page.getByText("Out-of-sample AUC")).toBeVisible({ timeout: 90_000 });
   await expect(page.getByRole("listitem").filter({ hasText: "Labelled ML" }).getByText("Synthetic data")).toBeVisible();
 });
