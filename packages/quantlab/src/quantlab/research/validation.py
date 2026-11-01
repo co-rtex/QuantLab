@@ -18,6 +18,7 @@ import pandas as pd
 
 from quantlab.analytics.performance import compute_performance, simple_returns
 from quantlab.backtest.engine import BacktestConfig, BacktestError, run_backtest
+from quantlab.data.identity import master_as_of
 from quantlab.research.stats import per_period_sharpe
 from quantlab.strategies.library import create_strategy
 
@@ -407,6 +408,19 @@ def cost_sensitivity(
     }
 
 
+def _held_in_a_halt(
+    trades: pd.DataFrame, kept_bars: pd.DataFrame, cut: pd.Timestamp, kept: pd.Timestamp
+) -> set[str]:
+    """Names held at the close of ``cut`` (by the full run's trades) that print no bar on
+    the kept session ``kept``: a missing-bar run the truncated run can reach (#247)."""
+    if not len(trades):
+        return set()
+    q = trades.loc[trades["date"] <= cut].groupby("symbol")["quantity"].sum()
+    held = set(q.index[q.abs() > 1e-12])
+    printing = set(kept_bars.loc[kept_bars["date"] == kept, "symbol"])
+    return held - printing
+
+
 def leakage_check(
     bars: pd.DataFrame,
     actions: pd.DataFrame,
@@ -478,7 +492,15 @@ def leakage_check(
             create_strategy(strategy_key, params),
             cfg.model_copy(update=update),
             record_positions=False,
-            instruments=instruments,
+            # The master as knowable at the kept session (#247): a later delisting is not
+            # known yet, so an engine path that reads it ahead shows as a mismatch. One
+            # stated exemption: the engine holds a halted position until its master delisting
+            # (CRSP's convention: a halted stock can't be sold), so a name held and halted at
+            # the cut keeps its delisting fact. That rule decides no target; it only keeps an
+            # untradable position from a last-close sale nobody could make.
+            instruments=None
+            if instruments is None
+            else master_as_of(instruments, nxt, keep=_held_in_a_halt(full.trades, tb, d, nxt)),
         )
         a = decisions[decisions["date"] <= d].reset_index(drop=True)
         b = trunc.weights_target[trunc.weights_target["date"] <= d].reset_index(drop=True)
