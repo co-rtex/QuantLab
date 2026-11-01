@@ -119,6 +119,48 @@ def test_an_attempt_that_itself_ran_past_the_timeout_is_still_timed_out(client, 
     assert run_pending_jobs() == []
 
 
+def test_attempt_2_is_timed_from_its_own_claim_after_waiting_two_hours_queued(client, seeded):
+    """Only the start differs from attempt 1's: attempt 1 was requeued promptly two hours
+    ago, the job then waited queued (no worker), and attempt 2's lease just lapsed with the
+    reaper running on time. Timed from started_at it would be timed out."""
+    job_id, _ = _backtest(client, seeded)
+    J.claim(job_id, "lost-worker")
+    _set(  # as the reaper left it two hours ago
+        job_id,
+        status=JobStatus.queued,
+        started_at=_ago(7200),
+        attempt_started_at=_ago(7200),
+        heartbeat_at=_ago(7170),
+        lease_expires_at=None,
+    )
+    assert J.claim(job_id, "worker-2").attempts == 2
+    _set(job_id, lease_expires_at=_ago(1))
+    stats = J.reap()
+    assert stats["requeued"] == 1 and stats["timed_out"] == 0
+
+
+def test_an_overrun_killed_between_long_lease_heartbeats_is_timed_out(client, seeded, monkeypatch):
+    """With a 300 s lease, keepalive beats every 100 s. RQ kills an attempt overrunning its
+    900 s at 960 s, so its last beat can be at 900 s, not past the timeout. The lease then
+    runs to 1200 s, which is past it: timed out, as before #167."""
+    settings = J.get_settings()
+    monkeypatch.setattr(settings, "job_lease_seconds", 300)
+    job_id, exp_id = _backtest(client, seeded)
+    J.claim(job_id, "overrunning-worker")
+    # The reaper's view once the lease ran out: claimed 1201 s ago, last beat 900 s in.
+    _set(
+        job_id,
+        attempt_started_at=_ago(1201),
+        heartbeat_at=_ago(301),
+        lease_expires_at=_ago(1),
+    )
+    stats = J.reap()
+    assert stats["timed_out"] == 1 and stats["requeued"] == 0
+    with SessionLocal() as db:
+        assert db.get(Job, job_id).status == JobStatus.timed_out
+        assert db.get(Experiment, exp_id).status == JobStatus.timed_out
+
+
 def test_a_row_from_before_the_column_is_timed_from_its_first_start(client, seeded):
     job_id, _ = _backtest(client, seeded)
     J.claim(job_id, "old-worker")

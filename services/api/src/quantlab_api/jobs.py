@@ -848,13 +848,16 @@ def reap(redeliver_after_seconds: int = 120) -> dict[str, int]:
             .with_for_update(skip_locked=True)
         ).all()
         for job in stale:
-            # How long this attempt ran: from its claim to its worker's last heartbeat (#167).
+            # How long this attempt ran: from its claim until its lease ran out (#167).
             # Waiting for a worker between attempts does not count, and neither does the
-            # time since that worker died: a reaper that was down through an outage would
-            # otherwise time out every job that was running when it began. Rows from before
+            # time since the lease expired: a reaper that was down through an outage would
+            # otherwise time out every job that was running when it began. The lease's end,
+            # not the last heartbeat: keepalive beats every lease/3, so with a long lease
+            # an attempt RQ killed for overrunning (at timeout + 60 s) could have last beaten
+            # before the timeout. This over-counts by at most one lease. Rows from before
             # attempt_started_at existed are timed from their first start.
             started = job.attempt_started_at or job.started_at or job.created_at
-            ran = (job.heartbeat_at or t) - started
+            ran = min(t, job.lease_expires_at or t) - started
             if job.cancel_requested:
                 job.status = JobStatus.cancelled
                 job.message = "cancelled (worker stopped before observing the request)"
