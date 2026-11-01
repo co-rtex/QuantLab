@@ -3,9 +3,13 @@ from __future__ import annotations
 import hashlib
 import json
 import uuid
+from pathlib import Path
 from typing import Any
 
 import pandas as pd
+import pyarrow as pa
+import pyarrow.compute as pc
+import pyarrow.parquet as pq
 from fastapi import APIRouter, Header, Query, Request
 from pydantic import BaseModel, Field, ValidationError
 from sqlalchemy import select
@@ -201,8 +205,29 @@ def ml_predictions(
     path = artifacts.ml_dir(run.id) / "predictions.parquet"
     if not path.exists():
         raise ApiError(409, "not_ready", "Predictions are not available yet")
-    p = pd.read_parquet(path)
-    p = p[p["model"] == model]
-    page = p.iloc[offset : offset + limit].copy()
+    page, total = predictions_page(path, model, offset, limit)
     page["date"] = pd.to_datetime(page["date"]).dt.strftime("%Y-%m-%d")
-    return {"items": page.to_dict("records"), "total": len(p), "limit": limit, "offset": offset}
+    return {"items": page.to_dict("records"), "total": total, "limit": limit, "offset": offset}
+
+
+# Rows decoded at a time while paging. A model's rows are spread through the file (one
+# block per fold), so no row group can be skipped; streaming bounds the memory instead.
+PREDICTION_BATCH_ROWS = 65_536
+
+
+def predictions_page(path: Path, model: str, offset: int, limit: int) -> tuple[pd.DataFrame, int]:
+    """One page of ``model``'s rows, in file order, and how many it has (#231).
+
+    The whole file used to be read into this process for every page. This streams it one
+    batch at a time and keeps only the page: the same frame as ``read_parquet`` then
+    ``[model]``, then ``.iloc[offset : offset + limit]``, with the memory of one batch."""
+    f = pq.ParquetFile(path)
+    total, parts = 0, []
+    for batch in f.iter_batches(batch_size=PREDICTION_BATCH_ROWS):
+        rows = batch.filter(pc.equal(batch.column("model"), model))
+        lo, hi = max(offset - total, 0), min(offset + limit - total, rows.num_rows)
+        if lo < hi:
+            parts.append(rows.slice(lo, hi - lo))
+        total += rows.num_rows
+    table = pa.Table.from_batches(parts, schema=f.schema_arrow)
+    return table.to_pandas(), total
