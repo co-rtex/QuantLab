@@ -292,7 +292,48 @@ class DatasetStore:
             filters.append(("date", ">=", pd.Timestamp(start)))
         if end:
             filters.append(("date", "<=", pd.Timestamp(end)))
-        df = pd.read_parquet(dv.path / "bars.parquet", filters=filters or None)
+        path = dv.path / "bars.parquet"
+        df: pd.DataFrame | None = None
+        if symbols:
+            # read_parquet's scanner prunes no row group for a symbol "in" filter and keeps
+            # ~300 MiB of decoded groups in flight on a 4.6M-row version (#225). Bars are
+            # sorted by symbol, so read one at a time only the groups whose statistics can
+            # hold a wanted symbol, and filter each. A group without usable statistics can't
+            # be ruled out: then the full filtered read below.
+            import bisect
+
+            import pyarrow as pa
+            import pyarrow.parquet as pq
+
+            wanted = sorted({s.upper() for s in symbols})
+            with pq.ParquetFile(path) as f:
+                md = f.metadata
+                names = [md.schema.column(j).path for j in range(md.num_columns)]
+                bounds: list[tuple[Any, Any]] = [(None, None)]  # no symbol column: unprovable
+                if "symbol" in names:
+                    col = names.index("symbol")
+                    stats = [
+                        md.row_group(i).column(col).statistics for i in range(md.num_row_groups)
+                    ]
+                    bounds = [
+                        (st.min, st.max) if st is not None and st.has_min_max else (None, None)
+                        for st in stats
+                    ]
+                if all(isinstance(lo, str) and isinstance(hi, str) for lo, hi in bounds):
+                    groups = [
+                        i
+                        for i, (lo, hi) in enumerate(bounds)
+                        if (k := bisect.bisect_left(wanted, lo)) < len(wanted) and wanted[k] <= hi
+                    ]
+                    keep = pq.filters_to_expression(filters)
+                    # Filtered as each is read: only one decoded group is held at a time.
+                    parts = [
+                        f.read_row_group(i, use_pandas_metadata=True).filter(keep) for i in groups
+                    ]
+                    table = pa.concat_tables(parts) if parts else f.schema_arrow.empty_table()
+                    df = table.to_pandas()
+        if df is None:
+            df = pd.read_parquet(path, filters=filters or None)
         df["symbol"] = df["symbol"].astype(str)
         return df.sort_values(["symbol", "date"]).reset_index(drop=True)
 
