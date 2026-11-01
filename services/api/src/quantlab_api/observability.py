@@ -5,6 +5,7 @@ from __future__ import annotations
 import contextvars
 import hmac
 import logging
+import os
 import sys
 import threading
 import time
@@ -148,6 +149,54 @@ async def request_context_middleware(
 
 WSGIApp = Callable[[dict[str, Any], Callable[..., Any]], Iterable[bytes]]
 
+# Held by a scrape and by a compaction, so no scrape sees a dead process's samples both in
+# its own file and in the archive, or in neither.
+_FILES = threading.Lock()
+
+Sample = tuple[float, float]  # value, timestamp
+# How a dead process's samples join the archive, as MultiProcessCollector combines them
+# across files. Gauges in "all" and "live*" modes are per process, so they are not
+# archived (mark_process_dead removes the live ones).
+_ADD: Callable[[Sample, Sample], Sample] = lambda a, b: (a[0] + b[0], max(a[1], b[1]))  # noqa: E731
+_ARCHIVED: dict[str, Callable[[Sample, Sample], Sample]] = {
+    "counter": _ADD,
+    "histogram": _ADD,
+    "gauge_sum": _ADD,
+    "gauge_max": lambda a, b: max(a, b, key=lambda s: s[0]),
+    "gauge_min": lambda a, b: min(a, b, key=lambda s: s[0]),
+    "gauge_mostrecent": lambda a, b: b if b[1] > a[1] else a,
+}
+
+
+def compact_dead_process(pid: int, directory: str | None = None) -> None:
+    """Fold a dead process's files into one archive file per kind (#165).
+
+    Every work horse is a new pid, and multiprocess mode keeps a file per kind per pid,
+    so a worker accumulated about three files (20 KiB of tmpfs, charged to its memory
+    limit) per job, and each scrape read them all. Counters and histograms are added to
+    the archive and so never go down; scrapes are held off while it happens.
+    """
+    from prometheus_client.mmap_dict import MmapedDict
+
+    d = directory or os.environ["PROMETHEUS_MULTIPROC_DIR"]
+    with _FILES:
+        for kind, merge in _ARCHIVED.items():
+            dead = os.path.join(d, f"{kind}_{pid}.db")
+            if not os.path.exists(dead):
+                continue
+            values = MmapedDict.read_all_values_from_file(dead)  # type: ignore[no-untyped-call]
+            incoming = [(k, v, ts) for k, v, ts, _ in values]
+            archive = MmapedDict(os.path.join(d, f"{kind}_archive.db"))  # type: ignore[no-untyped-call]
+            try:
+                have = {k: (v, ts) for k, v, ts in archive.read_all_values()}  # type: ignore[no-untyped-call]
+                for key, value, ts in incoming:
+                    merged = merge(have[key], (value, ts)) if key in have else (value, ts)
+                    archive.write_value(key, *merged)  # type: ignore[no-untyped-call]
+                    have[key] = merged
+            finally:
+                archive.close()  # type: ignore[no-untyped-call]
+            os.remove(dead)
+
 
 def worker_metrics_app(token: str | None) -> WSGIApp:
     """``GET /metrics`` with this container's samples, behind the API's bearer token.
@@ -169,7 +218,8 @@ def worker_metrics_app(token: str | None) -> WSGIApp:
             if not token or not hmac.compare_digest(given.encode(), token.encode()):
                 start_response("401 Unauthorized", [("Content-Length", "0")])
                 return [b""]
-        body = generate_latest(registry)
+        with _FILES:
+            body = generate_latest(registry)
         start_response(
             "200 OK", [("Content-Type", CONTENT_TYPE_LATEST), ("Content-Length", str(len(body)))]
         )

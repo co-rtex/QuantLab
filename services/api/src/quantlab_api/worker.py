@@ -15,14 +15,22 @@ from rq import Worker
 from quantlab_api import tasks  # noqa: F401 - registers job handlers
 from quantlab_api.config import get_settings
 from quantlab_api.jobs import RQ_OPTIONS, get_queue, horse_killed, redis_conn, worker_identity
-from quantlab_api.observability import configure_logging, log, serve_worker_metrics
+from quantlab_api.observability import (
+    compact_dead_process,
+    configure_logging,
+    log,
+    serve_worker_metrics,
+)
 from quantlab_api.tracing import setup_tracing
 
 
 class QuantlabWorker(Worker):
-    """RQ's forking worker. Once a work horse has exited, however it ended, its live gauges
-    (``quantlab_jobs_running``) are dropped from the multiprocess directory (#165): a horse
-    killed mid-job never decrements them, and they would read 1 until the container restarts.
+    """RQ's forking worker. Once a work horse has exited, however it ended (#165):
+
+    * its live gauges (``quantlab_jobs_running``) are dropped: a horse killed mid-job never
+      decrements them, and they would read 1 until the container restarts;
+    * its other metric files are folded into the archive (``compact_dead_process``), so the
+      directory and each scrape stay the same size however many jobs have run.
     """
 
     _last_horse: int = 0
@@ -40,7 +48,11 @@ class QuantlabWorker(Worker):
             if horse and os.environ.get("PROMETHEUS_MULTIPROC_DIR"):
                 from prometheus_client import multiprocess
 
-                multiprocess.mark_process_dead(horse)  # type: ignore[no-untyped-call]
+                try:
+                    multiprocess.mark_process_dead(horse)  # type: ignore[no-untyped-call]
+                    compact_dead_process(horse)
+                except Exception:  # metrics bookkeeping must never stop the worker
+                    log.exception("worker_metrics_compaction_failed", horse=horse)
 
 
 def main() -> None:
