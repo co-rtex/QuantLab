@@ -52,9 +52,7 @@ def test_a_real_small_order_is_never_skipped():
             }
         )
     )
-    cfg = BacktestConfig(
-        initial_capital=100.0, rebalance="daily", commission_bps=0, slippage_bps=0
-    )
+    cfg = BacktestConfig(initial_capital=100.0, rebalance="daily", commission_bps=0, slippage_bps=0)
     res = run_backtest(bars, normalize_actions(None), create_strategy("equal_weight"), cfg)
     assert res.trades["quantity"].tolist()[:1] == [2]  # 100 / 50: the whole account
     weights = BacktestConfig(
