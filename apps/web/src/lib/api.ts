@@ -1,3 +1,5 @@
+import { sendRetryingBusy } from "./busy";
+
 export class ApiError extends Error {
   constructor(
     public status: number,
@@ -10,22 +12,11 @@ export class ApiError extends Error {
   }
 }
 
-// A 503 server_busy means the API refused the request before doing any of its work: its
-// process had no free slot for heavy work (#223). Sending it again is therefore safe, even
-// a POST, and it is sent again once, after Retry-After (capped here); a second refusal is
-// the caller's to show.
-const BUSY_RETRY_CAP_SECONDS = 10;
-
 export interface ApiInit extends RequestInit {
   json?: unknown;
-  /** Told when the server is busy and the request will be sent again in `seconds`. */
+  /** Told when the server is busy (503 server_busy, #223) and the request will be sent
+   * again, once, in `seconds` (busy.ts). */
   onBusy?: (seconds: number) => void;
-}
-
-export function busyRetrySeconds(res: Response, code: unknown): number | null {
-  if (res.status !== 503 || code !== "server_busy") return null;
-  const s = Number(res.headers.get("retry-after"));
-  return Number.isFinite(s) ? Math.min(Math.max(s, 0), BUSY_RETRY_CAP_SECONDS) : 1;
 }
 
 export async function api<T>(path: string, init: ApiInit = {}): Promise<T> {
@@ -36,17 +27,10 @@ export async function api<T>(path: string, init: ApiInit = {}): Promise<T> {
     headers.set("content-type", "application/json");
     body = JSON.stringify(json);
   }
-  const send = () => fetch(`/api/v1${path}`, { ...rest, headers, body, credentials: "same-origin" });
-  let res = await send();
-  if (res.status === 503) {
-    const first = await res.clone().json().catch(() => null);
-    const wait = busyRetrySeconds(res, first?.error?.code);
-    if (wait !== null) {
-      onBusy?.(wait);
-      await new Promise((r) => setTimeout(r, wait * 1000));
-      res = await send();
-    }
-  }
+  const res = await sendRetryingBusy(
+    () => fetch(`/api/v1${path}`, { ...rest, headers, body, credentials: "same-origin" }),
+    onBusy,
+  );
   if (res.status === 204) return undefined as T;
   const data = await res.json().catch(() => null);
   if (!res.ok) {

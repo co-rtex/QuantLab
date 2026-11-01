@@ -61,13 +61,13 @@ def test_the_decorator_bounds_a_route_and_keeps_its_signature(slots) -> None:  #
 
     slots(1)
 
-    @limits.heavy("probe")
-    def route(x: int, *, y: str = "a") -> str:
+    def plain(x: int, *, y: str = "a") -> str:
         """Doc."""
         with pytest.raises(ApiError), limits.heavy_slot("probe"):
             pass
         return f"{x}{y}"
 
+    route = limits.heavy("probe")(plain)
     assert route(1, y="b") == "1b"
-    assert str(inspect.signature(route)) == "(x: int, *, y: str = 'a') -> str"  # FastAPI reads it
+    assert inspect.signature(route) == inspect.signature(plain)  # what FastAPI reads
     assert route.__doc__ == "Doc."
