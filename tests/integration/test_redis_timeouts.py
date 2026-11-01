@@ -19,7 +19,11 @@ import pytest
 from sqlalchemy import select
 
 from quantlab_api.models import Job, JobStatus
+from tests.limiter_clock import limiter_clock  # noqa: F401 - the fixture below
 from tests.unit.test_redis_timeouts import silent_redis
+
+# Fixed-window limits: counted against a frozen clock, never across a window boundary.
+pytestmark = pytest.mark.usefixtures("limiter_clock")
 
 T = 0.3  # both timeouts, seconds
 BT = {"start": "2021-01-04", "rebalance": "monthly", "benchmark": "SYNIDX"}

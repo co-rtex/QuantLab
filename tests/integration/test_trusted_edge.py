@@ -12,6 +12,10 @@ import pytest
 
 from quantlab_api.config import get_settings
 from tests.integration.conftest import register
+from tests.limiter_clock import limiter_clock  # noqa: F401 - the fixture below
+
+# Fixed-window limits: counted against a frozen clock, never across a window boundary.
+pytestmark = pytest.mark.usefixtures("limiter_clock")
 
 
 def _request(peer: str, xff: str | None = None):  # type: ignore[no-untyped-def]
