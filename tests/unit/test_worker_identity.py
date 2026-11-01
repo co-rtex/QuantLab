@@ -15,6 +15,7 @@ import pytest
 from rq import Queue, Worker
 
 from quantlab_api import jobs as J
+from quantlab_api.config import Settings
 from quantlab_api.jobs import RQ_OPTIONS
 
 
@@ -122,6 +123,9 @@ def test_quantlab_worker_registers_under_worker_identity(container: pytest.Monke
             return None
 
     container.setattr(worker, "QuantlabWorker", Recorder)
+    # Its own settings: worker.get_settings may still be bound to another test's
+    # production settings (test_api_secrets imports the module under a patch).
+    container.setattr(worker, "get_settings", lambda: Settings(environment="development"))
     container.setattr(worker, "redis_conn", fakeredis.FakeRedis)
     container.setattr(
         worker, "get_queue", lambda: Queue("q", connection=fakeredis.FakeRedis(), **RQ_OPTIONS)

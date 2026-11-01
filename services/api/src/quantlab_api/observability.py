@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import contextvars
+import glob
 import hmac
 import logging
 import os
@@ -198,6 +199,13 @@ def compact_dead_process(pid: int, directory: str | None = None) -> None:
             os.remove(dead)
 
 
+def _has_header(path: str) -> bool:
+    try:
+        return os.path.getsize(path) >= 8  # MmapedDict's used-length header and padding
+    except FileNotFoundError:
+        return False
+
+
 def worker_metrics_app(token: str | None) -> WSGIApp:
     """``GET /metrics`` with this container's samples, behind the API's bearer token.
 
@@ -206,8 +214,18 @@ def worker_metrics_app(token: str | None) -> WSGIApp:
     from prometheus_client import CONTENT_TYPE_LATEST, CollectorRegistry, generate_latest
     from prometheus_client.multiprocess import MultiProcessCollector
 
+    class Collector(MultiProcessCollector):
+        """Skips a file still being created. A new work horse opens each of its files empty
+        and then sizes it, and a scrape that listed it in between failed reading 0 bytes
+        (``unpack_from requires a buffer of at least 4 bytes``); every job is a new horse.
+        Such a file holds nothing yet, and once it has its header it reads correctly."""
+
+        def collect(self) -> Any:
+            files = glob.glob(os.path.join(self._path, "*.db"))
+            return self.merge([f for f in files if _has_header(f)], accumulate=True)  # type: ignore[no-untyped-call]
+
     registry = CollectorRegistry()
-    MultiProcessCollector(registry)  # type: ignore[no-untyped-call]
+    Collector(registry)  # type: ignore[no-untyped-call]
 
     def app(environ: dict[str, Any], start_response: Callable[..., Any]) -> Iterable[bytes]:
         if environ.get("PATH_INFO") != "/metrics" or environ.get("REQUEST_METHOD") != "GET":

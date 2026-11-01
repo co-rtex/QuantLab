@@ -1,4 +1,6 @@
-"""Only the API needs the JWT signing key and the metrics token (#117)."""
+"""Only the API needs the JWT signing key (#117). The metrics token is needed by every
+process that serves /metrics, the API and each worker (#165, tests/unit/test_worker_metrics.py),
+and is checked when that process starts, not when its modules are imported."""
 
 from __future__ import annotations
 

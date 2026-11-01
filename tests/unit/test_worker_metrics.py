@@ -61,6 +61,15 @@ def test_the_worker_endpoint_serves_only_get_metrics(multiproc: Path) -> None:
     assert call(app, method="POST", auth=f"Bearer {TOKEN}")[0].startswith("404")
 
 
+def test_a_file_a_new_horse_is_still_creating_does_not_fail_a_scrape(multiproc: Path) -> None:
+    """A horse opens each file empty, then sizes it; a scrape listing it in between read 0
+    bytes and failed (found by the concurrent-scrape test under full-suite load)."""
+    for kind in ("counter", "histogram", "gauge_livesum", "gauge_mostrecent"):
+        (multiproc / f"{kind}_4242.db").touch()
+    status, _, body = call(worker_metrics_app(None))
+    assert status.startswith("200"), body
+
+
 def test_without_a_token_development_serves_openly_as_the_api_does(multiproc: Path) -> None:
     assert call(worker_metrics_app(None))[0].startswith("200")
 
