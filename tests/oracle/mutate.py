@@ -270,6 +270,13 @@ MUTATIONS = [
         '"reason": type(exc).__name__,',
         "a sell refused for its commission logged with the internal name (#196)",
     ),
+    Mutation(
+        "M32",
+        ENG,
+        "    return abs(delta) < max(1e-9, 1e-12 * max(1.0, abs(want), abs(held)))",
+        "    return abs(delta) < 1e-9",
+        "float-noise rebalance orders created and charged commission (#215)",
+    ),
 ]
 
 

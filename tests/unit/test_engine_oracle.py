@@ -400,6 +400,30 @@ def test_a_sell_whose_commission_exceeds_its_proceeds_says_so():
     assert diff(eng, ref, 10.0) == []
 
 
+def test_a_float_noise_rebalance_is_not_an_order():
+    # #215, the #209 review's reproducer. Seed 1064 at 3e9 with fractional shares: on
+    # 2022-01-07 price_weight re-targets ID2 to its own holding up to rounding, a delta of
+    # exactly -2^-29 shares (held 11530659.906326616). Engine 1.5.0 made it an order, which
+    # filled on 2022-01-10 for a notional of 3.1e-7 and paid the full commission_min.
+    from tests.oracle.differential import keyed, strategies_for
+    from tests.oracle.universes import scenario
+
+    sc = scenario(1064)
+    cfg = {
+        **sc.cfg,
+        "initial_capital": 3e9,
+        "fractional_shares": True,
+        "commission_min": 5.0,
+        "execution": "next_close",
+    }
+    engine_strategy, ref_strategy = strategies_for("price_weight", 1064)
+    eng = run_engine(sc, cfg, engine_strategy, keyed(sc))
+    ref = run_reference(sc.bars, sc.actions, sc.history, sc.master, cfg, ref_strategy)
+    tiny = eng.trades[eng.trades["quantity"].abs() < 1e-6]
+    assert len(tiny) == 0  # no fill of a noise order
+    assert diff(eng, ref, 3e9) == []
+
+
 @pytest.mark.parametrize("seed", SEEDS)
 def test_engine_matches_reference(seed):
     assert compare(seed) == []
