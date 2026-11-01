@@ -291,9 +291,20 @@ MUTATIONS = [
     Mutation(
         "M34",
         VAL,
-        "else master_as_of(instruments, nxt, keep=_held_in_a_halt(full.trades, tb, d, nxt)),",
+        "else master_as_of(instruments, nxt, keep=halted(d)),",
         "else master_as_of(instruments, nxt),",
         "look-ahead check without the halt exemption: an honest halt-then-delist fails (#247)",
+    ),
+    Mutation(
+        "M35",
+        ENG,
+        "        prices = {s: float(last_px[col[s]]) for s in ledger.positions}",
+        "        prices = {s: float(last_px[col[s]]) * (1 + delist_at[s][1] if s in delist_at"
+        " and math.isfinite(delist_at[s][1]) and not has_bar[k, col[s]]"
+        " and delist_at[s][0] - d <= pd.Timedelta(days=10) else 1.0)"
+        " for s in ledger.positions}",
+        "a halted holding marked at its delisting return 10 days before the delisting is"
+        " public (#259 review's ML)",
     ),
 ]
 

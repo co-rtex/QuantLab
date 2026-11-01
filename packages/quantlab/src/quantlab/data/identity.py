@@ -212,12 +212,18 @@ def master_as_of(
     A delisting is public on its date, so one dated on or before ``when`` is kept, with its
     reason and return. A later one is not known yet: its date, reason and return are
     blanked, as for a security still listed. Listing dates and names are kept. The engine
-    does not read them, and a listing shows in the bars anyway. Instruments in ``keep``
-    keep their delisting facts whatever the date.
+    does not read them, and a listing shows in the bars anyway.
+
+    An instrument in ``keep`` whose delisting is not public yet keeps only the fact that it
+    delists later: its date becomes the day after ``when``, so nothing can act on it at or
+    before ``when``, and its reason and return are blanked like any other.
     """
     m = normalize_master(master)
-    later = (m["delisting_date"] > pd.Timestamp(when)) & ~m["instrument_id"].isin(set(keep))
-    m.loc[later, "delisting_date"] = pd.NaT
+    when = pd.Timestamp(when)
+    later = m["delisting_date"] > when
+    pending = later & m["instrument_id"].isin(set(keep))
+    m.loc[later & ~pending, "delisting_date"] = pd.NaT
+    m.loc[pending, "delisting_date"] = when + pd.Timedelta(days=1)
     m.loc[later, "delisting_reason"] = None
     m.loc[later, "delisting_return"] = np.nan
     return m

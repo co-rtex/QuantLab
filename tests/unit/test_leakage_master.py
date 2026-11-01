@@ -62,8 +62,11 @@ def test_master_as_of_blanks_only_delistings_not_yet_public():
     assert m.at["A", "delisting_reason"] == "merger" and m.at["A", "delisting_return"] == 0.1
     assert pd.isna(m.at["B", "delisting_date"])  # the next day: not known yet
     assert pd.isna(m.at["B", "delisting_reason"]) and pd.isna(m.at["B", "delisting_return"])
-    assert m.at["D", "delisting_date"] == pd.Timestamp("2020-06-01")  # kept as asked
-    assert m.at["D", "delisting_return"] == -0.5
+    # Kept as asked, but only the fact that it delists later: not when, nor at what return.
+    assert m.at["D", "delisting_date"] == pd.Timestamp("2020-03-03")
+    assert pd.isna(m.at["D", "delisting_reason"]) and pd.isna(m.at["D", "delisting_return"])
+    kept_public = master_as_of(master, "2020-03-02", keep=["A"]).set_index("instrument_id")
+    assert kept_public.at["A", "delisting_return"] == 0.1  # a public one is untouched
     assert (m["listing_date"] == pd.Timestamp("2018-01-02")).all()
     identity.normalize_master(m.reset_index())  # still a valid master
 
@@ -179,8 +182,54 @@ def test_without_the_halt_exemption_the_same_case_fails(monkeypatch):
     # strategy that sizes by its locked capital then decides differently in the two runs.
     d, *_, cfg = _halt_then_delist()
     monkeypatch.setitem(REGISTRY, LockedAware.key, LockedAware)
-    monkeypatch.setattr(validation, "_held_in_a_halt", lambda *a: set())
+    monkeypatch.setattr(validation, "_halted_while_held", lambda *a: set())
     res = leakage_check(
         d.bars, d.actions, LockedAware.key, {}, cfg, instruments=d.master, samples=100
     )
     assert res["status"] == "failed", res
+
+
+def test_a_halt_that_ended_before_the_cut_is_exempt_too(monkeypatch):
+    # The #259 review's probe: an 8-session halt that resumes, with the delisting later. The
+    # full run held the name through the halt (its delisting is in the master); without the
+    # exemption the truncated run sold it at the 5th missing session, so a strategy that
+    # sizes by locked capital was reported "failed" at cuts after the halt had ended.
+    d = _market()
+    sessions = pd.DatetimeIndex(sorted(d.bars["date"].unique()))
+    m = d.master.set_index("instrument_id")
+    later = m[m["delisting_date"] > pd.Timestamp("2020-09-01")].sort_values("delisting_date")
+    iid, when = str(later.index[0]), later["delisting_date"].iloc[0]
+    i = sessions.searchsorted(when) - 60
+    gap = sessions[i : i + 8]
+    bars = d.bars[~((d.bars["symbol"] == iid) & d.bars["date"].isin(gap))]
+    cfg = CFG.model_copy(update={"start": sessions[i - 30].date(), "end": sessions[i + 40].date()})
+    monkeypatch.setitem(REGISTRY, LockedAware.key, LockedAware)
+    res = leakage_check(
+        bars, d.actions, LockedAware.key, {}, cfg, instruments=d.master, samples=100
+    )
+    assert res["status"] == "verified", res
+    after = [c for c in map(pd.Timestamp, res["dates_tested"]) if c > gap[-1]]
+    assert after, res["dates_tested"]  # cuts after the halt ended were tested
+    monkeypatch.setattr(validation, "_halted_while_held", lambda *a: set())
+    res = leakage_check(
+        bars, d.actions, LockedAware.key, {}, cfg, instruments=d.master, samples=100
+    )
+    assert res["status"] == "failed", res  # the exemption is what keeps it verified
+
+
+def test_held_is_split_adjusted():
+    # 10 shares bought, a 2-for-1 split, 20 sold: nothing held, though the trade quantities
+    # sum to -10. A halt afterwards is not a held halt.
+    cal = pd.bdate_range("2024-01-02", periods=20)
+    bars = pd.DataFrame({"symbol": "A", "date": list(cal[:8]) + list(cal[15:])})
+    trades = pd.DataFrame(
+        {"symbol": ["A", "A"], "date": [cal[1], cal[5]], "quantity": [10.0, -20.0]}
+    )
+    actions = pd.DataFrame(
+        {"symbol": ["A"], "ex_date": [cal[3]], "kind": ["split"], "value": [2.0]}
+    )
+    assert validation._halted_while_held(trades, actions, bars, cal, cal[14], 5) == set()
+    kept = trades.iloc[:1]  # still holding the 10 (now 20) shares through the halt
+    assert validation._halted_while_held(kept, actions, bars, cal, cal[14], 5) == {"A"}
+    # A run shorter than the rule's threshold is not a halt the rule acted on.
+    assert validation._halted_while_held(kept, actions, bars, cal, cal[10], 5) == set()

@@ -491,24 +491,41 @@ every decision up to each cut to match the full run.
     return. A later one is blanked, as for a security still listed.
   * Listing dates and names are kept: the backtest doesn't read them, and a listing shows
     in the bars anyway.
-  * **One stated exemption:** a name that is held at the cut and prints no bar on the kept
-    session keeps its delisting fact.
-    * "Held" is read from the full run's trades dated up to the cut. That is the full
-      run's own state at the cut, not data from after it.
-    * The kept fact changes the truncated run only where it holds the name too: through
-      the halt rule, which needs a held position. A name the truncated run doesn't hold is
-      untradable without bars either way.
-    * That fact is what the engine's halt rule consumes. A halted security the master
-      later delists is held to its delisting return rather than sold at its last close
-      (see *Delistings*), because a halted stock can't be sold.
-    * It isn't a strategy channel. The rule decides no target and only resolves a position
-      that can't trade. Without the exemption, the truncated run would sell the name at a
+  * **One stated exemption, for the halt rule.** A halted security the master later
+    delists is held to its delisting return rather than sold at its last close (see
+    *Delistings*), because a halted stock can't be sold.
+    * **What the exempt name keeps:** only the fact that it delists later. Its date is set
+      to the day after the kept session, so nothing can act on it in the truncated window,
+      but the halt rule still sees a delisting coming. Its return and reason are blanked
+      like any other.
+    * **Who is exempt:** a name whose missing-bar run reached `delist_after_missing`
+      sessions at or before the cut, while the full run held it at the start of that run.
+      * That covers a halt still running at the cut and one that ended before it: either
+        way the rule kept the position, and without the exemption the truncated run would
+        have sold it.
+      * Whether it prints on the kept session doesn't matter. A run reaching the threshold
+        only then can't change a decision dated up to the cut.
+      * Only bars dated up to the cut and the full run's own trades up to the cut are read:
+        its state at the cut, not data from after it. Holdings are split-adjusted, so a
+        name sold out after a split doesn't count as held.
+    * **Why it isn't a strategy channel:** the rule decides no target. It only resolves a
+      position that can't trade. Without the exemption, the truncated run would sell at a
       last close no holder could get, and an honest strategy would be reported "failed".
-    * Pinned in `tests/unit/test_leakage_master.py` with a 15-session halt that ends in a
-      −90% delisting. Equal weight and a test strategy that sizes by its locked capital are
-      both verified. With the exemption removed (mutation M34), the second one fails.
-    * The library strategies' targets don't depend on holdings: a halted name is
-      untradable either way. So for them the exemption doesn't change the verdict.
+    * **Pinned** in `tests/unit/test_leakage_master.py`:
+      * a 15-session halt that ends in a −90% delisting;
+      * an 8-session halt that resumes, with the delisting later.
+      * Equal weight and a test strategy that sizes by its locked capital are verified in
+        both. With the exemption removed (mutation M34), the second one fails.
+      * An engine that marks a halted holding at its delisting return 10 days before the
+        delisting is public (mutation M35) is caught, because the exempt name's return is
+        blanked.
+    * **Effect on library strategies:** their targets don't depend on the size of holdings.
+      `buy_and_hold` reads only whether anything is held, which a halted name doesn't
+      change while other positions remain. So for them the exemption doesn't change the
+      verdict.
+    * **The blind spot left:** for an exempt name, an engine path that used only the
+      existence of a later delisting, not its date or return, would go unseen. The halt
+      rule is the one such path today.
   * Before #247 both runs got the full master, so an engine path that acted on a delisting
     before it was public behaved identically in both and went unseen. A planted one, an
     engine that acts on each delisting 10 days early, is now "failed"; with the full master
