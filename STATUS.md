@@ -329,6 +329,12 @@ a separate clone.
    * #20 (load host);
    * any `terraform apply` (cloud account, cost).
 
+## Incidents
+* **2026-10-31:** E2E test data was written into the main checkout's Docker volumes by a
+  run that bypassed `scripts/stack-env.sh`. Root cause, effect and fix are in
+  [docs/COORDINATION.md](docs/COORDINATION.md) ("Incident"). **User decision: leave it all
+  untouched.** Any cleanup needs separate explicit approval and a verified backup first.
+
 ## Blockers
 No LLM API key, market-data API key or cloud credentials (docs/BLOCKERS.md).
 
