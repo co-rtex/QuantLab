@@ -499,9 +499,11 @@ every decision up to each cut to match the full run.
     * It isn't a strategy channel. The rule decides no target and only resolves a position
       that can't trade. Without the exemption, the truncated run would sell the name at a
       last close no holder could get, and an honest strategy would be reported "failed".
-    * Pinned in `tests/unit/test_leakage_master.py`: an equal-weight run through a
-      15-session halt that ends in a −90% delisting is verified, and fails once the
-      exemption is removed (mutation M34).
+    * Pinned in `tests/unit/test_leakage_master.py` with a 15-session halt that ends in a
+      −90% delisting. Equal weight and a test strategy that sizes by its locked capital are
+      both verified. With the exemption removed (mutation M34), the second one fails.
+    * The library strategies' targets don't depend on holdings: a halted name is
+      untradable either way. So for them the exemption doesn't change the verdict.
   * Before #247 both runs got the full master, so an engine path that acted on a delisting
     before it was public behaved identically in both and went unseen. A planted one, an
     engine that acts on each delisting 10 days early, is now "failed"; with the full master

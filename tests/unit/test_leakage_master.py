@@ -18,6 +18,8 @@ from quantlab.data.identity import key_by_instrument, master_as_of
 from quantlab.data.synthetic import SyntheticSpec, generate_market
 from quantlab.research import validation
 from quantlab.research.validation import leakage_check
+from quantlab.strategies.base import MarketView, Strategy, StrategyParams
+from quantlab.strategies.library import REGISTRY
 
 CFG = engine.BacktestConfig(start="2019-07-01", rebalance="weekly")
 EARLY = pd.Timedelta(days=10)
@@ -59,7 +61,7 @@ def test_master_as_of_blanks_only_delistings_not_yet_public():
     assert m.at["A", "delisting_date"] == pd.Timestamp("2020-03-02")  # public on its date
     assert m.at["A", "delisting_reason"] == "merger" and m.at["A", "delisting_return"] == 0.1
     assert pd.isna(m.at["B", "delisting_date"])  # the next day: not known yet
-    assert m.at["B", "delisting_reason"] is None and pd.isna(m.at["B", "delisting_return"])
+    assert pd.isna(m.at["B", "delisting_reason"]) and pd.isna(m.at["B", "delisting_return"])
     assert m.at["D", "delisting_date"] == pd.Timestamp("2020-06-01")  # kept as asked
     assert m.at["D", "delisting_return"] == -0.5
     assert (m["listing_date"] == pd.Timestamp("2018-01-02")).all()
@@ -108,6 +110,22 @@ def test_the_same_leak_was_invisible_with_the_full_master(monkeypatch):
 HALT = 15  # sessions without a bar before the master's delisting
 
 
+class LockedAware(Strategy):
+    """Honest, and reads its holdings: equal weight over the tradable names, investing only
+    the share of equity not locked in positions it cannot trade (a halted name). Library
+    strategies' targets don't depend on holdings, so they can't show the halt rule."""
+
+    key = "test_locked_aware"
+    name = "locked aware"
+    description = ""
+    Params = StrategyParams
+
+    def target_weights(self, view: MarketView):
+        uni = view.universe
+        locked = float(view.holdings[~view.holdings.index.isin(uni)].sum())
+        return pd.Series((1.0 - locked) / len(uni), index=uni) if uni else None
+
+
 def _halt_then_delist() -> tuple[Data, str, pd.Timestamp, pd.Timestamp, engine.BacktestConfig]:
     """One delisted name stops printing HALT sessions before its master delisting, which
     then books -90% (the typical bankruptcy path). The engine holds it through the halt."""
@@ -129,7 +147,7 @@ def _halt_then_delist() -> tuple[Data, str, pd.Timestamp, pd.Timestamp, engine.B
     return Data(bars, d.actions, master), iid, halt_from, when, cfg
 
 
-def test_an_honest_strategy_holding_through_a_halt_to_its_delisting_is_verified():
+def test_an_honest_strategy_holding_through_a_halt_to_its_delisting_is_verified(monkeypatch):
     d, iid, halt_from, when, cfg = _halt_then_delist()
     from quantlab.strategies.library import create_strategy
 
@@ -140,10 +158,10 @@ def test_an_honest_strategy_holding_through_a_halt_to_its_delisting_is_verified(
     exits = full.trades[full.trades["symbol"] == iid]["note"].dropna().tolist()
     assert any("delisting return applied (-90.00%)" in n for n in exits), exits
     assert full.meta["delistings"]["by_missing_bars"] == 0
-    res = leakage_check(
-        d.bars, d.actions, "equal_weight", {}, cfg, instruments=d.master, samples=100
-    )
-    assert res["status"] == "verified", res
+    monkeypatch.setitem(REGISTRY, LockedAware.key, LockedAware)
+    for key in ("equal_weight", LockedAware.key):
+        res = leakage_check(d.bars, d.actions, key, {}, cfg, instruments=d.master, samples=100)
+        assert res["status"] == "verified", (key, res)
     # Not vacuous: some tested cut lies deep enough in the halt for the missing-bars rule
     # (5 sessions) to have fired in the truncated run without the exemption.
     sessions = pd.DatetimeIndex(sorted(d.bars["date"].unique()))
@@ -157,10 +175,12 @@ def test_an_honest_strategy_holding_through_a_halt_to_its_delisting_is_verified(
 
 def test_without_the_halt_exemption_the_same_case_fails(monkeypatch):
     # The exemption is load-bearing: the as-of master alone would make the truncated run
-    # sell the halted name at its last close, which the full run (rightly) never does.
+    # sell the halted name at its last close, which the full run (rightly) never does. A
+    # strategy that sizes by its locked capital then decides differently in the two runs.
     d, *_, cfg = _halt_then_delist()
+    monkeypatch.setitem(REGISTRY, LockedAware.key, LockedAware)
     monkeypatch.setattr(validation, "_held_in_a_halt", lambda *a: set())
     res = leakage_check(
-        d.bars, d.actions, "equal_weight", {}, cfg, instruments=d.master, samples=100
+        d.bars, d.actions, LockedAware.key, {}, cfg, instruments=d.master, samples=100
     )
     assert res["status"] == "failed", res
