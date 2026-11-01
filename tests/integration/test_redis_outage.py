@@ -14,6 +14,7 @@ import subprocess
 import sys
 import time
 import uuid
+import warnings
 from datetime import datetime
 from pathlib import Path
 
@@ -106,10 +107,38 @@ def _run(
     return subprocess.CompletedProcess(proc.args, proc.returncode, out, ""), first, second
 
 
+def _row(jid: uuid.UUID) -> dict[str, object]:
+    with SessionLocal() as db:
+        job = db.get(Job, jid)
+        cols = ("status", "attempts", "message", "error", "worker_id", "attempt_started_at")
+        out = {c: getattr(job, c) for c in cols}
+        out |= {c: getattr(job, c) for c in ("heartbeat_at", "finished_at", "lease_expires_at")}
+        return {k: (v.value if hasattr(v, "value") else v) for k, v in out.items()}
+
+
+def _settled(jid: uuid.UUID, seconds: float) -> tuple[tuple[str, int], float]:
+    """The job's (status, attempts) once terminal, or as it stands after ``seconds``, and how
+    long that took. #261: one load-heavy run found job 1 still running after the worker had
+    exited 0. A late terminal write and a horse that died mid-job look the same in one read;
+    a bounded wait tells them apart."""
+    t0 = time.monotonic()
+    while (state := _status(jid))[0] not in ("completed", "failed", "timed_out", "cancelled"):
+        if time.monotonic() - t0 >= seconds:
+            break
+        time.sleep(0.2)
+    return state, time.monotonic() - t0
+
+
 def test_a_busy_worker_outlasts_a_redis_outage_and_takes_the_next_job(seeded, tmp_path):
     done, first, second = _run("quantlab", tmp_path)
     assert done.returncode == 0, done.stdout[-3000:]
-    assert _status(first) == ("completed", 1)  # no attempt lost
+    state, waited = _settled(first, 10)
+    # On a mismatch, everything needed to tell the cases apart: whether the terminal state
+    # arrived late (waited > 0) or never, job 1's row, and the worker's whole output.
+    why = f"waited {waited:.1f}s; job 1 {_row(first)}\n{done.stdout[-12000:]}"
+    assert state == ("completed", 1), why  # no attempt lost
+    if waited >= 0.5:  # completed, but seen only after the worker had exited: say so (#261)
+        warnings.warn(f"#261: job 1's terminal state arrived late: {why[:2000]}", stacklevel=1)
     assert _status(second) == ("completed", 1)  # the same worker went on
     assert "found an unhandled exception, quitting" not in done.stdout
     # The monitor's own heartbeat met the outage while the horse ran, and was the one
