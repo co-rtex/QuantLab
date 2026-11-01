@@ -58,6 +58,10 @@ values computed by hand or published elsewhere; `tests/unit` covers the rest.
   The following are warnings only:
   * Missing sessions, a bar dated on a non-session day, stale prices.
   * An ex-date without a bar (the action applies at the next bar).
+  * Several cash dividends on one ex-date (#210). Each is paid, which is right for a
+    regular and a special dividend. A correction supplied as a second row would be paid
+    twice, so the operator should confirm the pair or remove the superseded row. An
+    identical repeat still blocks.
   * Actions the engine never applies: for a symbol without bars, or dated before its first
     or after its last bar. Full-history vendor action files with windowed bars, announced
     future actions and terminal distributions all look like this.
@@ -524,6 +528,14 @@ different inputs even when nothing else changed. The reproducibility comparison 
 each differing input (`input_differences`, for example `engine_version 1.2.0 → 1.3.0`).
 The integrity report only uses same-input re-runs to verify or fail reproducibility; it
 names changed-input re-runs and leaves the check "not assessed" if they are the only ones.
+
+Identical inputs give byte-identical outputs across processes (#182), with no tolerance
+needed. That covers the backtest frames and fingerprint, the analysis, the validation
+suite, the ML run and its predictions, the integrity report, and the HTML and Markdown
+reports apart from their `generated_at` timestamp. The hash seed (`PYTHONHASHSEED`) and
+the BLAS/OpenMP thread count (1, 2 or 4) don't change them. The ML models and the
+bootstrap take explicit seeds. This was measured on macOS arm64 with the locked
+dependencies; CI checks it on Linux (`tests/unit/test_reproducibility_processes.py`).
 
 **Engine versions.**
 * History (versions before 1.2.0 are in the git history):
