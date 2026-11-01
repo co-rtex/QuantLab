@@ -60,9 +60,9 @@ def _raw_weights(monkeypatch) -> tuple[dict[str, np.ndarray], dict[str, int], di
     out: dict[str, list[np.ndarray]] = {m: [] for m in METHODS}
     solved, failed = dict.fromkeys(METHODS, 0), dict.fromkeys(METHODS, 0)
 
-    def solve(method: str, fn) -> None:
+    def solve(method: str, fn, *args) -> None:
         try:
-            out[method].append(fn())
+            out[method].append(fn(*args))
             solved[method] += 1
         except allocators.OptimizationError:
             failed[method] += 1
@@ -71,13 +71,13 @@ def _raw_weights(monkeypatch) -> tuple[dict[str, np.ndarray], dict[str, int], di
         for w in _windows(seed, 126):  # MinimumVariance defaults: sample covariance
             cap = max(0.25, 1.0 / w.shape[1])
             cov = w.cov(ddof=1).to_numpy() * 252
-            solve("strategy", lambda: min_variance(cov, Bounds(0, cap)))
+            solve("strategy", min_variance, cov, Bounds(0, cap))
         for w in _windows(seed, 252, every=20):  # the optimize API's defaults
             cov = covariance(w, method="ledoit_wolf").to_numpy()
             cap = max(0.4, 1.0 / w.shape[1])
             mu = w.mean().to_numpy() * 252
-            solve("api_min", lambda: min_variance(cov, Bounds(0, cap)))
-            solve("api_mean", lambda: mean_variance(mu, cov, 5.0, Bounds(0, cap)))
+            solve("api_min", min_variance, cov, Bounds(0, cap))
+            solve("api_mean", mean_variance, mu, cov, 5.0, Bounds(0, cap))
     weights = {m: np.concatenate(v) if v else np.empty(0) for m, v in out.items()}
     return weights, solved, failed
 
