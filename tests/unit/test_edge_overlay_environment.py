@@ -73,5 +73,6 @@ def test_an_exported_environment_never_turns_off_production_behind_the_edge(
 
 @needs_compose
 def test_without_the_overlay_the_dev_stack_keeps_its_development_default() -> None:
-    got = resolved_environment(EDGE[:1])
+    # Set empty, so a developer's own .env value never reaches the render.
+    got = resolved_environment(EDGE[:1], QUANTLAB_ENVIRONMENT="")
     assert got == dict.fromkeys(EXPOSED, "development")
