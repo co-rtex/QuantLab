@@ -10,6 +10,7 @@
 | Reaper | logs contain `reaper_cycle` lines when it recovers anything | process running |
 | Metrics (API) | `curl -H "Authorization: Bearer $QUANTLAB_METRICS_TOKEN" localhost:8000/metrics` | Prometheus text |
 | Metrics (each worker; job, dataset, cache, ingest) | for each replica N (1, 2, …): `docker compose exec --index N worker python -c "import os,urllib.request as u; r=u.Request('http://localhost:9101/metrics', headers={'Authorization': 'Bearer ' + os.environ.get('QUANTLAB_METRICS_TOKEN', '')}); print(u.urlopen(r).read().decode())"` (port 9101 is never published; without `--index`, compose picks one replica) | Prometheus text with `quantlab_job_outcomes_total`; Prometheus target `quantlab-worker` up for every replica |
+| Metrics (reaper; lease-loss retries, the outcomes it decides) | `docker compose exec reaper python -c "import os,urllib.request as u; r=u.Request('http://localhost:9102/metrics', headers={'Authorization': 'Bearer ' + os.environ.get('QUANTLAB_METRICS_TOKEN', '')}); print(u.urlopen(r).read().decode())"` (port 9102 is never published) | Prometheus text with `quantlab_job_retries_total`; Prometheus target `quantlab-reaper` up |
 
 ### Inspecting the job queue
 
@@ -305,7 +306,8 @@ refuses unless `QUANTLAB_JWT_SECRET` is a real secret (≥ 32 characters, no pla
 words) and `QUANTLAB_METRICS_TOKEN` has 16+ characters. A **worker that serves job
 metrics** (`PROMETHEUS_MULTIPROC_DIR` set, as in compose) also refuses without
 `QUANTLAB_METRICS_TOKEN`, under the same rule (#165). A worker without that directory, such
-as the Terraform ECS task, serves nothing and needs no token. Workers and the reaper never
+as the Terraform ECS task, serves nothing and needs no token. The **reaper** follows the same
+rule when `QUANTLAB_REAPER_METRICS_PORT` is set, as in compose (#179). Workers and the reaper never
 sign tokens and are not given the JWT key (#117); without the key a process fails closed
 instead of using a development key. Terminate TLS at the trusted edge (below). Run migrations
 (`alembic -c services/api/alembic.ini upgrade head`) before starting new API versions.
