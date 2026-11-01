@@ -117,12 +117,15 @@ def worker_identity() -> str:
     """
     global _identity
     if _identity is None:
-        name = os.environ.get("QUANTLAB_WORKER_NAME") or (
-            f"{socket.gethostname().replace(':', '-')}-{os.getpid()}-{secrets.token_hex(4)}"
-        )
-        if ":" in name or len(name) > 128:
-            raise ValueError("QUANTLAB_WORKER_NAME must be at most 128 characters, without ':'")
-        _identity = name
+        override = os.environ.get("QUANTLAB_WORKER_NAME")
+        if override:
+            if ":" in override or len(override) > 128:
+                raise ValueError("QUANTLAB_WORKER_NAME must be at most 128 characters, without ':'")
+            _identity = override
+        else:
+            # At most 100 + 1 + 7 + 1 + 8 characters, however long the hostname.
+            host = socket.gethostname().replace(":", "-")[:100]
+            _identity = f"{host}-{os.getpid()}-{secrets.token_hex(4)}"
     return _identity
 
 

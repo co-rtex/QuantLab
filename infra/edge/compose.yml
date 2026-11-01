@@ -34,6 +34,7 @@ services:
     profiles: ["app"]
 
   web:
+    restart: unless-stopped  # never a dev stack's "no" (#162)
     environment:
       QUANTLAB_EDGE_SECRET: ${QUANTLAB_EDGE_SECRET:?set QUANTLAB_EDGE_SECRET (openssl rand -hex 32)}
     ports: !reset []
@@ -43,21 +44,26 @@ services:
   # cookies, and fails closed when no client address reaches it (ADR-0008). Set
   # QUANTLAB_JWT_SECRET, QUANTLAB_METRICS_TOKEN and QUANTLAB_REDIS_PASSWORD (docs/RUNBOOK.md).
   api:
+    restart: unless-stopped  # never a dev stack's "no" (#162)
     ports: !reset []
     environment: &edge-env
       QUANTLAB_ENVIRONMENT: ${QUANTLAB_ENVIRONMENT:-production}
       QUANTLAB_COOKIE_SECURE: "true"
 
   worker:
+    restart: unless-stopped  # never a dev stack's "no" (#162)
     environment: *edge-env
 
   reaper:
+    restart: unless-stopped  # never a dev stack's "no" (#162)
     environment: *edge-env
 
   postgres:
+    restart: unless-stopped  # never a dev stack's "no" (#162)
     ports: !reset []
 
   redis:
+    restart: unless-stopped  # never a dev stack's "no" (#162)
     ports: !reset []
 
   jaeger:

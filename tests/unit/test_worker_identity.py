@@ -86,6 +86,15 @@ def test_a_forked_work_horse_reports_the_workers_name(monkeypatch: pytest.Monkey
     assert child == name
 
 
+def test_a_long_hostname_still_gives_a_name_the_database_can_hold(
+    container: pytest.MonkeyPatch,
+) -> None:
+    """Linux allows 64-character hostnames, other systems longer; the default never fails."""
+    container.setattr(J.socket, "gethostname", lambda: "h:" + "x" * 250)
+    name = J.worker_identity()
+    assert len(name) <= 128 and ":" not in name and name.startswith("h-xxx")
+
+
 def test_quantlab_worker_name_overrides_the_default(container: pytest.MonkeyPatch) -> None:
     container.setenv("QUANTLAB_WORKER_NAME", "worker-blue")
     assert J.worker_identity() == "worker-blue"

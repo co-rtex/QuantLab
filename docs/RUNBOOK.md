@@ -84,9 +84,17 @@ no duplicate result can be written.
 * **A crash or OOM kill restarts by itself.** The core services run with
   `restart: unless-stopped`, so Docker restarts a worker that crashes or is OOM-killed. In
   the #162 probe, both workers were back 4.7 s after a SIGKILL.
+  * This holds for the main checkout and for the edge overlay (`infra/edge/compose.yml`),
+    which pins `unless-stopped`.
+  * A linked worktree's stack runs with `restart: no` instead, because
+    `scripts/stack-env.sh` sets `QUANTLAB_RESTART_POLICY=no` for any slot but 0. That way a
+    Docker restart doesn't bring back every agent's dev stack at once.
+  * `QUANTLAB_RESTART_POLICY` overrides either default. A crash-recovery probe on a
+    worktree slot must set `QUANTLAB_RESTART_POLICY=unless-stopped` explicitly.
 * **A stop you ran stays stopped.** Docker treats `docker compose stop` and
   `docker compose kill` as manual stops. Start the workers again with
-  `docker compose --profile app up -d worker`.
+  `docker compose --profile app up -d --no-deps worker`, which leaves the API and
+  databases as they are.
 * **A restarted worker rejoins at once.** Each start takes a new RQ name,
   `<container hostname>-<pid>-<random>`.
   * The dead process's name stays in `rq info` as a stale worker until its registration

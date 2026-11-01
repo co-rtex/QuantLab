@@ -23,7 +23,11 @@ slot=${QUANTLAB_SLOT:-$default_slot}
 if [ "$slot" -eq 0 ]; then
   project=quantlab pg=5433 redis=6380 api=8000 web=3000
   jaeger=16686 otlp=4318 prom=9090 grafana=3001
+  restart=unless-stopped
 else
+  # A worktree's dev stack is not brought back when Docker restarts (#162): several would
+  # start at once in the shared VM. Crash-recovery probes set unless-stopped explicitly.
+  restart=no
   base=$(( 20000 + slot * 20 ))
   project="quantlab-$(basename "$top" | tr 'A-Z' 'a-z' | tr -c 'a-z0-9\n' '-')"
   pg=$(( base + 3 )) redis=$(( base + 4 )) api=$(( base + 0 )) web=$(( base + 1 ))
@@ -41,6 +45,7 @@ emit QUANTLAB_JAEGER_PORT "$jaeger"
 emit QUANTLAB_OTLP_PORT "$otlp"
 emit QUANTLAB_PROMETHEUS_PORT "$prom"
 emit QUANTLAB_GRAFANA_PORT "$grafana"
+emit QUANTLAB_RESTART_POLICY "$restart"
 # URLs follow an overridden port (QUANTLAB_PG_PORT=... make up), not just the slot's.
 pg=${QUANTLAB_PG_PORT:-$pg} redis=${QUANTLAB_REDIS_PORT:-$redis} web=${QUANTLAB_WEB_PORT:-$web}
 emit QUANTLAB_DATABASE_URL "postgresql+psycopg://quantlab:quantlab@localhost:$pg/quantlab"
