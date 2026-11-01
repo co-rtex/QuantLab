@@ -31,6 +31,8 @@ mlruns/
 .env
 .env.*
 !.env.example
+# Generated in a linked worktree by scripts/stack-env.sh (#233): its own Compose project.
+/docker-compose.override.yml
 *.pem
 *.key
 
