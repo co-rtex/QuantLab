@@ -65,6 +65,7 @@ SAFE_ERROR_TYPES = frozenset(
         "ValidationError",
         "ValueError",
         "OptimizationError",
+        "OptimizeInputError",  # an optimize job's input problems, for the user (#224)
         "InfeasibleConstraints",
         "JobTimeoutError",
         "LeaseExpired",
@@ -510,6 +511,14 @@ def _mirror_status(db: Session, job: Job | Any, status: JobStatus) -> None:
 
         db.execute(
             update(MLRun).where(MLRun.id == uuid.UUID(payload["ml_run_id"])).values(status=status)
+        )
+    if "optimization_run_id" in payload:
+        from quantlab_api.models import OptimizationRun
+
+        db.execute(
+            update(OptimizationRun)
+            .where(OptimizationRun.id == uuid.UUID(payload["optimization_run_id"]))
+            .values(status=status)
         )
     if "research_run_id" in payload:
         db.execute(

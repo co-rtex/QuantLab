@@ -36,6 +36,10 @@ test("portfolio ledger: create, trade, value and reject an overdraft", async ({ 
   await page.goto("/optimize");
   await expect(page.getByPlaceholder(/First 12: SYN001/)).toBeVisible(); // instruments loaded
   await page.getByRole("button", { name: "Compare allocations" }).click();
-  await expect(page.getByRole("cell", { name: "Expected volatility" })).toBeVisible();
+  // A worker job (#224): the page polls the run until its result is in.
+  await expect(page.getByRole("cell", { name: "Expected volatility" })).toBeVisible({ timeout: 60_000 });
   await expect(page.getByRole("columnheader", { name: /Risk parity/ })).toBeVisible();
+  // The run is in the URL: a reload shows the same result without running it again.
+  await page.reload();
+  await expect(page.getByRole("cell", { name: "Expected volatility" })).toBeVisible();
 });

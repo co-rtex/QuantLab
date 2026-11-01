@@ -115,9 +115,10 @@ class Settings(BaseSettings):
     max_backtest_memory_mb: int = Field(1228, ge=64)
     max_dataset_assets: int = Field(2000, ge=1)
     rate_limit_login_per_minute: int = Field(10, ge=1)
-    # Heavy request-time work (#223): optimize and the portfolio ledger, at most this many
-    # at once per API process (more get 503 server_busy), and optimize at most this many
-    # times per user and minute (429). Defaults from docs/RUNBOOK.md, "Resources".
+    # Heavy request-time work (#223): the portfolio ledger, at most this many at once per
+    # API process (more get 503 server_busy). Optimization is a worker job (#224) whose
+    # submissions are limited per user and minute (429). Defaults: docs/RUNBOOK.md,
+    # "Resources".
     heavy_requests_per_process: int = Field(1, ge=1, le=16)
     rate_limit_optimize_per_minute: int = Field(10, ge=1)
     # Peers allowed to state the client address in X-Forwarded-For: IPs, CIDRs or hostnames

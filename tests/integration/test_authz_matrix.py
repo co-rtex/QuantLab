@@ -202,11 +202,15 @@ ROUTES: dict[str, Spec] = {
     "GET /api/v1/dataset-versions/{version_id}": Spec(WORKSPACE, V),
     "GET /api/v1/dataset-versions/{version_id}/instruments": Spec(WORKSPACE, V),
     "GET /api/v1/dataset-versions/{version_id}/bars/{symbol}": Spec(WORKSPACE, V),
-    "POST /api/v1/dataset-versions/{version_id}/optimize": Spec(
+    # A job since #224 (the viewer-level synchronous route is gone): it writes a run and a
+    # job, so editors only.
+    "POST /api/v1/dataset-versions/{version_id}/optimizations": Spec(
         WORKSPACE,
-        V,  # a computation over the version, no write
+        E,
+        ok=202,
         body=lambda w: {"json": {"symbols": ["SYN001", "SYN002", "SYN003"], "as_of": "2021-12-31"}},
     ),
+    "GET /api/v1/optimizations/{optimization_id}": Spec(WORKSPACE, V),
     f"GET {W}/dataset-versions/{{version_id}}/reconciliations": Spec(
         WORKSPACE, V, swap=("version_id",)
     ),
@@ -414,6 +418,13 @@ def _seed_workspace(
     assert r.status_code == 202, r.text
     run = r.json()["id"]
     r = c.post(
+        f"/api/v1/dataset-versions/{version}/optimizations",
+        headers=h,
+        json={"symbols": ["SYN001", "SYN002", "SYN003"], "as_of": "2021-12-31"},
+    )
+    assert r.status_code == 202, r.text
+    optimization = r.json()["id"]
+    r = c.post(
         f"{base}/portfolios",
         headers=h,
         json={
@@ -436,6 +447,7 @@ def _seed_workspace(
         "experiment_id": experiment,
         "job_id": job,
         "run_id": run,
+        "optimization_id": optimization,
         "portfolio_id": r.json()["id"],
         "invitation_id": invitation,
         "name": REPORT,

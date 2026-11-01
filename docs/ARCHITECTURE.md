@@ -79,7 +79,7 @@ Prometheus scrapes three kinds of process, all behind the same bearer token
   The API never marks a dead uvicorn process, so a process that died with its breaker
   open leaves 1 until the container restarts. Also
   `quantlab_heavy_requests_refused_total{route}` (#223): heavy requests refused with
-  `503 server_busy`, `route` being `optimize`, `portfolio_create`, `portfolio_transaction`
+  `503 server_busy`, `route` being `portfolio_create`, `portfolio_transaction`
   or `portfolio_valuation`. And `quantlab_cache_events_total{cache,result}`: the bars
   cache's `hit`, `miss` and `error`.
 * **Each worker replica**, at `<replica>:9101/metrics` (#165): queue wait, job run time and

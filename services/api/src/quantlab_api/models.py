@@ -371,3 +371,27 @@ class MLRun(Base):
     code_version: Mapped[str] = mapped_column(String(64))
     created_by: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id"))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class OptimizationRun(Base):
+    """A portfolio optimization on one dataset version, computed by a worker job (#224)."""
+
+    __tablename__ = "optimization_runs"
+    __table_args__ = (
+        Index("ix_optimization_runs_version_created", "dataset_version_id", "created_at"),
+    )
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=new_id)
+    workspace_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("workspaces.id", ondelete="CASCADE"), index=True
+    )
+    # As experiments reference their version: removed with the workspace, by its cascade.
+    dataset_version_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("dataset_versions.id"))
+    params: Mapped[dict[str, Any]] = mapped_column(JSONType)
+    status: Mapped[JobStatus] = mapped_column(
+        Enum(JobStatus, name="job_status", create_type=False), default=JobStatus.queued
+    )
+    result: Mapped[dict[str, Any] | None] = mapped_column(JSONType)
+    job_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("jobs.id", ondelete="SET NULL"))
+    code_version: Mapped[str] = mapped_column(String(64))
+    created_by: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id"))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
