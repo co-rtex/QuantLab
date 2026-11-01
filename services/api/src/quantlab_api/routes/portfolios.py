@@ -30,7 +30,7 @@ from quantlab.portfolio.ledger import LedgerError
 from quantlab.portfolio.valuation import Entry, summary, time_weighted_returns, value_portfolio
 from quantlab_api import provenance
 from quantlab_api.errors import ApiError
-from quantlab_api.limits import heavy
+from quantlab_api.limits import heavy_slot
 from quantlab_api.models import Instrument, Portfolio, PortfolioTransaction, Role
 from quantlab_api.routes.datasets import load_version
 from quantlab_api.schemas import BoundedDate
@@ -133,12 +133,20 @@ def _tx_out(t: PortfolioTransaction) -> dict[str, Any]:
     }
 
 
+# Each heavy route (#223) checks access first, then takes its process's heavy slot: a request
+# that would get 403 or 404 gets it, never 503 server_busy, and holds no slot.
 @router.post("/workspaces/{workspace_id}/portfolios", status_code=201)
-@heavy("portfolio_create")
 def create_portfolio(
     workspace_id: uuid.UUID, body: PortfolioIn, user: CurrentUser, db: DB, request: Request
 ) -> dict[str, Any]:
     require_workspace(db, user, workspace_id, Role.editor)
+    with heavy_slot("portfolio_create"):
+        return _create_portfolio(workspace_id, body, user, db, request)
+
+
+def _create_portfolio(
+    workspace_id: uuid.UUID, body: PortfolioIn, user: CurrentUser, db: DB, request: Request
+) -> dict[str, Any]:
     dv, ds = load_version(db, user, body.dataset_version_id)
     if ds.workspace_id != workspace_id:
         raise ApiError(422, "validation_error", "dataset version belongs to another workspace")
@@ -227,13 +235,20 @@ def get_portfolio(portfolio_id: uuid.UUID, user: CurrentUser, db: DB) -> dict[st
 
 
 @router.post("/portfolios/{portfolio_id}/transactions", status_code=201)
-@heavy("portfolio_transaction")  # taken before the row lock: a refusal never holds it
 def add_transaction(
     portfolio_id: uuid.UUID, body: TransactionIn, user: CurrentUser, db: DB, request: Request
 ) -> dict[str, Any]:
     """Append a transaction. The whole ledger is replayed first; rejected entries are not
     stored, so the ledger can never reach an impossible state."""
     p = _load(db, user, portfolio_id, Role.editor)
+    # The slot after the access check and before the row lock: a refusal never holds it.
+    with heavy_slot("portfolio_transaction"):
+        return _add_transaction(p, body, user, db, request)
+
+
+def _add_transaction(
+    p: Portfolio, body: TransactionIn, user: CurrentUser, db: DB, request: Request
+) -> dict[str, Any]:
     # Serialize appends per portfolio: the replay must see the latest ledger, and the
     # next sequence number must be unique.
     db.execute(select(Portfolio.id).where(Portfolio.id == p.id).with_for_update())
@@ -280,9 +295,13 @@ def add_transaction(
 
 
 @router.get("/portfolios/{portfolio_id}/valuation")
-@heavy("portfolio_valuation")
 def valuation(portfolio_id: uuid.UUID, user: CurrentUser, db: DB) -> dict[str, Any]:
     p = _load(db, user, portfolio_id)
+    with heavy_slot("portfolio_valuation"):
+        return _valuation(p, user, db)
+
+
+def _valuation(p: Portfolio, user: CurrentUser, db: DB) -> dict[str, Any]:
     entries = _entries(list(p.transactions))
     symbols = {e.symbol for e in entries if e.symbol}
     bars, actions, synthetic = _market(db, user, p, symbols)

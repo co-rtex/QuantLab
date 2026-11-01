@@ -90,6 +90,9 @@ backtest admission cap.
   | `QUANTLAB_API_MEMORY` | 1880M | the API container's memory limit |
   | `QUANTLAB_RATE_LIMIT_OPTIMIZE_PER_MINUTE` | 10 | optimizations per user and minute; beyond it `429 rate_limited` |
 
+* **The AWS deployment** (`infra/terraform`) has the same shape: the ECS API task has 2048 MiB
+  (`ecs.tf`), `api_workers` defaults to 2 (`variables.tf`), and the heavy bound is the app's
+  default of 1. That fits the 1,542 MiB measured below.
 * **When to raise `QUANTLAB_HEAVY_REQUESTS_PER_PROCESS` or `QUANTLAB_API_WORKERS`:** only when
   `server_busy` refusals are frequent, and only together with `QUANTLAB_API_MEMORY`,
   measured again as below.
@@ -118,6 +121,7 @@ backtest admission cap.
   | Configuration | Request load | Outcome | Anonymous memory |
   |---|---|---|---|
   | **Before** (no bound), 2048M | 16 optimizations | 12 dropped connections, `oom_kill +3`, `CONSTRAINT_MEMCG +3`, `global_oom +0` | peak 1933 MiB |
+  | 2 processes, 1 slot each, 2048M, first run (the limit's source: 1,566 × 1.2 = 1,879.2, so 1880M) | 4 optimizations | 2 × 200, 2 × 503 | peak 1566 MiB, idle 394 |
   | Defaults, `QUANTLAB_RATE_LIMIT_OPTIMIZE_PER_MINUTE=1000` (many users) | 16 optimizations | 2 × 200, 14 × 503 | peak 1529–1542 MiB, idle 392; within 1880M |
   | Defaults, `QUANTLAB_RATE_LIMIT_OPTIMIZE_PER_MINUTE=1000` (many users) | 8 optimizations + 8 valuations of a 50-symbol portfolio | 2 × 200, 14 × 503 | peak 657 MiB |
   | Defaults, as shipped (one user) | 16 optimizations | 1 × 200, 6 × 429, 9 × 503 | peak 1008 MiB |

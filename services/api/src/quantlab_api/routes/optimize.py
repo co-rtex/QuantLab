@@ -59,9 +59,18 @@ def optimize(version_id: uuid.UUID, body: OptimizeIn, user: CurrentUser, db: DB)
     and minute (429, the login limiter's fail-safe breaker included), and per process at
     once (503 server_busy with Retry-After, never queued)."""
     dv, ds = load_version(db, user, version_id)
-    login_limiter.check(f"optimize:user:{user.id}", get_settings().rate_limit_optimize_per_minute)
-    with heavy_slot("optimize"):
-        return _optimize(dv, ds, body)
+    receipt = login_limiter.reserve_receipt(
+        f"optimize:user:{user.id}", get_settings().rate_limit_optimize_per_minute
+    )
+    if not receipt:
+        raise ApiError(429, "rate_limited", "Too many attempts; try again later")
+    try:
+        with heavy_slot("optimize"):
+            return _optimize(dv, ds, body)
+    except ApiError as exc:
+        if exc.code == "server_busy":  # refused before any work: not one of the user's 10
+            login_limiter.refund(receipt)
+        raise
 
 
 def _optimize(dv: Any, ds: Any, body: OptimizeIn) -> dict[str, Any]:

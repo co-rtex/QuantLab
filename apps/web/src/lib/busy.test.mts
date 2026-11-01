@@ -9,12 +9,14 @@ type Busy = typeof import("./busy");
 // By URL, as csp.test.mts does: Node runs the .ts file, and tsc checks the types.
 const { busyRetrySeconds, sendRetryingBusy } = (await import(new URL("./busy.ts", import.meta.url).href)) as Busy;
 
-function busy(retryAfter = "0"): Response {
+function busy(retryAfter: string | null = "0", details?: unknown): Response {
   return Response.json(
-    { error: { code: "server_busy", message: "The server is busy with other analyses" } },
-    { status: 503, headers: { "retry-after": retryAfter } },
+    { error: { code: "server_busy", message: "The server is busy with other analyses", details } },
+    { status: 503, headers: retryAfter === null ? {} : { "retry-after": retryAfter } },
   );
 }
+
+const body = (details?: unknown) => ({ error: { code: "server_busy", details } });
 
 function sender(...responses: Response[]): { send: () => Promise<Response>; calls: () => number } {
   let n = 0;
@@ -57,8 +59,27 @@ test("any other 503, and any other status, is not sent again", async () => {
 });
 
 test("Retry-After is capped, so a page never waits long", () => {
-  assert.equal(busyRetrySeconds(busy("3600"), "server_busy"), 10);
-  assert.equal(busyRetrySeconds(busy("2"), "server_busy"), 2);
-  assert.equal(busyRetrySeconds(busy("soon"), "server_busy"), 1);
-  assert.equal(busyRetrySeconds(busy("2"), "other"), null);
+  assert.equal(busyRetrySeconds(busy("3600"), body()), 10);
+  assert.equal(busyRetrySeconds(busy("2"), body()), 2);
+  assert.equal(busyRetrySeconds(busy("2"), { error: { code: "other" } }), null);
+});
+
+test("without the header, the body's retry_after_seconds, then 2 seconds: never at once", () => {
+  // #223 review B1: the proxy dropped Retry-After, Number(null) was 0, and the immediate
+  // retry met a second refusal.
+  assert.equal(busyRetrySeconds(busy(null), body({ retry_after_seconds: 3 })), 3);
+  assert.equal(busyRetrySeconds(busy(null), body()), 2);
+  assert.equal(busyRetrySeconds(busy(""), body()), 2);
+  assert.equal(busyRetrySeconds(busy("soon"), body({ retry_after_seconds: 4 })), 4);
+  assert.equal(busyRetrySeconds(busy("soon"), body()), 2);
+});
+
+test("a 503 without the header still waits before its one retry", async () => {
+  const s = sender(busy(null, { retry_after_seconds: 0.05 }), Response.json({ ok: true }));
+  const told: number[] = [];
+  const t = Date.now();
+  const res = await sendRetryingBusy(s.send, (seconds) => told.push(seconds));
+  assert.equal(res.status, 200);
+  assert.deepEqual(told, [0.05]);
+  assert.ok(Date.now() - t >= 40, "it waited");
 });

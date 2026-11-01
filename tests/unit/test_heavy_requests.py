@@ -56,18 +56,13 @@ def test_a_failing_request_gives_its_slot_back(slots) -> None:  # type: ignore[n
         pass
 
 
-def test_the_decorator_bounds_a_route_and_keeps_its_signature(slots) -> None:  # type: ignore[no-untyped-def]
-    import inspect
+def test_a_refusal_is_immediate_never_a_wait(slots) -> None:  # type: ignore[no-untyped-def]
+    """Never queued: a request that waited for a slot would hold its thread meanwhile."""
+    import time
 
     slots(1)
-
-    def plain(x: int, *, y: str = "a") -> str:
-        """Doc."""
+    with limits.heavy_slot("probe"):
+        t = time.monotonic()
         with pytest.raises(ApiError), limits.heavy_slot("probe"):
             pass
-        return f"{x}{y}"
-
-    route = limits.heavy("probe")(plain)
-    assert route(1, y="b") == "1b"
-    assert inspect.signature(route) == inspect.signature(plain)  # what FastAPI reads
-    assert route.__doc__ == "Doc."
+        assert time.monotonic() - t < 0.2

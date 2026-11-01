@@ -43,13 +43,17 @@ export default function PortfolioPage() {
   const v = useApi<Valuation>(`/portfolios/${id}/valuation?n=${nonce}`);
   const [err, setErr] = useState<ApiError>();
   const [txBusy, setTxBusy] = useState<number>();
+  // In flight (including a busy server's wait): one click records one transaction.
+  const [txPending, setTxPending] = useState(false);
   const [kind, setKind] = useState("buy");
 
   async function add(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();
+    if (txPending) return;
     const form = e.currentTarget; // capture before await: React clears currentTarget
     const f = new FormData(form);
     setErr(undefined);
+    setTxPending(true);
     const trade = kind === "buy" || kind === "sell";
     try {
       await api(`/portfolios/${id}/transactions`, {
@@ -71,6 +75,7 @@ export default function PortfolioPage() {
       setErr(x as ApiError);
     }
     setTxBusy(undefined);
+    setTxPending(false);
   }
 
   if (p.error && !p.data) return <QueryError q={p} what="this portfolio" />;
@@ -152,7 +157,9 @@ export default function PortfolioPage() {
             <div className="col-span-2">
               <ErrorNote error={err} />
               <BusyNote seconds={txBusy} />
-              <button className="btn btn-primary mt-2">Record transaction</button>
+              <button className="btn btn-primary mt-2" disabled={txPending}>
+                {txPending ? "Recording…" : "Record transaction"}
+              </button>
               <p className="mt-2 text-xs text-ink-3">The ledger is append-only. A transaction that would overdraw cash or sell more than you hold is rejected and nothing is stored.</p>
             </div>
           </form>

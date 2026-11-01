@@ -3,14 +3,13 @@ memory bound a backtest must fit at submission (#163)."""
 
 from __future__ import annotations
 
-import functools
 import math
 import threading
-from collections.abc import Callable, Iterable, Iterator
+from collections.abc import Iterable, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import date
-from typing import Any, TypeVar
+from typing import Any
 
 import pandas as pd
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
@@ -242,7 +241,6 @@ def check_backtest_memory(cost: BacktestCost, limit_mb: int) -> None:
 # drove the Docker VM into a global OOM, in which the kernel killed API processes and
 # could have killed Postgres. Each process admits at most heavy_requests_per_process of
 # them at a time; more are refused at once, never queued.
-F = TypeVar("F", bound=Callable[..., Any])
 _heavy_lock = threading.Lock()
 _heavy: threading.BoundedSemaphore | None = None
 HEAVY_RETRY_AFTER_SECONDS = 2
@@ -284,19 +282,3 @@ def heavy_slot(route: str) -> Iterator[None]:
         yield
     finally:
         sem.release()
-
-
-def heavy(route: str) -> Callable[[F], F]:
-    """``heavy_slot`` around a whole sync route. FastAPI resolves its dependencies (the
-    signed-in user among them) before calling it, so only authorized requests take a slot.
-    """
-
-    def deco(fn: F) -> F:
-        @functools.wraps(fn)
-        def wrapper(*args: Any, **kwargs: Any) -> Any:
-            with heavy_slot(route):
-                return fn(*args, **kwargs)
-
-        return wrapper  # type: ignore[return-value]
-
-    return deco
