@@ -29,7 +29,8 @@ from quantlab_api.tracing import setup_tracing
 # keepalive run without Redis (jobs.py), so these are not a reason to stop a worker.
 REDIS_DOWN = (redis.exceptions.ConnectionError, redis.exceptions.TimeoutError)
 # Redis answering "no": subclasses of ConnectionError, but a wrong or rotated password is a
-# configuration error, not an outage. It must stop the worker loudly, not be logged forever.
+# configuration error, not an outage: re-raised, it stops a busy worker. (An idle one stays
+# in RQ's own dequeue retry, which catches every ConnectionError; docs/RUNBOOK.md.)
 REDIS_REFUSED = (redis.exceptions.AuthenticationError, redis.exceptions.AuthorizationError)
 
 
@@ -136,6 +137,11 @@ class QuantlabWorker(Worker):
         try:
             try:
                 super().execute_job(job, queue)
+            except REDIS_REFUSED:
+                # Stops the worker (see _redis_down), but never with the horse still running:
+                # it is waited out and its death classified first, as in an outage.
+                self._after_lost_bookkeeping(job)
+                raise
             except REDIS_DOWN as exc:
                 # Before the fork, or after the horse exited: the monitor waits on the horse
                 # through an outage (above). RQ's record of the job is incomplete then; its

@@ -150,6 +150,29 @@ def test_a_horse_still_running_is_waited_out_never_left(monkeypatch: pytest.Monk
     assert waited == [4242] and w.horse_pid == 0
 
 
+@pytest.mark.parametrize("exc", REFUSED, ids=["authentication", "authorization"])
+def test_a_refused_password_mid_job_waits_for_the_horse_before_stopping(
+    monkeypatch: pytest.MonkeyPatch, exc: Exception
+) -> None:
+    """A refused password stops the worker, but not by leaving its horse running."""
+    waited: list[int] = []
+
+    def fail_while_running(self: Worker, job: Any, queue: Any) -> None:
+        self._horse_pid = 4242
+        raise exc
+
+    def wait(self: Worker) -> tuple[Any, Any, Any]:
+        waited.append(self.horse_pid)
+        return (4242, 0, None)
+
+    monkeypatch.setattr(Worker, "execute_job", fail_while_running)
+    monkeypatch.setattr(Worker, "wait_for_horse", wait)
+    w = worker()
+    with pytest.raises(type(exc)):
+        w.execute_job(None, None)
+    assert waited == [4242] and w.horse_pid == 0
+
+
 def _killed_in_an_outage(
     monkeypatch: pytest.MonkeyPatch, stat: int, rq_handled: bool
 ) -> list[tuple]:
