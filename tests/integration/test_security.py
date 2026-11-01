@@ -366,7 +366,7 @@ def test_fallback_limiter_is_bounded_and_atomic_reserve():
     assert lim.reserve("victim", 2) is False
     # Constant memory: one fixed table per window length, however many keys.
     assert [len(counts) for counts, _ in lim._tables.values()] == [RateLimiter.SHARDS]
-    lim.refund("victim")  # ignored in degraded mode (shards may be shared)
+    lim.refund(lim.reserve_receipt("victim", 2))  # a local count: never given back (shared)
     assert lim.reserve("victim", 2) is False
 
 
