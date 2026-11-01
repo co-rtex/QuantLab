@@ -40,26 +40,53 @@ def _windows(seed: int, lookback: int, every: int = 10):
             yield w
 
 
-def _raw_weights(monkeypatch) -> dict[str, np.ndarray]:
-    """Allocator output before drop_dust, for the strategy's and the optimize API's inputs."""
+METHODS = ("strategy", "api_min", "api_mean")
+# Fewest successful solves per method the gap test accepts, so that it can't pass vacuously
+# on a platform where SLSQP fails more often. Counted for #251: macOS (Accelerate) solves
+# 192, 78 and 78 with no failure; the Linux image (OpenBLAS) 192, 78 and 75, with 3
+# mean_variance solves failing (#253).
+MIN_SOLVED = {"strategy": 150, "api_min": 60, "api_mean": 60}
+
+
+def _raw_weights(monkeypatch) -> tuple[dict[str, np.ndarray], dict[str, int], dict[str, int]]:
+    """Allocator output before drop_dust, for the strategy's and the optimize API's inputs,
+    with the solves that succeeded and failed per method.
+
+    A failed solve (OptimizationError) is counted and left out of the classification: it
+    returns no weights to classify. SLSQP's "Positive directional derivative for
+    linesearch" exit is #253; it depends on the platform's BLAS (OpenBLAS on Linux fails
+    some API-default mean_variance solves that Accelerate on macOS completes)."""
     monkeypatch.setattr(allocators, "DUST_WEIGHT", 0.0)
-    out: dict[str, list[np.ndarray]] = {"strategy": [], "api_min": [], "api_mean": []}
+    out: dict[str, list[np.ndarray]] = {m: [] for m in METHODS}
+    solved, failed = dict.fromkeys(METHODS, 0), dict.fromkeys(METHODS, 0)
+
+    def solve(method: str, fn) -> None:
+        try:
+            out[method].append(fn())
+            solved[method] += 1
+        except allocators.OptimizationError:
+            failed[method] += 1
+
     for seed in MARKETS:
         for w in _windows(seed, 126):  # MinimumVariance defaults: sample covariance
             cap = max(0.25, 1.0 / w.shape[1])
-            out["strategy"].append(min_variance(w.cov(ddof=1).to_numpy() * 252, Bounds(0, cap)))
+            cov = w.cov(ddof=1).to_numpy() * 252
+            solve("strategy", lambda: min_variance(cov, Bounds(0, cap)))
         for w in _windows(seed, 252, every=20):  # the optimize API's defaults
             cov = covariance(w, method="ledoit_wolf").to_numpy()
             cap = max(0.4, 1.0 / w.shape[1])
-            out["api_min"].append(min_variance(cov, Bounds(0, cap)))
-            out["api_mean"].append(
-                mean_variance(w.mean().to_numpy() * 252, cov, 5.0, Bounds(0, cap))
-            )
-    return {k: np.concatenate(v) for k, v in out.items()}
+            mu = w.mean().to_numpy() * 252
+            solve("api_min", lambda: min_variance(cov, Bounds(0, cap)))
+            solve("api_mean", lambda: mean_variance(mu, cov, 5.0, Bounds(0, cap)))
+    weights = {m: np.concatenate(v) if v else np.empty(0) for m, v in out.items()}
+    return weights, solved, failed
 
 
 def test_solver_residue_and_real_weights_are_separated_by_an_empty_gap(monkeypatch):
-    for name, w in _raw_weights(monkeypatch).items():
+    weights, solved, failed = _raw_weights(monkeypatch)
+    print(f"solved {solved} failed {failed}")  # quoted per platform in #251
+    for name, w in weights.items():
+        assert solved[name] >= MIN_SOLVED[name], (name, solved, failed)  # not vacuous
         inside = w[(w >= GAP[0]) & (w < GAP[1])]
         assert len(inside) == 0, (name, sorted(inside)[:5])
         assert (w[w > 0] < GAP[0]).any(), name  # residue does occur: the test is not vacuous
