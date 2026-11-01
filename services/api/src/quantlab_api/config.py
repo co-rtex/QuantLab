@@ -120,6 +120,10 @@ class Settings(BaseSettings):
     # times per user and minute (429). Defaults from docs/RUNBOOK.md, "Resources".
     heavy_requests_per_process: int = Field(1, ge=1, le=16)
     rate_limit_optimize_per_minute: int = Field(10, ge=1)
+    # Transactions one portfolio may hold (#218): each append replays the whole ledger under
+    # the portfolio's row lock. Measured on the API at 10,000: an append ~0.7 s and +196 MiB
+    # at most; at 20,000, 1 s or more (docs/RUNBOOK.md, "Portfolio ledger cap").
+    max_portfolio_transactions: int = Field(10_000, ge=1)
     # Peers allowed to state the client address in X-Forwarded-For: IPs, CIDRs or hostnames
     # (e.g. the compose service "web"). Requests from anyone else use the socket address.
     trusted_proxies: list[str] = []
