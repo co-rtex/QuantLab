@@ -1,6 +1,6 @@
 # Status (authoritative handoff)
 
-_Last updated: 2026-10-31 (lead integration cycle 2: 115 PRs merged before this update, per `gh pr list --state merged`; main `e7cf4fd`)_
+_Last updated: 2026-10-31 (lead integration cycle 2: 122 PRs merged before this update, per `gh pr list --state merged`; main `5896cb3`)_
 
 ## Where things stand
 All roadmap phases 0–10 are implemented. An independent audit on 2026-10-30
@@ -25,7 +25,7 @@ leases and migration slots: [docs/COORDINATION.md](docs/COORDINATION.md).
 | Area | State |
 |---|---|
 | Market data | Synthetic and CSV providers, NYSE calendar, PIT adjustment, quality checks, content-addressed Parquet versions, DuckDB + Redis retrieval, resumable ingestion |
-| Simulation | Event-driven engine v1.4.0 (next-session fills, no fills on zero-volume bars, costs, pro-rata partial fills, PIT delisting), 9 strategies, ledger with replay invariants |
+| Simulation | Event-driven engine v1.4.1 (next-session fills, no fills on zero-volume bars, costs, pro-rata partial fills, PIT delisting), 9 strategies, ledger with replay invariants |
 | Analytics | Performance (undefined-aware), VaR/ES, drawdowns, attribution, factor exposures (Newey-West), Monte Carlo, stress, optimizers |
 | Research | Walk-forward, sensitivity, cost sweeps, bootstrap CIs, PSR/DSR, regimes, engine-level leakage check, Research Integrity Report, ML pipeline with purged CV |
 | Product | Auth, workspaces and roles, experiments, comparison, reproduction, portfolios, construction, ML, grounded assistant, HTML/Markdown reports |
@@ -303,13 +303,14 @@ a separate clone.
    docs/RELEASE_READINESS.md, "Status update".
 2. **Verified on merged main:** the independent job-recovery confirmation (`6fcdd07`) and
    the lead's integrated gate (`e7cf4fd`). See docs/RELEASE_READINESS.md.
-3. **Agent 2:** #175 (Docker VM vs container limits, experiment running), then #179
-   (reaper metrics), #185 (Redis outage), #186 (reaper double delivery), #166 (CSP).
-4. **Agent 3:** #180/#184 (reference backtester and rejection-log fix, engine 1.4.1), then
-   #187 (phantom top-ups, engine 1.5.0), #181 (admission edge cases) and #182
-   (reproducibility).
-5. **Lead:** integrate; private release-candidate decision after #184, #187 and #181.
-6. **User decisions (2026-10-31):**
+3. **Merged this cycle:** #183, #189, #190 (engine 1.4.1), #191, #197, #198 and #199. See
+   docs/RELEASE_READINESS.md.
+4. **Agent 2:** #201 (P1, Swagger same-origin), #202 (P1, console logger), then #200.
+5. **Agent 3:** engine 1.5.0 (#187, #195, #196 in one PR), then #192 (#181), then #193
+   (#182, its stack test needs a lead-scheduled window).
+6. **Lead:** integrate; the private release-candidate decision after engine 1.5.0, #192,
+   #201 and #202, then a final integrated gate.
+7. **User decisions (2026-10-31):**
    * Public deployment and paid infrastructure **stay blocked** (#39 gate, any
      `terraform apply`).
    * #55 option A (uniform registration with email verification) is **deferred**
@@ -325,7 +326,7 @@ a separate clone.
    * Then an independent release-candidate assessment and a classified list of release
      blockers, not new feature work.
    * Paid market-data services and hosted LLM usage stay blocked.
-7. **Blocked on the user:**
+8. **Blocked on the user:**
    * #39 (a host that preserves client addresses, a second machine, and a real NLB; the
      Caddyfiles pass local checks only, #158);
    * #11 and #12 live (vendor, licence and key);

@@ -34,8 +34,9 @@ The rules, per session ``d`` of the window, in order:
    billionth of the need is rounding dust and counts as none. Sells run first, then buys,
    each group by instrument id. A buy is cut to what the cash can fund, including
    commission ``max(commission_min, notional x bps)``; one cut to nothing is rejected
-   ``insufficient_cash`` (#184). With whole shares, a buy under one share that no
-   shortfall caused (a top-up of a holding a split left fractional) is not an order.
+   ``insufficient_cash`` (#184). With whole shares, a buy that is under one share as it
+   reaches the fill (after any split restatement; a top-up of a holding a split left
+   fractional) is rejected ``below_one_share`` and takes no part in the scaling (#187).
 4. **Mark** at the close, or at the last close for an instrument without a bar. A position
    marked on a missing bar or a zero-volume bar is a stale mark.
 5. **Decision** at the close of a rebalance session (the last session of each period and
@@ -238,6 +239,11 @@ def run_reference(
 
     slip, comm = cfg["slippage_bps"] / 1e4, cfg["commission_bps"] / 1e4
     cmin, whole = cfg["commission_min"], not cfg["fractional_shares"]
+
+    def fee(value: float) -> float:
+        """A trade's commission: the larger of the minimum and the rate on its value."""
+        return max(cmin, value * comm) if value else 0.0
+
     res = Result()
     cash = float(cfg["initial_capital"])
     qty: dict[str, float] = {}
@@ -245,7 +251,6 @@ def run_reference(
     missing = dict.fromkeys(ids, 0)
     delisted: set[str] = set()
     pending: list[Order] = []
-    dropped: list[tuple[pd.Timestamp, str, float, bool]] = []
     total = {"commission": 0.0, "slippage": 0.0, "dividends": 0.0}
     counts = dict.fromkeys(
         (
@@ -356,24 +361,47 @@ def run_reference(
                     why[o.iid] = "no_volume"
                 else:
                     ref[o.iid] = b.open if cfg["execution"] == "next_open" else b.close
+
+            # From METHODOLOGY step 4 (#195): a sell's proceeds are its value at the fill
+            # price with slippage, less its commission.
             after_sells = cash
             for o in pending:
                 if o.qty < 0 and o.iid in ref:
-                    sold = min(-o.qty, qty.get(o.iid, 0.0))
-                    after_sells += sold * ref[o.iid] * (1 - slip) * (1 - comm)
-            need = sum(
-                o.qty * ref[o.iid] * (1 + slip) * (1 + comm) + cmin
-                for o in pending
-                if o.qty > 0 and o.iid in ref and o.iid not in delisted
-            )
+                    value = min(-o.qty, qty.get(o.iid, 0.0)) * ref[o.iid] * (1 - slip)
+                    after_sells += value - fee(value)
+            # With whole shares, a buy that reaches the fill (after any split restatement)
+            # under one share has no lot to buy: it is rejected, and it neither counts toward
+            # the need nor is scaled (#187).
+            no_lot = {o.iid for o in pending if whole and 0 < o.qty < 1 - 1e-9}
+            real = [o for o in pending if o.qty > 0 and o.iid not in no_lot]
+            worth = [
+                o.qty * ref[o.iid] * (1 + slip)
+                for o in real
+                if o.iid in ref and o.iid not in delisted
+            ]
+
+            def cost(factor: float, worth: list[float] = worth) -> float:
+                return sum(factor * v + fee(factor * v) for v in worth)
+
             # Cash of at most a billionth of the need is rounding dust: there is no cash for
-            # any buy, so none is scaled and none is bought (#184).
-            broke = need > 0 and after_sells <= need * 1e-9
-            if not broke and need > 0 and after_sells < need:
-                for o in pending:
-                    if o.qty > 0:
-                        o.qty *= after_sells / need
-                        o.scaled = True
+            # any buy, so none is scaled and none is bought (#184). Nor is there when the
+            # minimum commissions alone take it all: every buy is then rejected.
+            broke = bool(worth) and (
+                after_sells <= cost(1.0) * 1e-9
+                or (cost(1.0) > after_sells and cmin > 0 and len(worth) * cmin >= after_sells)
+            )
+            if worth and not broke and cost(1.0) > after_sells:
+                # The largest common factor whose scaled buys fit the cash, by bisection
+                # (the engine solves it in closed form).
+                lo, hi = 0.0, 1.0
+                for _ in range(200):
+                    mid = (lo + hi) / 2
+                    if mid in (lo, hi):
+                        break
+                    lo, hi = (mid, hi) if cost(mid) <= after_sells else (lo, mid)
+                for o in real:
+                    o.qty *= lo
+                    o.scaled = True
             for o in sorted(pending, key=lambda o: (o.qty > 0, o.iid)):
                 if o.qty > 0 and o.iid in delisted:
                     reject(day, o, "delisted")
@@ -390,23 +418,31 @@ def run_reference(
                         continue
                     px = r * (1 - slip)
                 else:
-                    q = math.floor(o.qty + 1e-9) if whole else o.qty
-                    if q == 0 and not o.scaled:
-                        # Under one share without any cash shortfall: a top-up of a holding
-                        # a split left fractional. Neither filled nor rejected.
-                        dropped.append((day, o.iid, o.qty, o.scaled))
+                    if o.iid in no_lot:
+                        reject(day, o, "below_one_share")
                         continue
+                    q = math.floor(o.qty + 1e-9) if whole else o.qty
                     if broke:
                         reject(day, o, "insufficient_cash")
                         continue
                     px = r * (1 + slip)
-                    can = cash / (px * (1 + comm)) if px > 0 else 0.0
-                    if cmin:
-                        can = min(can, (cash - cmin) / px)
+                    # The most the cash can buy: q px (1 + bps) <= cash and q px + cmin <= cash.
+                    can = min(cash / (px * (1 + comm)), (cash - cmin) / px) if px > 0 else 0.0
                     if whole:
                         can = math.floor(can + 1e-9)
                     if can < q - 1e-9:
                         q, partial = max(can, 0.0), True
+                    # The cash may not go more than 1e-9 dollars below zero. A buy that float
+                    # rounding leaves a hair over is made smaller until it fits (#196).
+                    # One share at a time, or a fractional step that doubles from one unit in
+                    # the last place.
+                    shave, tries = math.ulp(q), 0
+                    while q > 0 and cash - (q * px + fee(q * px)) < -EPS and tries < 128:
+                        if whole:
+                            q -= 1
+                        else:
+                            q, shave = max(q - shave, 0.0), 2 * shave
+                        partial, tries = True, tries + 1
                     # Nothing left to buy (scaled under one share, or no affordable amount
                     # the ledger can book): a shortfall of cash (#184).
                     if q < EPS:
@@ -417,8 +453,12 @@ def run_reference(
                 if abs(q) < EPS:
                     reject(day, o, "InvalidOrder")
                     continue
-                if cash - q * px - commission < -EPS:
-                    reject(day, o, "InsufficientCash")
+                # As the cash is updated below, cash - (cost), not (cash - value) - fee:
+                # at 1e8 and more the two round differently by more than EPS.
+                if cash - (q * px + commission) < -EPS:
+                    # Only a sell can get here: its commission is more than its proceeds and
+                    # the cash can cover (#196).
+                    reject(day, o, "commission_exceeds_proceeds" if q < 0 else "InsufficientCash")
                     continue
                 cash -= q * px + commission
                 set_qty(o.iid, held + q)
@@ -528,7 +568,6 @@ def run_reference(
             "final_equity_share": final_share,
         },
     }
-    res.meta["dropped_buys"] = dropped
     res.meta["final_cash"] = cash
     res.meta["final_positions"] = dict(qty)
     return res

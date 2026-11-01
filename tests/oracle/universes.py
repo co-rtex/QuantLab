@@ -14,8 +14,9 @@ master. The events are combined at random:
   and a delisting after the last session;
 * renames, and a ticker reused by a later instrument after the first one ends;
 * configurations that vary execution, costs, minimum commissions, whole or fractional
-  shares, small capital (so cash runs short and buys are scaled), weight and exposure
-  caps, a minimum trade value, the missing-bars threshold, the window and the frequency.
+  shares, small capital (so cash runs short and buys are scaled), large capital (1e8 to
+  1e12, where cash rounding is dollars, #196), weight and exposure caps, a minimum trade
+  value, the missing-bars threshold, the window and the frequency.
 """
 
 from __future__ import annotations
@@ -258,4 +259,8 @@ def _config(rng: np.random.Generator, days: pd.DatetimeIndex) -> dict[str, Any]:
         cfg["start"] = (days[int(rng.integers(1, n // 3))] - int(rng.integers(0, 2)) * DAY).date()
     if rng.random() < 0.2:
         cfg["end"] = days[int(rng.integers(2 * n // 3, n - 1))].date()
+    # A quarter of the seeds run a large account, 1e8 to 1e12, where cash rounding is dollars
+    # rather than fractions of a cent (#196). Drawn last, so the other draws are unchanged.
+    if rng.random() < 0.25:
+        cfg["initial_capital"] = float(10 ** rng.uniform(8, 12))
     return cfg
