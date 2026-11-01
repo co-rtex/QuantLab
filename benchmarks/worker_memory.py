@@ -141,6 +141,8 @@ def main() -> None:
     ap.add_argument("--rebalance", nargs="+", default=["daily", "monthly"])
     ap.add_argument("--strategy", nargs="+", default=["equal_weight"])
     ap.add_argument("--out", type=Path)
+    # The commit the stack's images were built from, when this script runs from a copy.
+    ap.add_argument("--stack-commit")
     a = ap.parse_args()
     _compose("up", "-d", "--no-deps", "--scale", "worker=1", "--wait", "worker")
     c = httpx.Client(base_url=API, timeout=60)
@@ -154,6 +156,7 @@ def main() -> None:
     res = harness.finalize(
         {
             "mode": "worker_memory",
+            "stack_commit": a.stack_commit,
             "environment": harness.machine(),
             "data_is_synthetic": True,
             "dataset": {
