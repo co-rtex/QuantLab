@@ -33,6 +33,13 @@ Dependency-ordered. ✅ done and verified · 🔶 partial · ⬜ not started.
 | 11 | Account-wide job and workspace quotas (#2) | ✅ |
 | 11 | Post-audit backlog: tracked as GitHub issues, below | 🔶 |
 
+## Release
+* ✅ **Private release candidate `v0.1.0-rc.1`** on `7fc89ee` (2026-11-01): READY with
+  caveats, per the lead's integrated gate and an independent assessment
+  (docs/RELEASE_READINESS.md). Public deployment stays prohibited (#39, #168).
+* ⬜ **rc.2:** #237 (P1, validation with an explicit universe), #238 (P2, assistant "-0.00"),
+  #239 (P3, minor messages and docs).
+
 ## Post-audit backlog (dependency order)
 
 Owners, file ownership and migration slots: [docs/COORDINATION.md](docs/COORDINATION.md).

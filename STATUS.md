@@ -302,9 +302,11 @@ lives in the repository's git directory, so it covers every worktree of this clo
 a separate clone.
 
 ## Next steps (issues carry owners and acceptance criteria)
-1. **Private release candidate:** main `7fc89ee`. The verdict, the evidence, the requirements
-   and the known limitations are in docs/RELEASE_READINESS.md ("Private release candidate,
-   2026-11-01"). Public deployment stays prohibited (#39).
+1. **Private release candidate `v0.1.0-rc.1` on `7fc89ee`: READY, with caveats.** The
+   lead's integrated gate and an independent fresh-clone assessment both pass; no release
+   blocker for private use. Evidence, requirements and known limitations are in
+   docs/RELEASE_READINESS.md ("Private release candidate, 2026-11-01"). rc.2: #237 (P1,
+   Agent 3), #238 (P2, Agent 2), #239 (P3). Public deployment stays prohibited (#39).
 2. **Merged this cycle (cycle 3, 2026-11-01), each with an independent review where it
    changed behaviour, a lead trial on current main and green CI:**
    * Engine **1.5.0** (#209: #187, #195, #196) and **1.6.0** (#226: #215, float-noise
