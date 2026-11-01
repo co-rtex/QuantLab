@@ -65,6 +65,12 @@ make web-dev          # frontend on :3000            (terminal 4)
 
 Or run everything in containers: `make app-up` (web on :3000, API on :8000, two workers).
 
+**Local only.** Every port is bound to 127.0.0.1. **Public exposure is prohibited until
+#39 is closed.** It needs the TLS edge on an address-preserving Linux host, its verification
+from a second machine, and the lead's rerun ([RUNBOOK, Exposing a
+deployment](docs/RUNBOOK.md#exposing-a-deployment)). Never publish the web tier, the API,
+Postgres, Redis, Prometheus, Grafana or Jaeger directly.
+
 Open http://localhost:3000, create an account, generate a synthetic dataset under
 **Market data**, then create an experiment. API docs: http://localhost:8000/api/v1/docs, served only with `QUANTLAB_ENVIRONMENT=development`
 (the default) and never through the web app's `/api` proxy (#201).

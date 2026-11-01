@@ -20,8 +20,8 @@ def _shared_dev_secret(data_dir: Path) -> SecretStr:
     """A development signing key shared by every process using ``data_dir``.
 
     A random per-process key breaks as soon as the API runs more than one worker
-    (``uvicorn --workers 4``): a token signed by one worker is rejected by the others, so
-    roughly three requests in four fail. Processes take an exclusive lock on a separate
+    (``uvicorn --workers N``): a token signed by one worker is rejected by the others, so
+    about (N-1)/N of requests fail. Processes take an exclusive lock on a separate
     lock file, so exactly one of them creates (or repairs) the key while the others wait
     and then read it. The key is written to a private temporary file and renamed into
     place, so even a reader that ignores the lock never sees half a key.
