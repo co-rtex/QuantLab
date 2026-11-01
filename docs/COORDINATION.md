@@ -56,7 +56,7 @@ follow-up docs commit. A lease ends when the PR that used it merges or closes.
 | `scripts/case_study.py` | — | (Agent 2's invitation fix merged in #37) |
 | `services/api/src/quantlab_api/main.py` | — | (#128 merged) |
 | `services/api/alembic/versions/**` | see migration slots | |
-| `docker-compose.yml` | — | (#170 merged; #228 open: API memory limit and workers) |
+| `docker-compose.yml` | — | (#170, #228 merged) |
 | `Makefile`, `scripts/stack-env.sh` | — | |
 | `pyproject.toml`, `uv.lock`, `apps/web/package*.json` | — | |
 | `.github/workflows/**` | lead only | |
@@ -129,6 +129,23 @@ and `quantlab_redisdata` (created 2026-10-30).
   after the affected records are identified and a verified backup exists. It needs the
   user's separate explicit approval.
 
+
+**Incident (2026-11-01): VM-wide OOM during the #223 measurement.** Agent 2's slot-21
+measurement of 16 concurrent optimize requests drove the Docker VM into a global OOM
+(`CONSTRAINT_NONE`), which killed two API processes; the first kill was triggered by an
+allocation in Postgres, so any container could have been hit. Only slot 21's stack was up,
+under the lock; no other slot and none of the main checkout's containers or volumes were
+affected (the lead checked: `quantlab_pgdata`, `quantlab_appdata`, `quantlab_redisdata`
+present). Fixed by #228 (an API memory limit, so an OOM stays inside the API's cgroup, and a
+per-process bound on heavy requests). Rule: measure memory-heavy load only with every
+container's memory limit set.
+
+**Near-miss (2026-11-01): a bare compose command in a worktree.** A #230 test script ran
+`docker compose --profile app up/down` with only `QUANTLAB_SLOT` exported, which resolves
+to the main project `quantlab`. The permission classifier denied it before it ran; nothing
+was touched. It is the third occurrence of this hazard (after the 2026-10-31 incident above
+and #193's restart test, caught in review). Use `make` targets or an explicit
+`-p <slot project>`; a structural guard is #233.
 Export `QUANTLAB_SLOT` in every shell (`export QUANTLAB_SLOT=21`), then use `make up`,
 `make test`, `make app-up`, `make e2e` as usual. Integration tests use a per-worktree test
 database.
@@ -141,9 +158,11 @@ at once in the shared VM. Named volumes are kept either way. Two consequences:
 * A crash-recovery probe on a worktree slot must set `QUANTLAB_RESTART_POLICY=unless-stopped`
   itself, and still run under `scripts/fullstack-lock.sh run ...`.
 
-**Docker memory budget.** The Docker VM on this machine has 3.8 GiB. A full `make app-up`
-stack peaks around 1.7 GB, and three full stacks at once caused API OOM kills
-(2026-10-30). Rules:
+**Docker memory budget.** The Docker VM on this machine has 3.8 GiB (3918 MiB), below the
+documented 5120 MiB minimum for the default stack since #228 (docs/RUNBOOK.md,
+"Resources"). On 2026-10-30 a full `make app-up` stack peaked around 1.7 GB idle and three
+full stacks at once caused API OOM kills; RUNBOOK's measured peak under backtests is
+3,685 MiB, and the default stack's memory limits now total 4,952 MiB. Rules:
 * For pytest, run `make up` (Postgres + Redis only, under 100 MB).
 * Full-stack runs are **serialized**. Use `make e2e-serial`: it takes the lock in
   `scripts/fullstack-lock.sh`, which every worktree of this repository shares through
