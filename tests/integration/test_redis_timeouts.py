@@ -66,9 +66,22 @@ def test_the_rate_limiter_still_limits_counting_in_the_process(client, silent) -
     assert (refused.value.status, refused.value.code) == (429, "rate_limited")
 
 
-def test_a_login_still_succeeds(client, silent) -> None:
+def test_a_login_still_succeeds_after_one_redis_wait(client, silent, monkeypatch) -> None:
+    """The limiter's first failed call opens its breaker (#207): the rest of this
+    registration and login count locally without asking Redis. Before, each call waited
+    a timeout: three per login, 15.21 s live."""
+    import redis
+
     from tests.integration.conftest import register
 
+    commands: list[str] = []
+    real = redis.Redis.execute_command
+
+    def counted(self, *args, **kwargs):  # type: ignore[no-untyped-def]
+        commands.append(str(args[0]))
+        return real(self, *args, **kwargs)
+
+    monkeypatch.setattr(redis.Redis, "execute_command", counted)
     register(client)
     r, elapsed = _timed(
         lambda: client.post(
@@ -76,8 +89,8 @@ def test_a_login_still_succeeds(client, silent) -> None:
         )
     )
     assert r.status_code == 200, r.text
-    # Several limiter calls per login, each up to a timeout: bounded, not minutes.
-    assert elapsed < 10 * T + 2, elapsed
+    assert commands == ["INCRBY"], commands  # the registration's first check, then none
+    assert elapsed < 1 + T, elapsed
 
 
 def test_bars_are_served_bypassing_the_cache(client, seeded, silent) -> None:

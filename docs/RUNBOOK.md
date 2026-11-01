@@ -152,11 +152,16 @@ A worker, reaper or API host with a skewed clock no longer moves any job deadlin
     once, without retries (#200). Then:
     * `/api/v1/ready` reports 503 with `redis: error`;
     * the login and invitation rate limits are counted in each API process instead, so
-      they still limit;
+      they still limit. After its first failed call, each process's limiter skips Redis
+      for 10 s, then one call tries it again (#207). `quantlab_rate_limiter_breaker_open`
+      is 1 meanwhile, with `rate_limiter_breaker_open` and `rate_limiter_breaker_closed`
+      in the API's log;
     * bar reads skip the cache (`"cache": "bypass"`);
     * a submitted job stays `queued` until the reaper delivers it, once Redis answers.
-    A request that makes several calls waits for each. A login makes three (two when the
-    password is wrong; measured), so it takes about 15 s while Redis hangs.
+    A request that makes several calls waits for each. A login made three limiter calls
+    (two with a wrong password), so it took 15.21 s with Redis paused (#200's probe). With
+    the limiter's breaker, a process waits once per 10 s instead, and other logins don't
+    wait at all meanwhile.
   * **A worker:** once connected, a call blocks for up to 415 s: RQ raises the connection's
     socket timeout to its dequeue timeout plus 10 s (`worker_ttl` 420 − 15 + 10), so a
     blocking dequeue isn't cut short. That is about 7 minutes per attempt.
