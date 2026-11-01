@@ -529,8 +529,14 @@ def run_reference(
                     want = weights.get(iid, 0.0) * equity / px
                     if whole:
                         want = math.floor(want + 1e-9)
-                    delta = want - qty.get(iid, 0.0)
-                    if abs(delta) < 1e-9 or abs(delta) * px < cfg["min_trade_value"]:
+                    have = qty.get(iid, 0.0)
+                    delta = want - have
+                    # No order for a change under 1e-9 shares, or under a trillionth of the
+                    # larger of the target and the holding: float noise, not a trade (#215).
+                    scale = max(1.0, abs(want), abs(have))
+                    if abs(delta) < 1e-9 or abs(delta) < scale * 1e-12:
+                        continue
+                    if abs(delta) * px < cfg["min_trade_value"]:
                         continue
                     pending.append(Order(day, iid, delta))
 

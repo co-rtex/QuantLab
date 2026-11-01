@@ -423,6 +423,14 @@ Per session `k`:
    sees bars dated `<= k` only and returns target weights. Weights are clipped to
    `max_weight`, scaled to `max_gross_exposure`, and converted to share targets using
    `close[k]` and equity at `close[k]`.
+   * **Noise orders** (#215, engine 1.6.0). A change in a holding of less than 1e-9
+     shares, or less than a trillionth of `max(1, |target|, |holding|)` shares, is not an
+     order.
+   * **Why:** a target equal to the holding up to float rounding leaves a change of a few
+     units in the last place of the holding, about 2^-29 shares at 8e6 shares. Before
+     1.6.0 such an order filled and paid a full `commission_min`.
+   * **At the boundary:** a change of exactly the threshold is an order, and a real order
+     of one share is always one.
 
 Symbols that only list after the backtest window are excluded (recorded in
 `meta.not_listed_in_window`). `meta.corporate_actions` counts the universe's actions by
@@ -575,6 +583,9 @@ names changed-input re-runs and leaves the check "not assessed" if they are the 
         run with one changed.
       * Hand cases: `test_a_rounding_level_overdraw_cuts_the_buy_instead_of_rejecting_it`
         and `test_a_sell_whose_commission_exceeds_its_proceeds_says_so`.
+  * 1.6.0 (#215): no order for a float-noise change in a holding (step 6). **Economics
+    change:** each skipped noise order saves its commission. A215_PENDING Tests:
+    `tests/unit/test_order_noise.py`.
 * A worker refuses a backtest stamped for another engine version (#152).
 * A validation run re-runs backtests on the worker's current engine, so it records that
   engine (`engine_version`) beside the experiment's (`experiment_engine_version`), plus

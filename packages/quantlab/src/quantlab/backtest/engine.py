@@ -53,7 +53,7 @@ from quantlab.portfolio.ledger import EPS as LEDGER_EPS
 from quantlab.portfolio.ledger import InsufficientCash, Ledger, LedgerError
 from quantlab.strategies.base import MarketView, Strategy
 
-ENGINE_VERSION = "1.5.0"
+ENGINE_VERSION = "1.6.0"
 
 
 class BacktestConfig(BaseModel):
@@ -841,6 +841,15 @@ def _sanitize(target: pd.Series, view: MarketView, config: BacktestConfig) -> pd
     return t.sort_index()
 
 
+def order_is_noise(delta: float, want: float, held: float) -> bool:
+    """True when a rebalance's share change is too small to be a trade (#215): under 1e-9
+    shares, or under a trillionth of the position (``max(1, |want|, |held|)``). A target
+    equal to the holding up to float rounding leaves a delta of a few units in the last
+    place of the holding (about 2^-29 shares at 8e6 shares), which would otherwise pay a
+    full commission_min. A change of exactly the threshold is a trade."""
+    return abs(delta) < max(1e-9, 1e-12 * max(1.0, abs(want), abs(held)))
+
+
 def _orders(
     d: pd.Timestamp,
     target: pd.Series,
@@ -860,8 +869,9 @@ def _orders(
         want = float(target.get(sym, 0.0)) * equity / ref
         if not config.fractional_shares:
             want = math.floor(want + 1e-9)
-        delta = want - ledger.quantity(sym)
-        if abs(delta) < 1e-9 or abs(delta) * ref < config.min_trade_value:
+        held = ledger.quantity(sym)
+        delta = want - held
+        if order_is_noise(delta, want, held) or abs(delta) * ref < config.min_trade_value:
             continue
         orders.append(Order(d, sym, delta, float(ref)))
     return orders
