@@ -1,6 +1,8 @@
-"""Only the API needs the JWT signing key (#117). The metrics token is needed by every
-process that serves /metrics, the API and each worker (#165, tests/unit/test_worker_metrics.py),
-and is checked when that process starts, not when its modules are imported."""
+"""Only the API needs the JWT signing key (#117). The metrics token is needed by each
+process that serves /metrics: the API, and a worker only when it serves job metrics
+(PROMETHEUS_MULTIPROC_DIR set, as in compose; tests/unit/test_worker_metrics.py, #165).
+A worker without that directory, such as the Terraform ECS task, needs neither secret.
+Both are checked when the process starts, not when its modules are imported."""
 
 from __future__ import annotations
 

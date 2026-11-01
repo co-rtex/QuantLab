@@ -9,7 +9,7 @@
 | Workers | `docker compose --profile app ps worker` / `rq info` as below | workers listening on `quantlab` |
 | Reaper | logs contain `reaper_cycle` lines when it recovers anything | process running |
 | Metrics (API) | `curl -H "Authorization: Bearer $QUANTLAB_METRICS_TOKEN" localhost:8000/metrics` | Prometheus text |
-| Metrics (each worker; job, dataset, cache, ingest) | `docker compose exec worker python -c "import os,urllib.request as u; r=u.Request('http://localhost:9101/metrics', headers={'Authorization': 'Bearer ' + os.environ.get('QUANTLAB_METRICS_TOKEN', '')}); print(u.urlopen(r).read().decode())"` (port 9101 is never published) | Prometheus text with `quantlab_job_outcomes_total`; Prometheus target `quantlab-worker` up for every replica |
+| Metrics (each worker; job, dataset, cache, ingest) | for each replica N (1, 2, …): `docker compose exec --index N worker python -c "import os,urllib.request as u; r=u.Request('http://localhost:9101/metrics', headers={'Authorization': 'Bearer ' + os.environ.get('QUANTLAB_METRICS_TOKEN', '')}); print(u.urlopen(r).read().decode())"` (port 9101 is never published; without `--index`, compose picks one replica) | Prometheus text with `quantlab_job_outcomes_total`; Prometheus target `quantlab-worker` up for every replica |
 
 ### Inspecting the job queue
 
@@ -302,10 +302,12 @@ Deleting a workspace removes its files after the database commit (#21,
 migrations) unless `QUANTLAB_COOKIE_SECURE=true` and the Redis URL carries a real password
 (16+ characters, from `QUANTLAB_REDIS_PASSWORD` in compose; #115). The **API** also
 refuses unless `QUANTLAB_JWT_SECRET` is a real secret (≥ 32 characters, no placeholder
-words) and `QUANTLAB_METRICS_TOKEN` has 16+ characters. **Workers** also refuse without
-`QUANTLAB_METRICS_TOKEN`, under the same rule, because each one serves job metrics at
-`:9101/metrics` (#165). Workers and the reaper never sign tokens and are not given the
-JWT key (#117); without the key a process fails closed instead of using a development key. Terminate TLS at the trusted edge (below). Run migrations
+words) and `QUANTLAB_METRICS_TOKEN` has 16+ characters. A **worker that serves job
+metrics** (`PROMETHEUS_MULTIPROC_DIR` set, as in compose) also refuses without
+`QUANTLAB_METRICS_TOKEN`, under the same rule (#165). A worker without that directory, such
+as the Terraform ECS task, serves nothing and needs no token. Workers and the reaper never
+sign tokens and are not given the JWT key (#117); without the key a process fails closed
+instead of using a development key. Terminate TLS at the trusted edge (below). Run migrations
 (`alembic -c services/api/alembic.ini upgrade head`) before starting new API versions.
 Keep every clock synchronised (NTP), the database server's above all: every job deadline
 follows it (#130). Hosts' clocks still date tokens and the storage sweep's file times.

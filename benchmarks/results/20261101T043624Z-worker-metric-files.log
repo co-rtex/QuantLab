@@ -1,0 +1,18 @@
+date: 2026-11-01T04:36:24Z
+commit: fccf5fb (quantlab_api source mounted over image quantlab-agent-2-security-worker)
+machine: Mac15,12 8 CPUs 8 GiB; Docker VM 4109217792 bytes, 8 CPUs
+load before: 23:36  up 7 days,  8:42, 5 users, load averages: 2.45 3.73 3.83
+after import: 2 file(s)
+mode=keep
+jobs=  100 files=  302 apparent=    18.9 MiB allocated=   1.96 MiB scrape median=    8.3 ms max=   11.8 ms body=5917 B outcomes_total=100
+jobs= 1000 files= 3002 apparent=   187.6 MiB allocated=  19.54 MiB scrape median=   86.8 ms max=  108.9 ms body=5966 B outcomes_total=1000
+jobs= 5000 files=15002 apparent=   937.6 MiB allocated=  97.66 MiB scrape median=  483.1 ms max=  512.1 ms body=5998 B outcomes_total=5000
+after import: 2 file(s)
+mode=compact
+jobs=  100 files=    5 apparent=     0.3 MiB allocated=   0.03 MiB scrape median=    0.4 ms max=    0.7 ms body=5917 B outcomes_total=100
+  fold per job: median=0.23 ms max=0.42 ms
+jobs= 1000 files=    5 apparent=     0.3 MiB allocated=   0.03 MiB scrape median=    0.4 ms max=    0.5 ms body=5966 B outcomes_total=1000
+  fold per job: median=0.23 ms max=0.55 ms
+jobs= 5000 files=    5 apparent=     0.3 MiB allocated=   0.03 MiB scrape median=    0.4 ms max=    0.7 ms body=5998 B outcomes_total=5000
+  fold per job: median=0.24 ms max=6.96 ms
+load after: 23:36  up 7 days,  8:42, 5 users, load averages: 2.15 3.53 3.76
