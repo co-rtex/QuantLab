@@ -298,6 +298,24 @@ Per session `k`:
    fill prices, every buy is scaled by the same factor (then rounded to whole shares
    unless fractional shares are enabled) and flagged `partial`, so no symbol is favoured
    by sort order. Orders without a price on the fill date are rejected (`no_price`).
+   **A buy the cash cuts to nothing is rejected `insufficient_cash`** (#184, engine
+   1.4.1). The quantity recorded depends on the case:
+   * **No cash.** Cash left after the sells of at most a billionth of the buys' need is
+     rounding dust from an earlier fill, and counts as none. Every buy is then rejected
+     at its decided quantity: none is scaled, and none spends the dust. Before 1.4.1,
+     positive dust scaled every buy to dust quantities. Those were logged `InvalidOrder`
+     near 1e-17 shares, or in a large fractional account (where a billionth of the need
+     is dollars) bought at dust size by the first symbols in sort order. Zero or
+     negative dust logged the same buys `insufficient_cash`.
+   * **Scaled below one whole share** (whole shares): it is rejected at its scaled
+     quantity. Before 1.4.1 it was dropped with no record.
+   * **Affordable quantity under the ledger's smallest** (1e-9 shares, fractional
+     shares): it is rejected at the quantity it reached the fill with, after any scaling.
+   * **Known limitation of 1.4.1** (fixed in 1.5.0, #187): with whole shares, a buy under
+     one share that no shortfall caused is still dropped with no record. That is the
+     top-up of a holding a split left fractional, and it still counts toward the need.
+     When a shortfall scales such a top-up too, it is logged `insufficient_cash` like
+     the other scaled buys.
    **A bar printed with zero volume is not tradable** (#149, engine 1.4.0): a vendor may
    repeat the last open and close with volume 0 through a halt, and nobody could trade at
    those prices.
@@ -381,6 +399,25 @@ replay); equity equals cash plus marked positions every day; cash never negative
 positions never negative; deterministic fingerprints for identical inputs; truncating
 data after a decision date leaves that decision unchanged (no look-ahead).
 
+**Independent reference (#180).** `tests/oracle/reference.py` is a second, deliberately
+simple backtester, written from this section and the *Data* section and importing nothing
+from `quantlab`.
+* It keys ticker-level data by instrument from the symbol history itself.
+* It applies the same rules: placement and ordering of corporate actions, both delisting
+  rules, fills, costs, pro-rata buys, stale marks and the as-of strategy view.
+* `tests/unit/test_engine_oracle.py` requires the engine to agree with it to 1e-9 on 200
+  seeded adversarial synthetic universes, plus five hand-computed cases.
+* A mutation harness (`tests/oracle/mutate.py`) shows the comparison catches 24 injected
+  engine and adjuster defects.
+
+It is evidence that the engine implements these rules as written. It is not evidence that
+the rules match any vendor's data.
+
+The generated universes cap capital at 1e6, because until #196 both implementations
+emulate the same cliff. A buy is rejected whole for a shortfall of a fraction of a cent,
+and that shortfall starts to occur from about 1e7 of cash. Larger capital is added with
+the #196 fix.
+
 **Memory and size limits (#163).**
 * **Storage:** the engine keeps trades, position rows and decisions by column while it
   simulates (float columns in float64 arrays), instead of one Python dict per trade.
@@ -413,6 +450,41 @@ The integrity report only uses same-input re-runs to verify or fail reproducibil
 names changed-input re-runs and leaves the check "not assessed" if they are the only ones.
 
 **Engine versions.**
+* History (versions before 1.2.0 are in the git history):
+  * 1.2.0 (#27): corporate-action placement on the next bar, ordering and ingestion
+    gates.
+  * 1.3.0 (#62): jobs keyed by permanent instrument id.
+  * 1.4.0 (#149): no fills on zero-volume bars, plus stale-mark accounting.
+  * 1.4.1 (#184): a buy the cash cuts to nothing is rejected `insufficient_cash` instead
+    of dropped or logged `InvalidOrder`, and rounding dust does not count as cash.
+    * **Economics.** 1.4.0 scaled buys to dust quantities when cash was dust. In a large
+      fractional account that bought dust positions; 1.4.1 buys nothing then. The
+      difference starts at dust level but need not stay there.
+      * **The mechanism:** a dust trade changes later float rounding. With #196's cliff (a
+        whole buy rejected for a rounding-level shortfall), that can turn into a whole
+        buy filled by one version and rejected by the other.
+      * **On the final 1.4.1 code**, the #190 review's re-check against 1.4.0 found 5 of
+        480 large-account runs that differ: seeds 1000-1119, capital 3e9, fractional,
+        two strategies × two modes. They are seed 1015 random (both modes) and seeds
+        1074, 1081 and 1094 momentum.
+      * **The worst** is seed 1094 at `next_close`: $2.47M, 5.6e-4 relative. On
+        2022-02-03, 1.4.0 bought 2.66e-9 shares of dust. Later it rejected a whole $32M
+        buy for a rounding-level shortfall, which 1.4.1 fills.
+      * 1.5.0 removes the cliff (#196).
+      * **Elsewhere the economics are identical:** equity, trades, positions, ledger and
+        fingerprints match 1.4.0 in all 962 runs of `tests/oracle/ab.py`, including 54
+        with capital 3e9 and fractional shares.
+    * **The rejection log** differs in 134 of those runs: 105 of the 800 differential
+      runs, and 29 of the library-strategy runs (not broken down: the reference does not
+      run those strategies).
+      * On 1.4.0, the 800 differential runs dropped 933 decided buys without a record,
+        in 141 runs. 461 of them (in 89 runs) were scaled below one whole share, and
+        1.4.1 rejects them. The other 472 (in 96 runs) were unscaled top-ups under one
+        share, which 1.4.1 still drops (#187).
+      * The 105 changed runs are those 89, plus 16 runs whose 1.4.0 log held dust:
+        `InvalidOrder` rows or quantities under 1e-9.
+    * The hand cases are in `tests/unit/test_engine_oracle.py`, including a 3e9 account
+      (`test_dust_cash_in_a_large_account_buys_nothing`).
 * A worker refuses a backtest stamped for another engine version (#152).
 * A validation run re-runs backtests on the worker's current engine, so it records that
   engine (`engine_version`) beside the experiment's (`experiment_engine_version`), plus

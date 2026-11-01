@@ -27,7 +27,7 @@ Timeline for each session ``k`` (all prices are raw, as traded):
 Orders that cannot be filled (no bar on the execution date, a bar with zero volume,
 insufficient cash, sells exceeding holdings) are rejected and recorded with a reason; buys
 that exceed available cash are reduced to the affordable quantity and flagged as partial
-fills.
+fills, and a buy reduced to nothing is rejected as ``insufficient_cash`` (#184).
 """
 
 from __future__ import annotations
@@ -47,10 +47,11 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 from quantlab.data.adjust import PointInTimeAdjuster, total_returns
 from quantlab.data.identity import PERFORMANCE_REASONS, normalize_master
 from quantlab.data.schema import wide
+from quantlab.portfolio.ledger import EPS as LEDGER_EPS
 from quantlab.portfolio.ledger import Ledger, LedgerError
 from quantlab.strategies.base import MarketView, Strategy
 
-ENGINE_VERSION = "1.4.0"
+ENGINE_VERSION = "1.4.1"
 
 
 class BacktestConfig(BaseModel):
@@ -345,9 +346,10 @@ def run_backtest(
     slip = config.slippage_bps / 1e4
     comm = config.commission_bps / 1e4
 
-    def prorate_buys(k: int, px_row: np.ndarray, orders: list[Order]) -> None:
+    def prorate_buys(k: int, px_row: np.ndarray, orders: list[Order]) -> bool:
         """Scale all buys by the same factor when the cash left after sells cannot fund
-        them, instead of filling whichever symbols sort first."""
+        them, instead of filling whichever symbols sort first. True when there is no cash
+        for any buy."""
         cash = ledger.cash
         for o in orders:
             if o.quantity < 0 and math.isfinite(px_row[col[o.symbol]]):
@@ -358,17 +360,25 @@ def run_backtest(
             for o in orders
             if o.quantity > 0 and math.isfinite(px_row[col[o.symbol]]) and o.symbol not in delisted
         )
-        if need > cash > 0:
+        # Cash up to a billionth of the need is rounding dust left by an earlier fill (#184):
+        # no cash. The buys are neither scaled to dust quantities (whose record depended on
+        # the dust's sign) nor filled with it: every one meets the shortfall as with zero.
+        if need <= 0:  # no buy can fill here (no price, or delisted)
+            return False
+        if cash <= need * 1e-9:
+            return True
+        if cash < need:
             scale = cash / need
             for o in orders:
                 if o.quantity > 0:
                     o.quantity *= scale
                     o.scaled = True
+        return False
 
     def fill(k: int, px_row: np.ndarray, orders: list[Order]) -> float:
         d = dates[k]
         traded = 0.0
-        prorate_buys(k, px_row, orders)
+        no_cash = prorate_buys(k, px_row, orders)
         for o in sorted(orders, key=lambda o: (o.quantity > 0, o.symbol)):
             j = col[o.symbol]
             ref = px_row[j]
@@ -399,22 +409,25 @@ def run_backtest(
                 qty = max(qty, -ledger.quantity(o.symbol))
                 if qty == 0:
                     continue
-            if qty > 0 and not config.fractional_shares:
+            buy = qty > 0
+            if buy and not config.fractional_shares:
                 qty = math.floor(qty + 1e-9)
-                if qty == 0:
+                if qty == 0 and not o.scaled:
                     continue
-            px = ref * (1 + slip) if qty > 0 else ref * (1 - slip)
+            px = ref * (1 + slip) if buy else ref * (1 - slip)
             partial = o.scaled
-            if qty > 0:
+            if buy:
                 # Shrink buys to what the cash balance can fund, including commission.
-                affordable = ledger.cash / (px * (1 + comm)) if px > 0 else 0.0
+                affordable = ledger.cash / (px * (1 + comm)) if px > 0 and not no_cash else 0.0
                 if config.commission_min:
                     affordable = min(affordable, (ledger.cash - config.commission_min) / px)
                 if not config.fractional_shares:
                     affordable = math.floor(affordable + 1e-9)
                 if affordable < qty - 1e-9:
                     qty, partial = max(affordable, 0.0), True
-                if qty <= 0:
+                # A buy the cash cut to nothing is rejected, not dropped (#184): one scaled
+                # below a whole share, or cut below the ledger's smallest quantity.
+                if qty < LEDGER_EPS:
                     rejects.append(
                         {
                             "date": d,

@@ -104,6 +104,57 @@ A worker, reaper or API host with a skewed clock no longer moves any job deadlin
    claimable: one still in its backoff, one cancelled, or one another worker holds a live
    lease on.
 
+### Redis is down (#185)
+* **Running jobs carry on.** A job's state, lease and keepalive are in PostgreSQL, so a job
+  that was running when Redis went away completes on the same attempt.
+* **Workers stay up.** Each one logs `worker_redis_unavailable` (with `during=`: the job's
+  heartbeat, the worker's state, maintenance and so on), and waits for Redis before taking
+  the next job.
+  * **Before #185,** a busy worker quit at its horse monitor's first heartbeat in the
+    outage, within 30 s (`job_monitoring_interval`), so an outage of more than a few
+    seconds was enough. Its container restarted in a loop, the running job died with it and
+    lost an attempt, and it waited out its lease.
+  * **Measured on 2026-11-01** (slot 21, two workers, restart policy `unless-stopped`): Redis
+    was stopped for about 63 s during a running ML job. The job stayed on attempt 1 and
+    completed on attempt 1, 45 s after Redis returned. Both workers' restart counts stayed
+    0, and they logged 8 `worker_redis_unavailable` lines and no "unhandled exception,
+    quitting".
+* **New submissions** are still recorded, and readiness reports 503 (see "Jobs stuck in
+  `queued`" for what is redelivered once Redis is back).
+* **RQ's own records** in Redis, of jobs that finished during the outage, stay incomplete
+  (`rq info` may show them as started). RQ's registry cleanup marks them failed later.
+  That changes nothing: a job's outcome is the one in PostgreSQL.
+* **A SIGTERM during the outage** (`docker compose stop`, a deploy) waits for the running
+  job, as it does without one (#197 review), but only within Docker's stop timeout: 10 s
+  by default (`docker compose stop -t <s>`). After that Docker kills the container, and the
+  job is recovered like any lost worker's (see "Jobs stuck in `running`").
+* **A worker started or restarted while Redis is down** can't register with it. It exits,
+  and its restart policy starts it again, in a loop until Redis is back. With
+  `QUANTLAB_RESTART_POLICY=no`, a worktree slot's default, it stays stopped.
+* **Retries scheduled for later** wait for RQ's scheduler. Its process dies at its first
+  Redis error, and the worker restarts it only in maintenance, up to 600 s later. Until
+  then such a retry is delivered by the reaper instead, about 2 minutes after its backoff
+  ends (see "Jobs stuck in `queued`").
+* **A refused password** (a rotated `QUANTLAB_REDIS_PASSWORD`) is not treated as an
+  outage, but only a busy worker stops on it.
+  * **A busy worker** stops at the first authentication or authorization error during a
+    job, after waiting for the running job to finish.
+  * **An idle worker** doesn't stop. RQ's own dequeue retries every connection error,
+    these included, so it logs `invalid username-password pair` (or `NOPERM`) in a loop
+    and takes nothing.
+  * **To tell it from an outage:** `/api/v1/ready` reports 503 with `redis: error`, and
+    the API logs `ready_check_failed component=redis` with `AuthenticationError` in
+    `error`, where an outage logs `ConnectionError` or `TimeoutError`.
+* **A Redis that accepts connections but doesn't answer** (a hung server, a network that
+  drops packets) is different from one that is down.
+  * A connection attempt gives up after 5 s (redis-py's default connect timeout).
+  * Once connected, a worker's call blocks for up to 415 s: RQ raises the connection's
+    socket timeout to its dequeue timeout plus 10 s (`worker_ttl` 420 − 15 + 10), so a
+    blocking dequeue isn't cut short. That is about 7 minutes per attempt.
+  * Meanwhile the horse monitor is blocked, and with it its backstop kill of a horse
+    that outlives its job timeout by 60 s. The horse's own job timeout still fires.
+  * The job's lease and keepalive, in PostgreSQL, still run.
+
 ### Jobs stuck in `running`
 A worker died mid-job. Its lease (default 60 s, `QUANTLAB_JOB_LEASE_SECONDS`) expires in
 database time. The reaper then does one of four things:
