@@ -5,7 +5,7 @@ import { useParams } from "next/navigation";
 import { useState, type FormEvent } from "react";
 import { EquityChart } from "@/components/charts";
 import { PageHeader } from "@/components/Shell";
-import { ErrorNote, Panel, QueryError, Skeleton, SyntheticLabel, syntheticStatus } from "@/components/ui";
+import { BusyNote, ErrorNote, Panel, QueryError, Skeleton, SyntheticLabel, syntheticStatus } from "@/components/ui";
 import { api, ApiError } from "@/lib/api";
 import { money, num, pct, signClass } from "@/lib/format";
 import { useApi } from "@/lib/useApi";
@@ -42,6 +42,7 @@ export default function PortfolioPage() {
   const p = useApi<{ name: string; transactions: Tx[] }>(`/portfolios/${id}?n=${nonce}`);
   const v = useApi<Valuation>(`/portfolios/${id}/valuation?n=${nonce}`);
   const [err, setErr] = useState<ApiError>();
+  const [txBusy, setTxBusy] = useState<number>();
   const [kind, setKind] = useState("buy");
 
   async function add(e: FormEvent<HTMLFormElement>) {
@@ -53,6 +54,7 @@ export default function PortfolioPage() {
     try {
       await api(`/portfolios/${id}/transactions`, {
         method: "POST",
+        onBusy: setTxBusy, // the server is busy: api() tries once more after this wait
         json: {
           trade_date: f.get("date"),
           kind,
@@ -68,6 +70,7 @@ export default function PortfolioPage() {
     } catch (x) {
       setErr(x as ApiError);
     }
+    setTxBusy(undefined);
   }
 
   if (p.error && !p.data) return <QueryError q={p} what="this portfolio" />;
@@ -82,6 +85,7 @@ export default function PortfolioPage() {
       <PageHeader title={p.data?.name ?? "Portfolio"} lede="Returns are time-weighted, so deposits and withdrawals do not count as performance." actions={<SyntheticLabel status={syntheticStatus(val?.portfolio.is_synthetic)} />} />
       <QueryError q={p} what="this portfolio" />
       <QueryError q={v} what="the valuation" />
+      <BusyNote seconds={v.busy} />
       {val && (
         <dl className="mb-6 grid grid-cols-2 gap-x-8 gap-y-2 rounded border border-rule bg-surface px-4 py-3 text-sm sm:grid-cols-4">
           {[
@@ -147,6 +151,7 @@ export default function PortfolioPage() {
             )}
             <div className="col-span-2">
               <ErrorNote error={err} />
+              <BusyNote seconds={txBusy} />
               <button className="btn btn-primary mt-2">Record transaction</button>
               <p className="mt-2 text-xs text-ink-3">The ledger is append-only. A transaction that would overdraw cash or sell more than you hold is rejected and nothing is stored.</p>
             </div>

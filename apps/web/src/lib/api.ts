@@ -10,14 +10,43 @@ export class ApiError extends Error {
   }
 }
 
-export async function api<T>(path: string, init: RequestInit & { json?: unknown } = {}): Promise<T> {
-  const headers = new Headers(init.headers);
-  let body = init.body;
-  if (init.json !== undefined) {
+// A 503 server_busy means the API refused the request before doing any of its work: its
+// process had no free slot for heavy work (#223). Sending it again is therefore safe, even
+// a POST, and it is sent again once, after Retry-After (capped here); a second refusal is
+// the caller's to show.
+const BUSY_RETRY_CAP_SECONDS = 10;
+
+export interface ApiInit extends RequestInit {
+  json?: unknown;
+  /** Told when the server is busy and the request will be sent again in `seconds`. */
+  onBusy?: (seconds: number) => void;
+}
+
+export function busyRetrySeconds(res: Response, code: unknown): number | null {
+  if (res.status !== 503 || code !== "server_busy") return null;
+  const s = Number(res.headers.get("retry-after"));
+  return Number.isFinite(s) ? Math.min(Math.max(s, 0), BUSY_RETRY_CAP_SECONDS) : 1;
+}
+
+export async function api<T>(path: string, init: ApiInit = {}): Promise<T> {
+  const { onBusy, json, ...rest } = init;
+  const headers = new Headers(rest.headers);
+  let body = rest.body;
+  if (json !== undefined) {
     headers.set("content-type", "application/json");
-    body = JSON.stringify(init.json);
+    body = JSON.stringify(json);
   }
-  const res = await fetch(`/api/v1${path}`, { ...init, headers, body, credentials: "same-origin" });
+  const send = () => fetch(`/api/v1${path}`, { ...rest, headers, body, credentials: "same-origin" });
+  let res = await send();
+  if (res.status === 503) {
+    const first = await res.clone().json().catch(() => null);
+    const wait = busyRetrySeconds(res, first?.error?.code);
+    if (wait !== null) {
+      onBusy?.(wait);
+      await new Promise((r) => setTimeout(r, wait * 1000));
+      res = await send();
+    }
+  }
   if (res.status === 204) return undefined as T;
   const data = await res.json().catch(() => null);
   if (!res.ok) {

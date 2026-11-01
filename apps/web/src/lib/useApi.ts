@@ -12,6 +12,8 @@ interface Loaded<T> {
   path: string | null;
   data?: T;
   error?: ApiError;
+  /** Seconds until api() sends the request again: the server was busy (#223). */
+  busy?: number;
 }
 
 /**
@@ -38,7 +40,11 @@ export function useApi<T>(path: string | null, opts: { poll?: Poll<T> } = {}) {
     const tick = async () => {
       let permanent = false;
       try {
-        last = await api<T>(path);
+        last = await api<T>(path, {
+          onBusy: (busy) => {
+            if (!cancelled) setState((s) => ({ path, data: s.path === path ? s.data : undefined, busy }));
+          },
+        });
         failures = 0;
         if (!cancelled) setState({ path, data: last });
       } catch (e) {
@@ -72,6 +78,7 @@ export function useApi<T>(path: string | null, opts: { poll?: Poll<T> } = {}) {
   return {
     data: current || sameResource ? state.data : undefined,
     error: current ? state.error : undefined,
+    busy: current ? state.busy : undefined,
     loading: path !== null && !current,
     reload,
   };
