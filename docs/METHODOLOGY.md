@@ -412,6 +412,14 @@ each differing input (`input_differences`, for example `engine_version 1.2.0 →
 The integrity report only uses same-input re-runs to verify or fail reproducibility; it
 names changed-input re-runs and leaves the check "not assessed" if they are the only ones.
 
+Identical inputs give byte-identical outputs across processes (#182), with no tolerance
+needed. That covers the backtest frames and fingerprint, the analysis, the validation
+suite, the ML run and its predictions, the integrity report, and the HTML and Markdown
+reports apart from their `generated_at` timestamp. The hash seed (`PYTHONHASHSEED`) and
+the BLAS/OpenMP thread count (1, 2 or 4) don't change them. The ML models and the
+bootstrap take explicit seeds. This was measured on macOS arm64 with the locked
+dependencies; CI checks it on Linux (`tests/unit/test_reproducibility_processes.py`).
+
 **Engine versions.**
 * A worker refuses a backtest stamped for another engine version (#152).
 * A validation run re-runs backtests on the worker's current engine, so it records that
