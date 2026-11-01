@@ -389,12 +389,17 @@ data after a decision date leaves that decision unchanged (no look-ahead).
   * In the 1536 MB worker container, equal weight over 2005–2023 with 400 symbols at a daily
     rebalance was killed for memory before. Now it completes, still near the limit.
 * **Admission:** a backtest is refused at submission (`422 backtest_too_large`) when its
-  estimated peak memory exceeds the configured limit.
-  * The estimate grows with symbols × sessions and symbols × rebalances.
-  * It is an envelope over the jobs measured in the real worker container; equal weight is
-    the worst case, so strategies holding fewer names are overestimated.
-  * It was measured only within 100–400 symbols over 2005–2023; larger backtests are
-    refused by a linear estimate, not measured.
+  estimated peak memory exceeds the configured limit, or when it lies outside the range
+  the estimate was measured on.
+  * The estimate grows with symbols × sessions and symbols × rebalances. It ignores the
+    strategy, so one that holds few names is overestimated.
+  * It is an envelope over the jobs measured in the real worker container: 100–400 symbols
+    with equal weight, which trades every name at every rebalance, over 2005–2023.
+  * **Larger backtests are refused outright,** not estimated: more than 400 symbols or
+    more than 4,785 sessions. Sessions are the larger of the exchange calendar's count and
+    the dataset version's distinct bar dates.
+  * For 2005–2023 the effective caps are 199 symbols daily and 400 weekly, monthly or
+    quarterly.
   * Details are in `docs/RUNBOOK.md` and `benchmarks/results/*-worker-memory-*.json`.
 
 **Reproduction.** The input hash covers the dataset version, strategy, parameters,

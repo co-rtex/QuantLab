@@ -80,3 +80,62 @@ def test_a_refusal_names_the_estimate_and_the_limit():
     assert "1228 MB limit" in e.message and f"{cost.memory_mb:.0f} MB" in e.message
     assert e.details["estimated_mb"] == round(cost.memory_mb, 1) and e.details["limit_mb"] == 1228
     check_backtest_memory(cost, math.ceil(cost.memory_mb))  # at the estimate: admitted
+
+
+@pytest.mark.parametrize(
+    ("symbols", "start", "end", "rebalance"),
+    [
+        (1500, date(2022, 1, 3), date(2023, 12, 29), "daily"),  # wide and short
+        (110, date(1990, 1, 2), date(2023, 12, 29), "daily"),  # a long history
+        (500, START, END, "monthly"),  # more symbols than were measured
+    ],
+)
+def test_backtests_outside_the_measured_range_are_refused(symbols, start, end, rebalance):
+    # #174 review: the estimate alone would admit these, but it was never measured there.
+    cost = backtest_cost(symbols, start, end, start, None, rebalance)
+    assert cost.memory_mb <= 1228
+    with pytest.raises(ApiError) as exc:
+        check_backtest_memory(cost, 1228)
+    assert exc.value.code == "backtest_too_large"
+    assert exc.value.details["reason"] == "outside_measured_range"
+    assert "larger backtests are refused" in exc.value.message
+
+
+def test_the_effective_caps_for_2005_to_2023():
+    # The most symbols a 2005-2023 backtest may have under the default limit, per
+    # rebalance frequency: the memory estimate for daily, the measured range otherwise.
+    def admitted(n: int, freq: str) -> bool:
+        try:
+            check_backtest_memory(backtest_cost(n, START, END, START, None, freq), 1228)
+        except ApiError:
+            return False
+        return True
+
+    freqs = ("daily", "weekly", "monthly", "quarterly")
+    caps = {f: max(n for n in range(1, 1501) if admitted(n, f)) for f in freqs}
+    assert caps == {"daily": 199, "weekly": 400, "monthly": 400, "quarterly": 400}
+
+
+def test_bar_dates_counts_distinct_dates_including_non_trading_days(tmp_path):
+    import pandas as pd
+
+    from quantlab_api.marketdata import bar_dates
+
+    saturday = pd.Timestamp("2024-01-06")  # not a session, but a bar the engine steps through
+    days = [*trading_days("2024-01-02", "2024-01-31"), saturday]
+    rows = [{"symbol": s, "date": d} for s in ("A", "B") for d in days]
+    pd.DataFrame(rows).to_parquet(tmp_path / "bars.parquet", index=False)
+    assert bar_dates(tmp_path) == len(trading_days("2024-01-02", "2024-01-31")) + 1
+    assert (
+        bar_dates(tmp_path, date(2024, 1, 10)) == len(trading_days("2024-01-02", "2024-01-10")) + 1
+    )
+
+
+def test_sessions_are_the_versions_bar_dates_when_there_are_more():
+    # The engine steps through distinct bar dates; a bar on a non-trading day only warns.
+    calendar = backtest_cost(100, START, END, START, None, "daily")
+    extra = backtest_cost(100, START, END, START, None, "daily", bar_dates=4790)
+    fewer = backtest_cost(100, START, END, START, None, "daily", bar_dates=4000)
+    assert (calendar.sessions, extra.sessions, fewer.sessions) == (4785, 4790, 4785)
+    with pytest.raises(ApiError):  # 4,790 sessions is outside the measured range
+        check_backtest_memory(extra, 10_000)

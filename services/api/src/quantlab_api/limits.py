@@ -107,6 +107,11 @@ async def _reject(send: Send, limit: int) -> None:
 BACKTEST_BASE_MB = 372.3
 BACKTEST_MB_PER_MILLION_SYMBOL_SESSIONS = 320.1  # bars loaded and position rows
 BACKTEST_MB_PER_MILLION_SYMBOL_REBALANCES = 574.2  # worst-case trades and decisions
+# The measured range. Every measured job had 4,785 sessions, so the per-session term is not
+# identified on its own: a backtest beyond these is refused rather than estimated (#174
+# review). A measurement over more symbols or sessions can widen them.
+MEASURED_MAX_SYMBOLS = 400
+MEASURED_MAX_SESSIONS = 4785
 
 
 @dataclass(frozen=True)
@@ -131,17 +136,42 @@ def backtest_cost(
     start: date | None,
     end: date | None,
     rebalance: str,
+    bar_dates: int = 0,
 ) -> BacktestCost:
-    """The job's size from what is known at submission. Sessions run from the data's first
-    session, since the job loads that history; rebalances count over the traded window."""
+    """The job's size from what is known at submission.
+
+    Sessions run from the data's first session, since the job loads that history. The
+    engine steps through the version's distinct bar dates, which may include days the
+    exchange calendar does not (such bars only warn), so the larger count is used.
+    Rebalances count over the traded window, on the calendar.
+    """
     last = min(end, data_end) if end else data_end
     loaded = trading_days(data_start, last)
     traded = loaded[loaded >= pd.Timestamp(start)] if start else loaded
-    return BacktestCost(symbols, len(loaded), int(rebalance_mask(traded, rebalance).sum()))
+    sessions = max(len(loaded), bar_dates)
+    return BacktestCost(symbols, sessions, int(rebalance_mask(traded, rebalance).sum()))
 
 
 def check_backtest_memory(cost: BacktestCost, limit_mb: int) -> None:
-    """Reject at submission a backtest whose estimated peak would not fit the worker."""
+    """Reject at submission a backtest whose estimated peak would not fit the worker, or
+    that lies outside the range the estimate was measured on."""
+    if cost.symbols > MEASURED_MAX_SYMBOLS or cost.sessions > MEASURED_MAX_SESSIONS:
+        raise ApiError(
+            422,
+            "backtest_too_large",
+            f"This backtest has {cost.symbols} symbols over {cost.sessions} sessions. Memory "
+            f"was measured only up to {MEASURED_MAX_SYMBOLS} symbols and "
+            f"{MEASURED_MAX_SESSIONS:,} sessions, so larger backtests are refused. Use fewer "
+            "symbols or a shorter period.",
+            {
+                "reason": "outside_measured_range",
+                "symbols": cost.symbols,
+                "sessions": cost.sessions,
+                "rebalances": cost.rebalances,
+                "max_symbols": MEASURED_MAX_SYMBOLS,
+                "max_sessions": MEASURED_MAX_SESSIONS,
+            },
+        )
     if cost.memory_mb > limit_mb:
         raise ApiError(
             422,
@@ -150,6 +180,7 @@ def check_backtest_memory(cost: BacktestCost, limit_mb: int) -> None:
             f"{limit_mb} MB limit for one backtest. Use fewer symbols, a shorter period "
             "or a less frequent rebalance.",
             {
+                "reason": "estimated_memory",
                 "estimated_mb": round(cost.memory_mb, 1),
                 "limit_mb": limit_mb,
                 "symbols": cost.symbols,

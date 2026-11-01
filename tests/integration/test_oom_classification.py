@@ -142,3 +142,88 @@ def test_a_job_that_already_finished_is_left_alone(client, seeded, cgroup):
     cgroup["kills"] = 1
     _killed(uuid.UUID(sub["job"]["id"]), os.getpid())
     assert _job(uuid.UUID(sub["job"]["id"])).status.value == "completed"
+
+
+def test_a_forking_worker_classifies_an_oom_and_then_runs_the_next_job(
+    client, seeded, cgroup, monkeypatch
+):
+    """#174 review: the handler runs in the RQ worker, and every later horse is a fork of
+    it. Its database work must not leave a connection for the next horse to inherit, and
+    nothing it does may stop the worker. A real forking Worker: the first job's horse is
+    killed (SIGKILL, the cgroup's oom_kill count rises), the second runs to completion."""
+    from rq import Worker
+
+    from quantlab_api import jobs
+
+    first = uuid.UUID(submit(client, seeded).json()["job"]["id"])
+    second = uuid.UUID(submit(client, seeded, name="after the OOM").json()["job"]["id"])
+    original = jobs.HANDLERS["backtest"]
+
+    def dies_first(ctx):  # runs in the horse, a fork of this process
+        if ctx.job_id == first:
+            # Work on the database first: psycopg prepares a statement after its fifth
+            # run, so an inherited connection now has server-side state of this horse's.
+            for i in range(10):
+                ctx.heartbeat(0.01 * i, "working", force=True)
+            os.kill(os.getpid(), signal.SIGKILL)  # as the kernel's OOM killer would
+        return original(ctx)
+
+    monkeypatch.setitem(jobs.HANDLERS, "backtest", dies_first)
+    cgroup["kills"] = 1  # what the worker reads after the kill
+    name = jobs.worker_identity()  # fixed before forking, as quantlab-worker does
+    worker = Worker(
+        [jobs.get_queue()],
+        connection=jobs.redis_conn(),
+        name=name,
+        work_horse_killed_handler=jobs.horse_killed,
+        **jobs.RQ_OPTIONS,
+    )
+    worker.work(burst=True, logging_level="ERROR")
+    killed, after = _job(first), _job(second)
+    assert killed.error["type"] == "ResourceExhausted" and killed.worker_id == name
+    assert after.status.value == "completed", after.error
+    assert after.attempts == 1 and after.heartbeat_at > after.started_at  # it heartbeated
+
+
+def test_a_failing_classification_never_stops_the_worker(monkeypatch):
+    from quantlab_api import jobs
+
+    def broken(*_args):
+        raise RuntimeError("database unreachable")
+
+    monkeypatch.setattr(jobs, "_classify_horse_death", broken)
+    jobs.horse_killed(SimpleNamespace(args=[str(uuid.uuid4())]), 1, 9, None)  # no raise
+
+
+def test_a_forked_child_does_not_reuse_the_parents_pooled_connections():
+    # SQLAlchemy has no fork detection; the hook makes the child drop what it inherited.
+    from sqlalchemy import text
+
+    from quantlab_api.db import get_engine
+
+    engine = get_engine()
+    with engine.connect() as conn:  # leaves an idle connection in the parent's pool
+        conn.execute(text("select 1"))
+    assert engine.pool.checkedin() >= 1
+    pid = os.fork()
+    if pid == 0:  # the child: nothing inherited, and a connection of its own works
+        ok = engine.pool.checkedin() == 0
+        with engine.connect() as conn:
+            ok = ok and conn.execute(text("select 1")).scalar() == 1
+        os._exit(0 if ok else 1)
+    _, status = os.waitpid(pid, 0)
+    assert os.WIFEXITED(status) and os.WEXITSTATUS(status) == 0
+    assert engine.pool.checkedin() >= 1  # the parent's connections were not closed
+
+
+def test_the_handler_keeps_no_connection_open_in_the_worker(client, seeded, cgroup):
+    from sqlalchemy.pool import NullPool
+
+    from quantlab_api import jobs
+
+    job_id, pid, _ = _running(client, seeded)
+    cgroup["kills"] = 1
+    _killed(job_id, pid)
+    engine = jobs._oom_engine()
+    assert isinstance(engine.pool, NullPool)  # a closed session closes its connection
+    assert _job(job_id).error["type"] == "ResourceExhausted"

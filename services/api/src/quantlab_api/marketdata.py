@@ -15,6 +15,9 @@ from typing import Any
 import duckdb
 import numpy as np
 import pandas as pd
+import pyarrow as pa
+import pyarrow.compute as pc
+import pyarrow.parquet as pq
 
 from quantlab.data.adjust import PointInTimeAdjuster
 from quantlab.data.schema import normalize_actions
@@ -35,6 +38,20 @@ def _duck() -> duckdb.DuckDBPyConnection:
         con.execute("SET threads TO 2")
         _local.con = con
     return con
+
+
+def bar_dates(path: Path, end: date | None = None) -> int:
+    """Distinct bar dates in a dataset version, up to ``end``: the sessions the engine
+    steps through, which can include days the exchange calendar does not (#163).
+
+    PyArrow, not DuckDB: this runs at submission, and a DuckDB connection does not survive
+    a fork (its threads stay behind), so one opened here would hang a work horse forked
+    from the same process, as the tests run API and worker.
+    """
+    dates = pq.read_table(path / "bars.parquet", columns=["date"]).column("date")
+    if end is not None:
+        dates = dates.filter(pc.less_equal(dates, pa.scalar(pd.Timestamp(end), dates.type)))
+    return len(pc.unique(dates))
 
 
 def query_bars(path: Path, symbol: str, start: date | None, end: date | None) -> pd.DataFrame:

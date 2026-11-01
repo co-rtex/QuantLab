@@ -36,12 +36,14 @@ from redis import Redis
 from rq import Queue, get_current_job
 from rq.job import Job as RQJob
 from rq.serializers import JSONSerializer
-from sqlalchemy import func, or_, select, text, update
+from sqlalchemy import create_engine, func, or_, select, text, update
+from sqlalchemy.engine import Engine
 from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import Session
+from sqlalchemy.pool import NullPool
 
 from quantlab_api.config import get_settings
-from quantlab_api.db import SessionLocal
+from quantlab_api.db import SessionLocal, get_engine
 from quantlab_api.errors import ApiError
 from quantlab_api.models import TERMINAL, Experiment, Job, JobStatus, ResearchRun, User, Workspace
 from quantlab_api.observability import (
@@ -888,6 +890,31 @@ def _memory_limit_mb() -> float | None:
 _oom_kills_seen = _oom_kills()  # at worker start; each kill handled moves it on
 
 
+def _drop_inherited_connections() -> None:
+    """In a forked child, forget the parent's pooled connections without closing them.
+
+    A work horse is a fork of the RQ worker. A connection both processes use corrupts
+    both: psycopg's prepared-statement names restart in the child, and a transaction the
+    child left open could be committed by the parent (#174 review). The child opens its
+    own connections instead.
+    """
+    get_engine().dispose(close=False)
+
+
+os.register_at_fork(after_in_child=_drop_inherited_connections)
+
+_oom_engines: dict[str, Engine] = {}
+
+
+def _oom_engine() -> Engine:
+    """The handler's own engine, without a pool: it runs in the RQ worker, whose open
+    connections every later horse would inherit, so it keeps none open afterwards."""
+    url = get_settings().database_url
+    if url not in _oom_engines:
+        _oom_engines[url] = create_engine(url, poolclass=NullPool)
+    return _oom_engines[url]
+
+
 def horse_killed(rq_job: RQJob, retpid: int, ret_val: int, rusage: Any) -> None:
     """RQ's ``work_horse_killed_handler``: runs in the worker when its horse dies.
 
@@ -897,7 +924,17 @@ def horse_killed(rq_job: RQJob, retpid: int, ret_val: int, rusage: Any) -> None:
     retryable, because the same job needs the same memory again. The evidence is a SIGKILL
     together with a rise in the cgroup's ``oom_kill`` count, or a peak resident set at the
     memory limit. Any other death is left to the reaper as before (``LeaseExpired``).
+
+    RQ calls it bare, so an exception here would stop the worker: any failure is logged
+    and the job is left to the reaper.
     """
+    try:
+        _classify_horse_death(rq_job, retpid, ret_val, rusage)
+    except Exception as exc:
+        log.error("horse_killed_failed", error=repr(exc)[:300])
+
+
+def _classify_horse_death(rq_job: RQJob, retpid: int, ret_val: int, rusage: Any) -> None:
     global _oom_kills_seen
     signalled = ret_val is not None and os.WIFSIGNALED(ret_val)
     if not signalled or os.WTERMSIG(ret_val) != 9:
@@ -917,7 +954,7 @@ def horse_killed(rq_job: RQJob, retpid: int, ret_val: int, rusage: Any) -> None:
     # job another worker has reclaimed is left alone.
     horse = {worker_identity(), f"{socket.gethostname()}:{retpid}"}
     limit_text = f" of the worker's {limit:.0f} MB limit" if limit else ""
-    with SessionLocal() as db:
+    with Session(_oom_engine()) as db:
         job = db.get(Job, uuid.UUID(args[0]), with_for_update=True)
         if job is None or job.status != JobStatus.running or job.worker_id not in horse:
             return

@@ -253,7 +253,12 @@ function Builder() {
   if (versions.data?.length === 0) {
     return <ErrorNote error={new Error("Add a dataset version under Market data before creating an experiment.")} />;
   }
-  const details = err?.details as { loc?: (string | number)[]; msg: string }[] | undefined;
+  // Field errors are a list; other refusals (#163 backtest_too_large) carry an object, and
+  // their message already says what to change.
+  const errDetails: unknown = err?.details;
+  const details = Array.isArray(errDetails)
+    ? (errDetails as { loc?: (string | number)[]; msg: string }[])
+    : undefined;
 
   return (
     <form onSubmit={submit} className="grid gap-6 text-sm xl:grid-cols-[3fr_2fr]">
@@ -445,6 +450,11 @@ function Builder() {
             <button type="submit" className="btn btn-primary" disabled={busy || !dvId}>
               {busy ? "Submitting…" : "Run backtest"}
             </button>
+            <p className="text-xs text-ink-2">
+              One backtest must fit a worker&apos;s memory (#163). Under the default limits, a
+              2005–2023 backtest can have at most 199 symbols with a daily rebalance and 400
+              with a weekly, monthly or quarterly one; a shorter period allows more.
+            </p>
           </div>
         </Panel>
       </div>
