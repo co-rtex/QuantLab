@@ -214,7 +214,9 @@ class Settings(BaseSettings):
         """Refuse to serve metrics in production without a real token (#117, #165).
 
         One rule for every process that serves ``/metrics``: the API (from
-        :meth:`require_api_secrets`) and each worker (``quantlab-worker``).
+        :meth:`require_api_secrets`), each worker that serves job metrics
+        (``quantlab-worker`` with ``PROMETHEUS_MULTIPROC_DIR``), and the reaper when it
+        serves (``quantlab-cli reaper`` with ``QUANTLAB_REAPER_METRICS_PORT``, #179).
         """
         if self.environment != "production":
             return

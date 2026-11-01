@@ -22,9 +22,44 @@ review, a trial on current main (full pytest and serial Playwright) and green CI
 * **#167, in #171:** the job timeout is per attempt (migration M5).
 * **#160, in #176:** the benchmark contended check.
 
-**Remaining before a private release candidate:**
-* An independent confirmation of the job-recovery area (crash, OOM, cancel, Redis outage)
-  on merged main. It will run after #165 (worker metrics), which changes the worker.
+**Job-recovery confirmation (independent, fresh clone, slot 88, main `6fcdd07`, after
+#165): ready, with caveats.** Every probe was run live:
+* **Crash (#162):** an OOM kill of the worker's pid 1. Docker restarted it, and it rejoined
+  in 2.3 s with 0 "active worker" errors; the job completed on attempt 2. After a manual
+  `docker compose kill`, it rejoined 3.1 s after the RUNBOOK command.
+* **Admission (#163):** 200 symbols daily gets 422 `backtest_too_large` (an estimate of
+  1228.1 MB against the 1228 limit); 199 is admitted.
+* **OOM in a horse (#163),** with the probe's worker limit lowered to 700 MB:
+  `ResourceExhausted`, not retried, and the worker isn't restarted. Two later jobs on the
+  same worker completed, so fork safety holds.
+* **Per-attempt timeout (#167):** a 223 s outage with a 150 s timeout. The job was
+  requeued, not timed out, and attempt 2 completed.
+* **Cancel:** about 0.1 s, idempotent, nothing stored.
+* **Redis outage:** a submission during it was durable and redelivered, and the in-flight
+  job was recovered on attempt 2. Caveat #185: busy workers crash-loop during the outage,
+  and the job loses an attempt.
+* **Metrics (#165):** outcome counters match the probes, `jobs_running` reads 0 after
+  crashes, and Prometheus discovers both workers. The reaper's retries aren't exported
+  (#179).
+* **Regression:** E2E 45/45; job tests 23 + 30 passed.
+* Disclosure: the assessor pulled an `alpine:3` image the brief didn't allow, to read the
+  VM's swap. The lead removed it.
+
+**Integrated gate (lead, slot 86, main `e7cf4fd` = `6fcdd07` + #183's CI step):**
+* ruff, format and mypy clean;
+* pytest **1366 passed, 0 skipped**;
+* migrations: fresh DB → head `18869f6a1dae` → base → head, `alembic check` with no drift;
+* web: lint, typecheck, unit tests 6/6 and build clean;
+* serial Playwright **45/45** at load about 4.5.
+
+**Found after the fixes (open):**
+* #184: rejection-log defects, a fix in progress (engine 1.4.1, economics identical).
+* #187: phantom whole-share top-ups after splits shrink real buys, up to +0.61% of final
+  equity in 8 of 800 adversarial runs. A fix is planned (engine 1.5.0).
+* Both were found by the new independent reference backtester (#180).
+* #181: two fail-open cases in the admission bound (ticker reuse; rebalances on 7-day-week
+  data). Fixes are in progress.
+* #185, #186: Redis-outage and reaper redelivery defects.
 
 **Still blocking public deployment** (unchanged; none of these are code defects):
 * #39: external infrastructure;
