@@ -11,14 +11,13 @@ assumptions and are never investment advice.
 
 | Area | Capability |
 |---|---|
-| Market data | NYSE trading calendar, raw OHLCV with availability timestamps, splits and dividends, point-in-time total-return adjustment, 10 quality checks, content-addressed immutable Parquet versions, DuckDB retrieval with Redis caching, resumable throttled ingestion with backoff |
+| Market data | NYSE trading calendar, raw OHLCV with availability timestamps, splits and dividends, point-in-time total-return adjustment, 23 quality checks (blocking gates and warnings), content-addressed immutable Parquet versions, DuckDB retrieval with Redis caching, resumable throttled ingestion with backoff |
 | Accounting | Transaction ledger with replay audit, value conservation, corporate actions, rejection of impossible trades |
 | Backtesting | Daily event-driven engine with next-session fills, slippage, commissions, partial fills, rejections, delisting liquidation and deterministic fingerprints. Nine strategies: buy and hold, equal weight, SMA crossover, momentum, mean reversion, low volatility, minimum variance, risk parity, volatility target |
 | Analytics | Return, risk-adjusted, benchmark-relative and drawdown statistics with explicit undefined handling. Historical, Gaussian and Cornish-Fisher VaR/ES, risk contributions, stress scenarios, bootstrap Monte Carlo, FIFO trade statistics, cost attribution |
 | Reproducibility | Input hash, engine version, code version, dataset hash and output fingerprint for every experiment; one-click reproduction with automatic fingerprint comparison; downloadable manifest |
 | Platform | FastAPI with OpenAPI docs, Argon2id auth, JWT plus httpOnly cookie sessions, workspace roles, audit log, durable Postgres-backed jobs (leases, fencing, retries, cancellation, timeouts, reaper), Prometheus metrics, structured logs with request correlation |
 | Frontend | Next.js research workspace: market-data explorer, quality report, strategy builder, live job progress, results explorer (equity and drawdown, benchmark table, tail risk, attribution, monthly returns, trade blotter, holdings by date), comparison, workspace administration |
-
 | Validation | Walk-forward with in-sample parameter selection, parameter and cost sweeps, bootstrap confidence intervals, deflated Sharpe, regime breakdown, engine-level look-ahead check, and a Research Integrity Report |
 | ML research | Point-in-time features, purged and embargoed chronological CV, baselines against logistic regression, random forest and gradient boosting |
 | Assistant and reports | Evidence-grounded assistant with verified citations and a deterministic fallback ([eval](docs/AI_EVAL.md)); HTML and Markdown report export |

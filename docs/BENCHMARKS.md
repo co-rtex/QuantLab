@@ -13,6 +13,13 @@ results that are `contended: false` at both ends (1-minute load at or below half
 cores) and `git_dirty: false` are published. Each published figure is copied from the raw
 JSON in `benchmarks/results/` without further rounding.
 
+**Code measured:** `da8767a` (each result's `environment.git_sha`), engine 1.4.0. The engine
+has changed since, and these figures were not re-timed:
+* #163's column store cut engine memory by 23–26%, with results bit-for-bit identical in
+  an independent 24-scenario A/B (docs/RELEASE_READINESS.md);
+* engines 1.4.1 to 1.6.0 changed rejections, pro-rata and noise orders, and add work per
+  fill (the exact pro-rata factor, the overdraw cut).
+
 | | |
 |---|---|
 | Machine | Apple M3 (arm64), 8 cores (`cpu_count`), 8.0 GB RAM (`memory_gb`) |

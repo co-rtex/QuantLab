@@ -468,8 +468,8 @@ from `quantlab`.
 * It applies the same rules: placement and ordering of corporate actions, both delisting
   rules, fills, costs, pro-rata buys, stale marks and the as-of strategy view.
 * `tests/unit/test_engine_oracle.py` requires the engine to agree with it to 1e-9 on 200
-  seeded adversarial synthetic universes, plus eleven hand-computed cases.
-* A mutation harness (`tests/oracle/mutate.py`) shows the comparison catches 31 injected
+  seeded adversarial synthetic universes, plus twelve hand-computed cases.
+* A mutation harness (`tests/oracle/mutate.py`) shows the comparison catches 32 injected
   engine and adjuster defects.
 * **What is independent and what is not** (#209 review).
   * Since 1.5.0 the sell proceeds and the pro-rata factor are written from this text; the
@@ -608,8 +608,17 @@ dependencies; CI checks it on Linux (`tests/unit/test_reproducibility_processes.
       * Hand cases: `test_a_rounding_level_overdraw_cuts_the_buy_instead_of_rejecting_it`
         and `test_a_sell_whose_commission_exceeds_its_proceeds_says_so`.
   * 1.6.0 (#215): no order for a float-noise change in a holding (step 6). **Economics
-    change:** each skipped noise order saves its commission. In the A/B against 1.5.0 (`tests/oracle/ab.py`, 1,002 runs, with 40 large fractional runs at 3e9 and a minimum commission of 5 added for this), 2 runs change. Both made noise orders on 1.5.0, and none changed without one. The noise orders' fills paid 15 in commission, which 1.6.0 saves. The largest position difference between the versions is 0.501059 shares: the saved cash carries into later fractional targets. The #209 review's reproducer (seed 1064, price weight, 3e9, fractional, minimum commission 5) is a hand case: on 1.5.0 a -2^-29-share order on ID2 filled for a notional of 3.1e-7 and paid 5. Tests:
-    `tests/unit/test_order_noise.py`.
+    change:** each skipped noise order saves its commission.
+    * **A/B against 1.5.0** (`tests/oracle/ab.py`, 1,002 runs, with 40 large fractional
+      runs at 3e9 and a minimum commission of 5 added for this): 2 runs change. Both made
+      noise orders on 1.5.0, and none changed without one.
+    * **Size:** the noise orders' fills paid 15 in commission, which 1.6.0 saves. The
+      largest position difference between the versions is 0.501059 shares, the saved
+      cash carrying into later fractional targets.
+    * **Hand case:** the #209 review's reproducer (seed 1064, price weight, 3e9,
+      fractional, minimum commission 5). On 1.5.0 a -2^-29-share order on ID2 filled for a
+      notional of 3.1e-7 and paid 5.
+    * Tests: `tests/unit/test_order_noise.py`.
 * A worker refuses a backtest stamped for another engine version (#152).
 * A validation run re-runs backtests on the worker's current engine, so it records that
   engine (`engine_version`) beside the experiment's (`experiment_engine_version`), plus
