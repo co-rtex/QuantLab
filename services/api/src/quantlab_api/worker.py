@@ -28,6 +28,9 @@ from quantlab_api.tracing import setup_tracing
 # Redis unreachable or not answering. A job's state is in PostgreSQL, whose lease and
 # keepalive run without Redis (jobs.py), so these are not a reason to stop a worker.
 REDIS_DOWN = (redis.exceptions.ConnectionError, redis.exceptions.TimeoutError)
+# Redis answering "no": subclasses of ConnectionError, but a wrong or rotated password is a
+# configuration error, not an outage. It must stop the worker loudly, not be logged forever.
+REDIS_REFUSED = (redis.exceptions.AuthenticationError, redis.exceptions.AuthorizationError)
 
 
 class QuantlabWorker(Worker):
@@ -50,9 +53,36 @@ class QuantlabWorker(Worker):
     """
 
     _last_horse: int = 0
+    # The last horse's exit as wait_for_horse returned it, and whether RQ handed it to the
+    # killed-horse handler (OOM classification, #163): RQ reads the job's status from Redis
+    # first, so in an outage it never gets that far.
+    _horse_exit: tuple[Any, Any, Any] | None = None
+    _horse_kill_handled: bool = False
 
     def _redis_down(self, during: str, exc: Exception) -> None:
+        if isinstance(exc, REDIS_REFUSED):
+            raise exc
         log.warning("worker_redis_unavailable", during=during, error=str(exc))
+
+    def set_shutdown_requested_date(self) -> None:
+        # Written from the SIGTERM handler while a job runs. Raising there escaped the
+        # monitor's wait on the horse, so the worker tore down with the horse still running
+        # (and in a container the horse died with it). Swallowed, the handler returns, the
+        # wait resumes, and the warm shutdown waits for the job as it should.
+        try:
+            super().set_shutdown_requested_date()  # type: ignore[no-untyped-call]
+        except REDIS_DOWN as exc:
+            self._redis_down("shutdown_request", exc)
+
+    def wait_for_horse(self) -> tuple[Any, Any, Any]:
+        result = super().wait_for_horse()
+        if result[0]:
+            self._horse_exit = result
+        return result
+
+    def handle_work_horse_killed(self, job: Any, retpid: Any, ret_val: Any, rusage: Any) -> None:
+        self._horse_kill_handled = True
+        super().handle_work_horse_killed(job, retpid, ret_val, rusage)  # type: ignore[no-untyped-call]
 
     def heartbeat(self, timeout: int | None = None, pipeline: Any = None) -> None:
         try:
@@ -102,6 +132,7 @@ class QuantlabWorker(Worker):
         self._last_horse = self.horse_pid
 
     def execute_job(self, job: Any, queue: Any) -> None:
+        self._horse_exit, self._horse_kill_handled = None, False
         try:
             try:
                 super().execute_job(job, queue)
@@ -111,9 +142,14 @@ class QuantlabWorker(Worker):
                 # outcome is in PostgreSQL, and a job never started is redelivered by the
                 # reaper.
                 self._redis_down("job_bookkeeping", exc)
+                self._after_lost_bookkeeping(job)
         finally:
             horse, self._last_horse = self._last_horse, 0
-            if horse and os.environ.get("PROMETHEUS_MULTIPROC_DIR"):
+            if horse and self.horse_pid:
+                # Not reaped (an error escaped while it ran): its files are still being
+                # written, so they are left, never folded under a live process.
+                log.warning("worker_metrics_fold_skipped", horse=horse)
+            elif horse and os.environ.get("PROMETHEUS_MULTIPROC_DIR"):
                 from prometheus_client import multiprocess
 
                 try:
@@ -125,6 +161,26 @@ class QuantlabWorker(Worker):
                     raise
                 except Exception:  # metrics bookkeeping must never stop the worker
                     log.exception("worker_metrics_compaction_failed", horse=horse)
+
+    def _after_lost_bookkeeping(self, job: Any) -> None:
+        """What RQ's skipped bookkeeping would have done, without Redis."""
+        if self.horse_pid:
+            # Still running (RQ resets horse_pid once it has reaped the horse): never leave
+            # it, or fold its metric files while it writes them. Wait it out, as the
+            # monitor would have; its lease and keepalive are in PostgreSQL.
+            log.warning("worker_waiting_for_horse", horse=self.horse_pid)
+            self.wait_for_horse()
+            self._horse_pid = 0
+        # A horse killed (OOM, signal) whose death RQ never handed over: RQ reads the job's
+        # status from Redis before its killed-horse handler, so in an outage that read
+        # failed first. The handler (jobs.horse_killed) needs only PostgreSQL.
+        if self._horse_exit and not self._horse_kill_handled:
+            retpid, ret_val, rusage = self._horse_exit
+            if ret_val:  # 0: the horse exited normally
+                self.handle_work_horse_killed(job, retpid, ret_val, rusage)
+        # No horse runs now. An Execution registered before a fork that never happened, or
+        # left by a monitor that never finished, would be reported against by later horses.
+        self.executions.clear()
 
 
 def main() -> None:
