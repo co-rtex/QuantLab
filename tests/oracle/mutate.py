@@ -112,8 +112,8 @@ MUTATIONS = [
     Mutation(
         "M9",
         ENG,
-        "if cash < need:",
-        "if False:",
+        "        if cash >= need:",
+        "        if True:",
         "buys not scaled when cash is short (sort order decides)",
     ),
     Mutation(

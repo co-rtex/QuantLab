@@ -533,21 +533,36 @@ names changed-input re-runs and leaves the check "not assessed" if they are the 
         `InvalidOrder` rows or quantities under 1e-9.
     * The hand cases are in `tests/unit/test_engine_oracle.py`, including a 3e9 account
       (`test_dust_cash_in_a_large_account_buys_nothing`).
-  * 1.5.0: **Economics change**, in three parts, each with its own A/B in its commit.
+  * 1.5.0: **Economics change**, in three parts. Each was measured with
+    `tests/oracle/ab.py` (962 runs) against the step before it.
     * **#187:** with whole shares, a buy under one share at the fill (after any split
       restatement) is rejected `below_one_share` and kept out of the pro-rata scaling.
       Before, such a buy (typically a top-up of a holding a split left fractional) could
-      never fill but counted toward the need, and scaled real buys down. A187_PENDING
-      Hand cases: `test_a_sub_share_top_up_does_not_scale_a_real_buy` and
-      `test_the_lot_check_uses_the_quantity_restated_across_a_split`.
+      never fill but counted toward the need, and scaled real buys down.
+      * **A/B against 1.4.1:** 8 runs change their equity, trades, positions and ledger;
+        98 change their rejection log.
+      * **Attribution:** each of the 98 had a whole-share buy under one share at a fill,
+        and none changed without one. Of the 9 runs that had one and did not change, 4
+        met no fill price and 5 a delisting, which rejects the buy first in both
+        versions.
+      * Hand cases: `test_a_sub_share_top_up_does_not_scale_a_real_buy` and
+        `test_the_lot_check_uses_the_quantity_restated_across_a_split`.
     * **#195:** the pro-rata factor is exact (step 4), and sell proceeds net of each
-      sell's actual commission. It changes only runs with a minimum commission.
-      A195_PENDING Hand case: `test_the_pro_rata_factor_is_exact_with_a_minimum_commission`.
+      sell's actual commission.
+      * **A/B against the #187 step:** 129 runs change, 89 of them economically.
+      * **Attribution:** every one has a minimum commission. Runs without one, including
+        all 108 library-strategy runs, are bit-for-bit unchanged: the earlier arithmetic
+        is kept for them.
+      * Hand case: `test_the_pro_rata_factor_is_exact_with_a_minimum_commission`.
     * **#196:** a rounding-level overdraw cuts the buy instead of rejecting it, and a sell
       whose commission exceeds its proceeds is logged `commission_exceeds_proceeds`.
-      A196_PENDING Hand cases:
-      `test_a_rounding_level_overdraw_cuts_the_buy_instead_of_rejecting_it` and
-      `test_a_sell_whose_commission_exceeds_its_proceeds_says_so`.
+      * **A/B against the #195 step,** with the generator's large accounts: 54 runs
+        change, all economically. 15 are large accounts among the differential runs;
+        39 are library-strategy runs at 3e9 with fractional shares.
+      * **Attribution:** every one had an `InsufficientCash` refusal before, and every
+        run with one changed.
+      * Hand cases: `test_a_rounding_level_overdraw_cuts_the_buy_instead_of_rejecting_it`
+        and `test_a_sell_whose_commission_exceeds_its_proceeds_says_so`.
 * A worker refuses a backtest stamped for another engine version (#152).
 * A validation run re-runs backtests on the worker's current engine, so it records that
   engine (`engine_version`) beside the experiment's (`experiment_engine_version`), plus
