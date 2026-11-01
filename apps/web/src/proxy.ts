@@ -1,6 +1,7 @@
 import { NextResponse, type NextRequest } from "next/server";
 
-import { edgeRequiredResponse, fromEdge } from "@/lib/edge";
+import { contentSecurityPolicy, newNonce } from "@/lib/csp";
+import { edgeRequiredResponse, edgeSecret, fromEdge } from "@/lib/edge";
 
 // /invite handles signed-out visitors itself: it must keep the token from the URL fragment.
 const PUBLIC = ["/login", "/register", "/invite"];
@@ -16,7 +17,17 @@ export function proxy(request: NextRequest) {
     if (pathname !== "/") url.searchParams.set("next", pathname);
     return NextResponse.redirect(url);
   }
-  return NextResponse.next();
+  // A fresh nonce for every page (#166, lib/csp.ts). Set on the request, it is what Next
+  // puts on the scripts it renders; any policy the client sent is replaced.
+  const csp = contentSecurityPolicy(newNonce(), {
+    dev: process.env.NODE_ENV === "development",
+    tls: edgeSecret() !== null,
+  });
+  const headers = new Headers(request.headers);
+  headers.set("content-security-policy", csp);
+  const response = NextResponse.next({ request: { headers } });
+  response.headers.set("Content-Security-Policy", csp);
+  return response;
 }
 
 export const config = {
