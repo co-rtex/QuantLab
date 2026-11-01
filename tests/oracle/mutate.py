@@ -228,6 +228,20 @@ MUTATIONS = [
         "if False:",
         "rounding-dust cash scaled into dust buys and spent (#184 review)",
     ),
+    Mutation(
+        "M25",
+        ENG,
+        "buys = [o for o in orders if o.quantity > 0 and not below_one_share(o)]",
+        "buys = [o for o in orders if o.quantity > 0]",
+        "whole-share buys under one share count toward the pro-rata need (#187)",
+    ),
+    Mutation(
+        "M26",
+        ENG,
+        '"reason": "below_one_share",',
+        '"reason": "insufficient_cash",',
+        "a buy under one share logged as a shortfall of cash (#187)",
+    ),
 ]
 
 

@@ -27,7 +27,9 @@ Timeline for each session ``k`` (all prices are raw, as traded):
 Orders that cannot be filled (no bar on the execution date, a bar with zero volume,
 insufficient cash, sells exceeding holdings) are rejected and recorded with a reason; buys
 that exceed available cash are reduced to the affordable quantity and flagged as partial
-fills, and a buy reduced to nothing is rejected as ``insufficient_cash`` (#184).
+fills, and a buy reduced to nothing is rejected as ``insufficient_cash`` (#184). With whole
+shares, a buy under one share as it reaches the fill (after split restatement) is rejected as
+``below_one_share`` and takes no part in pro-rating (#187).
 """
 
 from __future__ import annotations
@@ -51,7 +53,7 @@ from quantlab.portfolio.ledger import EPS as LEDGER_EPS
 from quantlab.portfolio.ledger import Ledger, LedgerError
 from quantlab.strategies.base import MarketView, Strategy
 
-ENGINE_VERSION = "1.4.1"
+ENGINE_VERSION = "1.5.0"
 
 
 class BacktestConfig(BaseModel):
@@ -346,19 +348,29 @@ def run_backtest(
     slip = config.slippage_bps / 1e4
     comm = config.commission_bps / 1e4
 
+    def below_one_share(o: Order) -> bool:
+        """A whole-share buy that is under one share as it reaches the fill, after any
+        split restatement: for example the top-up of a holding a split left fractional
+        (2.96 shares, target 3). It can never fill (#187)."""
+        return (
+            not config.fractional_shares and o.quantity > 0 and math.floor(o.quantity + 1e-9) == 0
+        )
+
     def prorate_buys(k: int, px_row: np.ndarray, orders: list[Order]) -> bool:
         """Scale all buys by the same factor when the cash left after sells cannot fund
-        them, instead of filling whichever symbols sort first. True when there is no cash
-        for any buy."""
+        them, instead of filling whichever symbols sort first. A buy below one share takes
+        no part: it can never fill, so it must not scale the others down (#187). True when
+        there is no cash for any buy."""
         cash = ledger.cash
         for o in orders:
             if o.quantity < 0 and math.isfinite(px_row[col[o.symbol]]):
                 q = min(-o.quantity, ledger.quantity(o.symbol))
                 cash += q * px_row[col[o.symbol]] * (1 - slip) * (1 - comm)
+        buys = [o for o in orders if o.quantity > 0 and not below_one_share(o)]
         need = sum(
             o.quantity * px_row[col[o.symbol]] * (1 + slip) * (1 + comm) + config.commission_min
-            for o in orders
-            if o.quantity > 0 and math.isfinite(px_row[col[o.symbol]]) and o.symbol not in delisted
+            for o in buys
+            if math.isfinite(px_row[col[o.symbol]]) and o.symbol not in delisted
         )
         # Cash up to a billionth of the need is rounding dust left by an earlier fill (#184):
         # no cash. The buys are neither scaled to dust quantities (whose record depended on
@@ -369,10 +381,9 @@ def run_backtest(
             return True
         if cash < need:
             scale = cash / need
-            for o in orders:
-                if o.quantity > 0:
-                    o.quantity *= scale
-                    o.scaled = True
+            for o in buys:
+                o.quantity *= scale
+                o.scaled = True
         return False
 
     def fill(k: int, px_row: np.ndarray, orders: list[Order]) -> float:
@@ -410,10 +421,21 @@ def run_backtest(
                 if qty == 0:
                     continue
             buy = qty > 0
+            # Under one share before any scaling: not a shortfall of cash, no lot to buy
+            # (#187). A buy that scaling cut below one share is insufficient_cash (#184).
+            if buy and not o.scaled and below_one_share(o):
+                rejects.append(
+                    {
+                        "date": d,
+                        "decision_date": o.decision_date,
+                        "symbol": o.symbol,
+                        "quantity": o.quantity,
+                        "reason": "below_one_share",
+                    }
+                )
+                continue
             if buy and not config.fractional_shares:
                 qty = math.floor(qty + 1e-9)
-                if qty == 0 and not o.scaled:
-                    continue
             px = ref * (1 + slip) if buy else ref * (1 - slip)
             partial = o.scaled
             if buy:

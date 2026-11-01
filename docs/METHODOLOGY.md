@@ -311,9 +311,20 @@ Per session `k`:
      quantity. Before 1.4.1 it was dropped with no record.
    * **Affordable quantity under the ledger's smallest** (1e-9 shares, fractional
      shares): it is rejected at the quantity it reached the fill with, after any scaling.
-   * **Known limitation of 1.4.1** (fixed in 1.5.0, #187): with whole shares, a buy under
-     one share that no shortfall caused is still dropped with no record. That is the
-     top-up of a holding a split left fractional, and it still counts toward the need.
+   **A whole-share buy under one share at the fill is rejected `below_one_share`**
+   (#187, engine 1.5.0), with its quantity as it reached the fill. It takes no part in the
+   pro-rata scaling: it is left out of the need and not scaled.
+   * The test is made at the fill, on the quantity after any split restatement, since
+     orders decided before a split are restated in post-split shares.
+     * A 0.5-share top-up that a 2-for-1 split turns into 1 share fills.
+     * A 1-share buy that a 1-for-2 reverse split turns into 0.5 is rejected.
+   * Such a buy is typically the top-up of a holding a split left fractional (2.96
+     shares, target 3), which can never fill.
+   * The decision log keeps the strategy's targets as decided.
+   * Before 1.5.0 the buy counted toward the need, so it could scale the real buys
+     down. It was then dropped with no record or, if scaled, rejected
+     `insufficient_cash`. A buy that scaling cuts below one share is still
+     `insufficient_cash`: cash is the cause there.
    **A bar printed with zero volume is not tradable** (#149, engine 1.4.0): a vendor may
    repeat the last open and close with volume 0 through a halt, and nobody could trade at
    those prices.
@@ -469,6 +480,13 @@ names changed-input re-runs and leaves the check "not assessed" if they are the 
         `InvalidOrder` rows or quantities under 1e-9.
     * The hand cases are in `tests/unit/test_engine_oracle.py`, including a 3e9 account
       (`test_dust_cash_in_a_large_account_buys_nothing`).
+  * 1.5.0 (#187): with whole shares, a buy under one share at the fill (after any split
+    restatement) is rejected `below_one_share` and kept out of the pro-rata scaling.
+    Before, such a buy (a top-up of a holding a split left fractional, typically) could
+    never fill but counted toward the need, and scaled real buys down. **Economics
+    change.** A1B_PENDING The hand cases are
+    `test_a_sub_share_top_up_does_not_scale_a_real_buy` and
+    `test_the_lot_check_uses_the_quantity_restated_across_a_split`.
 * A worker refuses a backtest stamped for another engine version (#152).
 * A validation run re-runs backtests on the worker's current engine, so it records that
   engine (`engine_version`) beside the experiment's (`experiment_engine_version`), plus

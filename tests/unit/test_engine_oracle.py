@@ -240,6 +240,98 @@ def test_whole_share_buys_scaled_below_one_share_are_rejected_not_dropped():
     assert diff(eng, ref, 1000.0) == []
 
 
+class _Fixed:
+    """Target weights by session index, for both implementations."""
+
+    warmup = 0
+
+    def __init__(self, by_day: dict[pd.Timestamp, dict[str, float]]) -> None:
+        self.by_day = by_day
+
+    def decide(self, view):  # the reference's interface
+        return self.by_day[view.date]
+
+    def engine(self):
+        from quantlab.strategies.base import Strategy, StrategyParams
+
+        by_day = self.by_day
+
+        class Fixed(Strategy):
+            key, name, description, Params = (
+                "fixed",
+                "Fixed",
+                "Fixed weights (test)",
+                StrategyParams,
+            )
+
+            def target_weights(self, view):
+                return pd.Series(by_day[view.date], dtype=float)
+
+        return Fixed()
+
+
+def test_a_sub_share_top_up_does_not_scale_a_real_buy():
+    # #187. Whole shares, capital 1000: 33 A and 50 B at 10 leave 170 cash. A splits
+    # 1.5-for-1 on day 3, so 49.5 A are held. The day-3 targets (A 0.335, B 0.66 of
+    # equity 49.5 x 6.7 + 50 x 10 + 170 = 1001.65) want 50 A and 66 B: a top-up of 0.5 A,
+    # which can never fill, and 16 B. At the day-4 open B's 16 x 10.5 = 168 fit the 170
+    # cash, but the top-up added 0.5 x 6.8 = 3.4 to the need, so before 1.5.0 B was scaled
+    # by 170/171.4 to 15 shares (equity 1064.1). Now 16 fill: 49.5 x 6.8 + 66 x 11 + 2.
+    bars = [
+        ("AAA", DAYS[0], 10.0, 10.0, 1e4),
+        ("AAA", DAYS[1], 10.0, 10.0, 1e4),
+        ("AAA", DAYS[2], 6.7, 6.7, 1e4),
+        ("AAA", DAYS[3], 6.8, 6.8, 1e4),
+        ("BBB", DAYS[0], 10.0, 10.0, 1e4),
+        ("BBB", DAYS[1], 10.0, 10.0, 1e4),
+        ("BBB", DAYS[2], 10.0, 10.0, 1e4),
+        ("BBB", DAYS[3], 10.5, 11.0, 1e4),
+    ]
+    first = {"AAA": 0.33, "BBB": 0.5}
+    weights = _Fixed({DAYS[0]: first, DAYS[1]: first, DAYS[2]: {"AAA": 0.335, "BBB": 0.66}})
+    sc = _scenario(bars, [("AAA", DAYS[2], "split", 1.5)], {})
+    eng, ref = _both(sc, weights.engine(), weights)
+    assert eng.equity["equity"].iloc[-1] == pytest.approx(49.5 * 6.8 + 66 * 11 + 2, rel=1e-12)
+    last = eng.trades[eng.trades["date"] == DAYS[3]]
+    assert last[["symbol", "quantity"]].values.tolist() == [["BBB", 16]]
+    assert not last["partial"].any()
+    rej = eng.rejections[["date", "symbol", "quantity", "reason"]].values.tolist()
+    assert rej == [[DAYS[3], "AAA", pytest.approx(0.5, rel=1e-9), "below_one_share"]]
+    assert diff(eng, ref, 1000.0) == []
+
+
+def test_the_lot_check_uses_the_quantity_restated_across_a_split():
+    # #187, at the fill. BBB: 1 share is decided at 10 (0.01 of 1000), then a 1-for-2
+    # reverse split restates it to 0.5 before the fill: rejected below_one_share. AAA: a
+    # 1.5-for-1 split leaves 49.5 held, the target of 50 makes a 0.5 top-up, and a 2-for-1
+    # split restates it to 1 share before the fill: it fills, at 3.4.
+    bars = [
+        ("AAA", DAYS[0], 10.0, 10.0, 1e4),
+        ("AAA", DAYS[1], 10.0, 10.0, 1e4),
+        ("AAA", DAYS[2], 6.7, 6.7, 1e4),
+        ("AAA", DAYS[3], 3.4, 3.4, 1e4),
+        ("BBB", DAYS[0], 10.0, 10.0, 1e4),
+        ("BBB", DAYS[1], 20.0, 20.0, 1e4),
+        ("BBB", DAYS[2], 20.0, 20.0, 1e4),
+        ("BBB", DAYS[3], 20.0, 20.0, 1e4),
+    ]
+    actions = [
+        ("BBB", DAYS[1], "split", 0.5),
+        ("AAA", DAYS[2], "split", 1.5),
+        ("AAA", DAYS[3], "split", 2.0),
+    ]
+    first = {"AAA": 0.33, "BBB": 0.01}
+    weights = _Fixed({DAYS[0]: first, DAYS[1]: {"AAA": 0.33}, DAYS[2]: {"AAA": 0.335}})
+    sc = _scenario(bars, actions, {})
+    eng, ref = _both(sc, weights.engine(), weights)
+    rej = eng.rejections[["date", "symbol", "quantity", "reason"]].values.tolist()
+    assert rej == [[DAYS[1], "BBB", pytest.approx(0.5, rel=1e-9), "below_one_share"]]
+    fills = eng.trades[["date", "symbol", "quantity", "price"]].values.tolist()
+    assert fills == [[DAYS[1], "AAA", 33, 10.0], [DAYS[3], "AAA", 1, 3.4]]
+    assert eng.ledger.positions == {"AAA": 100.0}  # 33 x 1.5 x 2 + 1
+    assert diff(eng, ref, 1000.0) == []
+
+
 @pytest.mark.parametrize("seed", SEEDS)
 def test_engine_matches_reference(seed):
     assert compare(seed) == []

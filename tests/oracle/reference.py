@@ -34,8 +34,9 @@ The rules, per session ``d`` of the window, in order:
    billionth of the need is rounding dust and counts as none. Sells run first, then buys,
    each group by instrument id. A buy is cut to what the cash can fund, including
    commission ``max(commission_min, notional x bps)``; one cut to nothing is rejected
-   ``insufficient_cash`` (#184). With whole shares, a buy under one share that no
-   shortfall caused (a top-up of a holding a split left fractional) is not an order.
+   ``insufficient_cash`` (#184). With whole shares, a buy that is under one share as it
+   reaches the fill (after any split restatement; a top-up of a holding a split left
+   fractional) is rejected ``below_one_share`` and takes no part in the scaling (#187).
 4. **Mark** at the close, or at the last close for an instrument without a bar. A position
    marked on a missing bar or a zero-volume bar is a stale mark.
 5. **Decision** at the close of a rebalance session (the last session of each period and
@@ -245,7 +246,6 @@ def run_reference(
     missing = dict.fromkeys(ids, 0)
     delisted: set[str] = set()
     pending: list[Order] = []
-    dropped: list[tuple[pd.Timestamp, str, float, bool]] = []
     total = {"commission": 0.0, "slippage": 0.0, "dividends": 0.0}
     counts = dict.fromkeys(
         (
@@ -361,19 +361,23 @@ def run_reference(
                 if o.qty < 0 and o.iid in ref:
                     sold = min(-o.qty, qty.get(o.iid, 0.0))
                     after_sells += sold * ref[o.iid] * (1 - slip) * (1 - comm)
+            # With whole shares, a buy that reaches the fill (after any split restatement)
+            # under one share has no lot to buy: it is rejected, and it neither counts toward
+            # the need nor is scaled (#187).
+            no_lot = {o.iid for o in pending if whole and 0 < o.qty < 1 - 1e-9}
+            real = [o for o in pending if o.qty > 0 and o.iid not in no_lot]
             need = sum(
                 o.qty * ref[o.iid] * (1 + slip) * (1 + comm) + cmin
-                for o in pending
-                if o.qty > 0 and o.iid in ref and o.iid not in delisted
+                for o in real
+                if o.iid in ref and o.iid not in delisted
             )
             # Cash of at most a billionth of the need is rounding dust: there is no cash for
             # any buy, so none is scaled and none is bought (#184).
             broke = need > 0 and after_sells <= need * 1e-9
             if not broke and need > 0 and after_sells < need:
-                for o in pending:
-                    if o.qty > 0:
-                        o.qty *= after_sells / need
-                        o.scaled = True
+                for o in real:
+                    o.qty *= after_sells / need
+                    o.scaled = True
             for o in sorted(pending, key=lambda o: (o.qty > 0, o.iid)):
                 if o.qty > 0 and o.iid in delisted:
                     reject(day, o, "delisted")
@@ -390,12 +394,10 @@ def run_reference(
                         continue
                     px = r * (1 - slip)
                 else:
-                    q = math.floor(o.qty + 1e-9) if whole else o.qty
-                    if q == 0 and not o.scaled:
-                        # Under one share without any cash shortfall: a top-up of a holding
-                        # a split left fractional. Neither filled nor rejected.
-                        dropped.append((day, o.iid, o.qty, o.scaled))
+                    if o.iid in no_lot:
+                        reject(day, o, "below_one_share")
                         continue
+                    q = math.floor(o.qty + 1e-9) if whole else o.qty
                     if broke:
                         reject(day, o, "insufficient_cash")
                         continue
@@ -528,7 +530,6 @@ def run_reference(
             "final_equity_share": final_share,
         },
     }
-    res.meta["dropped_buys"] = dropped
     res.meta["final_cash"] = cash
     res.meta["final_positions"] = dict(qty)
     return res
