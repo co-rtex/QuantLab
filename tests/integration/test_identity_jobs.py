@@ -68,7 +68,7 @@ def test_synthetic_versions_carry_ids_and_results_show_tickers(client, seeded):
     assert run_pending_jobs() == ["completed"]
     eid = exp["experiment"]["id"]
     detail = client.get(f"/api/v1/experiments/{eid}", headers=h).json()
-    assert detail["engine_version"] == "1.6.0"
+    assert detail["engine_version"] == "1.7.0"
     trades = _trades(client, seeded, eid)
     assert trades and all(t["symbol"].startswith("SYN") for t in trades)
     assert all(t["instrument_id"] == "QL" + t["symbol"] for t in trades)  # synthetic ids

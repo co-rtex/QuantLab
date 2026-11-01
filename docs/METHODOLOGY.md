@@ -435,6 +435,11 @@ Per session `k`:
      1.6.0 such an order filled and paid a full `commission_min`.
    * **At the boundary:** a change of exactly the threshold is an order, and a real order
      of one share is always one.
+   * **Dust weights** (#227, engine 1.7.0). The noise rule compares a change with the
+     holding, so it doesn't cover an order from zero holdings. Such orders came from
+     optimizer residue: about 1.7e-9 shares in a 3e9 account. Since 1.7.0 the
+     minimum-variance and mean-variance allocators return exact zeros there (see
+     *Optimizers*). The engine's own rules are unchanged.
 
 Symbols that only list after the backtest window are excluded (recorded in
 `meta.not_listed_in_window`). `meta.corporate_actions` counts the universe's actions by
@@ -777,6 +782,32 @@ Long-only, fully invested. Minimum-variance and mean-variance use SLSQP on a res
 objective; risk parity uses Spinu's convex formulation. Every result is validated (finite,
 sums to 1, within bounds) or an error is raised; infeasible bounds are rejected before
 solving.
+
+**Solver residue (#227, engine 1.7.0).** At an active lower bound of 0, SLSQP leaves a
+weight of about 1e-20 to 1e-14 instead of 0.
+* Since 1.7.0 a weight under `DUST_WEIGHT` = 1e-10 is set to exactly 0. Bounds with a
+  positive floor are left alone.
+* **No renormalization:** every other weight keeps its exact value. The dropped mass, at
+  most n × 1e-10, stays in cash: 2e-8 at the strategies' 200-asset cap, 1e-8 at the
+  optimize API's 100 symbols. That is well inside the allocators' sum tolerance of 1e-6.
+* **Why:** in a large account a residue became an order from zero holdings. At 3e9 and
+  minimum commission 1, market 3's weekly `min_variance` run had 264 fills under $0.01,
+  each paying the full minimum.
+* **How the threshold was chosen.** Every raw output was recorded on markets 3, 11 and 29
+  (`generate_market(n_assets=30, 2019-01-02 to 2021-12-31)`): `min_variance` in weekly
+  and daily backtests (2,280 solves), and `mean_variance` on the same covariances (2,200).
+  * The residue was at most 5.6e-16 (`min_variance`) and 8.1e-15 (`mean_variance`).
+  * Real weights were at least 2.3e-6 and 2.2e-5.
+  * No weight lay between, an empty gap of about 9.4 decades. 1e-10 sits about four
+    decades from each side.
+* **Caveat:** the residue's size follows SLSQP's `ftol` (1e-15) and the O(1) objective
+  scaling in `_solve_qp`. If either changes, measure again.
+  `tests/unit/test_allocator_dust.py` fails if a raw weight falls in [1e-13, 1e-7) for
+  the strategy's or the optimize API's default inputs.
+* **The optimize API** now returns exact zeros for these weights. On the API's defaults
+  over the three markets (156 solves, all with residue), the sum of weights, expected
+  volatility, historical mean return, risk shares and HHI moved by at most 1.3e-14
+  relative.
 
 ## ML features (`quantlab.ml.pipeline`)
 * Features at `t` use only bars dated on or before `t`. Momentum and reversal are ratios
