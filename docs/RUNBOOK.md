@@ -110,9 +110,10 @@ A worker, reaper or API host with a skewed clock no longer moves any job deadlin
 * **Workers stay up.** Each one logs `worker_redis_unavailable` (with `during=`: the job's
   heartbeat, the worker's state, maintenance and so on), and waits for Redis before taking
   the next job.
-  * **Before #185,** a busy worker quit at its first heartbeat in an outage of about 25 s
-    or more. Its container restarted in a loop, the running job died with it and lost an
-    attempt, and it waited out its lease.
+  * **Before #185,** a busy worker quit at its horse monitor's first heartbeat in the
+    outage, within 30 s (`job_monitoring_interval`), so an outage of more than a few
+    seconds was enough. Its container restarted in a loop, the running job died with it and
+    lost an attempt, and it waited out its lease.
   * **Measured on 2026-11-01** (slot 21, two workers, restart policy `unless-stopped`): Redis
     was stopped for about 63 s during a running ML job. The job stayed on attempt 1 and
     completed on attempt 1, 45 s after Redis returned. Both workers' restart counts stayed
@@ -123,6 +124,27 @@ A worker, reaper or API host with a skewed clock no longer moves any job deadlin
 * **RQ's own records** in Redis, of jobs that finished during the outage, stay incomplete
   (`rq info` may show them as started). RQ's registry cleanup marks them failed later.
   That changes nothing: a job's outcome is the one in PostgreSQL.
+* **A SIGTERM during the outage** (`docker compose stop`, a deploy) waits for the running
+  job, as it does without one (#197 review), but only within Docker's stop timeout: 10 s
+  by default (`docker compose stop -t <s>`). After that Docker kills the container, and the
+  job is recovered like any lost worker's (see "Jobs stuck in `running`").
+* **A worker started or restarted while Redis is down** can't register with it. It exits,
+  and its restart policy starts it again, in a loop until Redis is back. With
+  `QUANTLAB_RESTART_POLICY=no`, a worktree slot's default, it stays stopped.
+* **Retries scheduled for later** wait for RQ's scheduler. Its process dies at its first
+  Redis error, and the worker restarts it only in maintenance, up to 600 s later. Until
+  then such a retry is delivered by the reaper instead, about 2 minutes after its backoff
+  ends (see "Jobs stuck in `queued`").
+* **A refused password is not an outage.** An authentication or authorization error
+  stops the worker, so a rotated `QUANTLAB_REDIS_PASSWORD` shows up at once, not as an
+  outage logged forever.
+* **A Redis that accepts connections but doesn't answer** (a hung server, a network that
+  drops packets) is different from one that is down.
+  * The worker's connection (`jobs.redis_conn`, redis-py's default) has no socket timeout.
+  * So each call blocks until the operating system's TCP timeout gives up, which on Linux
+    defaults is minutes.
+  * Meanwhile the horse monitor is blocked too, and can't stop an overrunning job.
+  * The job's lease and keepalive, in PostgreSQL, still run.
 
 ### Jobs stuck in `running`
 A worker died mid-job. Its lease (default 60 s, `QUANTLAB_JOB_LEASE_SECONDS`) expires in
