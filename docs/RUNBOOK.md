@@ -10,6 +10,7 @@
 | Reaper | logs contain `reaper_cycle` lines when it recovers anything | process running |
 | Metrics (API) | `curl -H "Authorization: Bearer $QUANTLAB_METRICS_TOKEN" localhost:8000/metrics` | Prometheus text |
 | Metrics (each worker; job, dataset, cache, ingest) | for each replica N (1, 2, …): `docker compose exec --index N worker python -c "import os,urllib.request as u; r=u.Request('http://localhost:9101/metrics', headers={'Authorization': 'Bearer ' + os.environ.get('QUANTLAB_METRICS_TOKEN', '')}); print(u.urlopen(r).read().decode())"` (port 9101 is never published; without `--index`, compose picks one replica) | Prometheus text with `quantlab_job_outcomes_total`; Prometheus target `quantlab-worker` up for every replica |
+| Metrics (reaper; lease-loss retries, the outcomes it decides) | `docker compose exec reaper python -c "import os,urllib.request as u; r=u.Request('http://localhost:9102/metrics', headers={'Authorization': 'Bearer ' + os.environ.get('QUANTLAB_METRICS_TOKEN', '')}); print(u.urlopen(r).read().decode())"` (port 9102 is never published) | Prometheus text with `quantlab_job_retries_total`; Prometheus target `quantlab-reaper` up |
 
 ### Inspecting the job queue
 
@@ -27,6 +28,38 @@ rq requeue --all -S rq.serializers.JSONSerializer   # only with both variables s
 
 Never point plain `rq` tools, or rq-dashboard (it reads jobs with the default serializer),
 at this Redis.
+
+## Resources
+
+**Docker VM memory: at least 4.5 GiB for the default stack (#175).** The default is 2 workers
+at 1536 MiB, 4 API processes, and the 1228 MB backtest admission cap.
+* **Measured, not configured.** Only the workers have a memory limit. Their two limits
+  alone are 3,072 MiB, and api, postgres, redis, web and the reaper have none. So the sum
+  of the limits doesn't bound the VM's use.
+* **The measurement** (2026-11-01, main e7cf4fd, a 3.83 GiB / 3,919 MiB VM): 3 rounds of
+  2 concurrent backtests at the admission cap (equal weight, 199 symbols, daily, 2005–2023).
+  * All 6 completed on their first attempt, with no OOM kill and no container restart.
+  * The VM's `MemAvailable` fell to 234 MB at worst: 94% of the VM in use (3,685 MiB).
+  * Each worker peaked at 1,083–1,160 MiB anonymous; the API at 335 MiB, the reaper 47,
+    Postgres 28, web 19, Redis 15.
+* **The minimum:** that peak, 3,685 MiB, plus 20% is 4,422 MiB, rounded up to 4.5 GiB
+  (4,608 MiB).
+* **Below it, as on this project's development machine (3.83 GiB):** the stack runs with
+  about 6% headroom at worst. A VM-level OOM, which would show in the VM's kernel log as
+  `Out of memory: Killed process` rather than `Memory cgroup out of memory`, wasn't
+  reproduced in those 6 jobs. That it can happen is unverified, not ruled out.
+* **Not measured on top:** the observability profile (Prometheus, Grafana, Jaeger), a
+  second stack, and Docker builds. Each adds to the same VM.
+* **The warning:** `scripts/stack-env.sh`, and so every `make` target, warns on stderr when
+  the VM is smaller than the minimum. It changes nothing; `QUANTLAB_SKIP_VM_CHECK=1`
+  silences it.
+* **To fit a smaller VM:** run 1 worker (`QUANTLAB_WORKERS=1`), or lower the worker limit
+  together with `QUANTLAB_MAX_BACKTEST_MEMORY_MB` (see "Backtests that don't fit the
+  worker's memory").
+* **Resource Saver:** Docker Desktop stops an idle VM (5 minutes by default here), and its
+  kernel log goes with it. To keep evidence of an OOM kill, read
+  `docker run --rm --cap-add SYSLOG --entrypoint dmesg redis:7-alpine` before every
+  container is stopped.
 
 ## Observability
 
@@ -70,6 +103,81 @@ A worker, reaper or API host with a skewed clock no longer moves any job deadlin
    same claim as a worker, so it prints `skipped` and runs nothing for a job that isn't
    claimable: one still in its backoff, one cancelled, or one another worker holds a live
    lease on.
+
+### Redis is down (#185)
+* **Running jobs carry on.** A job's state, lease and keepalive are in PostgreSQL, so a job
+  that was running when Redis went away completes on the same attempt.
+* **Workers stay up.** Each one logs `worker_redis_unavailable` (with `during=`: the job's
+  heartbeat, the worker's state, maintenance and so on), and waits for Redis before taking
+  the next job.
+  * **Before #185,** a busy worker quit at its horse monitor's first heartbeat in the
+    outage, within 30 s (`job_monitoring_interval`), so an outage of more than a few
+    seconds was enough. Its container restarted in a loop, the running job died with it and
+    lost an attempt, and it waited out its lease.
+  * **Measured on 2026-11-01** (slot 21, two workers, restart policy `unless-stopped`): Redis
+    was stopped for about 63 s during a running ML job. The job stayed on attempt 1 and
+    completed on attempt 1, 45 s after Redis returned. Both workers' restart counts stayed
+    0, and they logged 8 `worker_redis_unavailable` lines and no "unhandled exception,
+    quitting".
+* **New submissions** are still recorded, and readiness reports 503 (see "Jobs stuck in
+  `queued`" for what is redelivered once Redis is back).
+* **Rate limits** (logins, registration, invitations, the assistant): each API process's
+  limiter breaker opens at its first connection error (#207): breaker open = counting
+  in-process, still limiting. See the hung-Redis entry below.
+* **RQ's own records** in Redis, of jobs that finished during the outage, stay incomplete
+  (`rq info` may show them as started). RQ's registry cleanup marks them failed later.
+  That changes nothing: a job's outcome is the one in PostgreSQL.
+* **A SIGTERM during the outage** (`docker compose stop`, a deploy) waits for the running
+  job, as it does without one (#197 review), but only within Docker's stop timeout: 10 s
+  by default (`docker compose stop -t <s>`). After that Docker kills the container, and the
+  job is recovered like any lost worker's (see "Jobs stuck in `running`").
+* **A worker started or restarted while Redis is down** can't register with it. It exits,
+  and its restart policy starts it again, in a loop until Redis is back. With
+  `QUANTLAB_RESTART_POLICY=no`, a worktree slot's default, it stays stopped.
+* **Retries scheduled for later** wait for RQ's scheduler. Its process dies at its first
+  Redis error, and the worker restarts it only in maintenance, up to 600 s later. Until
+  then such a retry is delivered by the reaper instead, about 2 minutes after its backoff
+  ends (see "Jobs stuck in `queued`").
+* **A refused password** (a rotated `QUANTLAB_REDIS_PASSWORD`) is not treated as an
+  outage, but only a busy worker stops on it.
+  * **A busy worker** stops at the first authentication or authorization error during a
+    job, after waiting for the running job to finish.
+  * **An idle worker** doesn't stop. RQ's own dequeue retries every connection error,
+    these included, so it logs `invalid username-password pair` (or `NOPERM`) in a loop
+    and takes nothing.
+  * **To tell it from an outage:** `/api/v1/ready` reports 503 with `redis: error`, and
+    the API logs `ready_check_failed component=redis` with `AuthenticationError` in
+    `error`, where an outage logs `ConnectionError` or `TimeoutError`.
+  * **The API's rate limiter** treats it like an outage: `AuthenticationError` is a
+    connection error, so its breaker opens (breaker open = counting in-process, still
+    limiting), and `rate_limiter_breaker_open` in the API's log shows the error.
+* **A Redis that accepts connections but doesn't answer** (a hung server, a network that
+  drops packets) is different from one that is down.
+  * A connection attempt gives up after 5 s (`QUANTLAB_REDIS_CONNECT_TIMEOUT_SECONDS`).
+  * **The API:** each call gives up after 5 s (`QUANTLAB_REDIS_SOCKET_TIMEOUT_SECONDS`),
+    once, without retries (#200). Then:
+    * `/api/v1/ready` reports 503 with `redis: error`;
+    * the rate limits (logins, registration, invitations, the assistant) are counted in
+      each API process instead. Breaker open = counting in-process, still limiting (#207):
+      a connection error or a timeout opens each process's limiter breaker, which skips
+      Redis for 10 s, then lets one call try it again. Any other Redis error (a bad
+      reply) falls back for that call only. `quantlab_rate_limiter_breaker_open` is 1
+      meanwhile, with `rate_limiter_breaker_open` and `rate_limiter_breaker_closed` in
+      the API's log;
+    * bar reads skip the cache (`"cache": "bypass"`);
+    * a submitted job stays `queued` until the reaper delivers it, once Redis answers.
+  * **How long requests wait.** Without the breaker, a login made three limiter calls (two
+    with a wrong password), each waiting a timeout: 15.21 s with Redis paused (#200's
+    probe). With it, at the onset every limiter call already in flight waits its own
+    timeout (up to as many as the API's thread pool runs at once). Then, per process, one
+    probe per 10 s waits up to connect + reply, and other limiter calls don't wait. The
+    bars cache, `/ready` and enqueue have no breaker: they still wait on every call.
+  * **A worker:** once connected, a call blocks for up to 415 s: RQ raises the connection's
+    socket timeout to its dequeue timeout plus 10 s (`worker_ttl` 420 − 15 + 10), so a
+    blocking dequeue isn't cut short. That is about 7 minutes per attempt.
+  * Meanwhile the horse monitor is blocked, and with it its backstop kill of a horse
+    that outlives its job timeout by 60 s. The horse's own job timeout still fires.
+  * The job's lease and keepalive, in PostgreSQL, still run.
 
 ### Jobs stuck in `running`
 A worker died mid-job. Its lease (default 60 s, `QUANTLAB_JOB_LEASE_SECONDS`) expires in
@@ -135,8 +243,14 @@ experiment; results of failed jobs are never stored.
     `QUANTLAB_MAX_BACKTEST_MEMORY_MB`.
     * The estimate grows with symbols × sessions loaded and symbols × rebalances in the
       window.
-    * Sessions are the larger of the exchange calendar's count and the version's distinct
-      bar dates.
+    * Sessions, and rebalances in the window, are each the larger of the exchange
+      calendar's count and the version's distinct bar dates (the engine rebalances on its
+      bar dates, #181). On a 7-day-week dataset the daily cap for 2005–2023 is therefore
+      137 symbols, not 199.
+    * Symbols are the job's instruments: a universe's distinct tickers, or every
+      instrument of the version (a reused ticker once per holder).
+    * The estimate in a refusal is rounded up to 0.1 MB, so it is never shown equal to
+      the limit.
     * It ignores the strategy, so a strategy that holds few names is overestimated.
     * The default limit is 1228 MB, which is 80% of the compose worker's 1536 MB limit.
     * `details` give the estimate, the limit, and the symbols, sessions and rebalances.
@@ -227,7 +341,10 @@ edge (local development) no address is forwarded and only the per-account limit 
 the Docker host replaces client source addresses (the address is a Docker gateway; see
 "Exposing a deployment", host requirement), or the API is not trusting the web tier (the
 address is the web container's; check that setting and that `web` resolves from the API). A 403 `edge_required` from the web tier means a request reached it without
-passing through the edge. During a Redis outage limits are per process (ADR-0007).
+passing through the edge. Limits are per API process (ADR-0007) during a Redis outage,
+and for 10 s after any connection error to Redis (the limiter's breaker, #207: breaker
+open = counting in-process, still limiting). Each key starts from the floor: the last
+count Redis returned to that process in this window, or 0 for a key it hasn't seen.
 
 ### Disk usage
 `$QUANTLAB_DATA_DIR/datasets` holds immutable dataset versions; `artifacts/` holds
@@ -305,7 +422,8 @@ refuses unless `QUANTLAB_JWT_SECRET` is a real secret (≥ 32 characters, no pla
 words) and `QUANTLAB_METRICS_TOKEN` has 16+ characters. A **worker that serves job
 metrics** (`PROMETHEUS_MULTIPROC_DIR` set, as in compose) also refuses without
 `QUANTLAB_METRICS_TOKEN`, under the same rule (#165). A worker without that directory, such
-as the Terraform ECS task, serves nothing and needs no token. Workers and the reaper never
+as the Terraform ECS task, serves nothing and needs no token. The **reaper** follows the same
+rule when `QUANTLAB_REAPER_METRICS_PORT` is set, as in compose (#179). Workers and the reaper never
 sign tokens and are not given the JWT key (#117); without the key a process fails closed
 instead of using a development key. Terminate TLS at the trusted edge (below). Run migrations
 (`alembic -c services/api/alembic.ini upgrade head`) before starting new API versions.

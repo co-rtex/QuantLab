@@ -1551,7 +1551,7 @@ requires-dist = [
     { name = "python-multipart", specifier = ">=0.0.20" },
     { name = "quantlab", editable = "packages/quantlab" },
     { name = "redis", specifier = ">=5.2" },
-    { name = "rq", specifier = ">=2.0" },
+    { name = "rq", specifier = ">=3.0,<3.1" },
     { name = "sqlalchemy", specifier = ">=2.0.36" },
     { name = "structlog", specifier = ">=24.4" },
     { name = "uvicorn", extras = ["standard"], specifier = ">=0.32" },

@@ -3,10 +3,13 @@
 from __future__ import annotations
 
 import uuid
+from pathlib import Path
 from typing import Any, Literal
 
 import numpy as np
 import pandas as pd
+import pyarrow.compute as pc
+import pyarrow.parquet as pq
 from fastapi import APIRouter, Request
 from pydantic import BaseModel, Field, model_validator
 from sqlalchemy import func, select
@@ -22,6 +25,7 @@ from quantlab.analytics.risk import (
 )
 from quantlab.analytics.summary import jsonable
 from quantlab.data.adjust import total_returns
+from quantlab.data.schema import normalize_actions
 from quantlab.portfolio.ledger import LedgerError
 from quantlab.portfolio.valuation import Entry, summary, time_weighted_returns, value_portfolio
 from quantlab_api import provenance
@@ -94,8 +98,24 @@ def _market(
     store = dataset_store()
     v = store.open(ds.slug, dv.version_hash)
     syms = sorted(symbols | ({p.benchmark} if p.benchmark else set()))
-    bars = store.load_bars(v, symbols=syms or None)
-    return bars, store.load_actions(v, symbols=syms or None), dv.is_synthetic
+    if not syms:
+        # Cash only, and no benchmark (#217). Valued over the version's trading dates alone
+        # (value_portfolio's calendar is every distinct bar date): with no symbols to filter
+        # by, load_bars and load_actions read every row of the version into this process,
+        # on each valuation, on creation, and on each append under the portfolio's row lock.
+        dates = _bar_dates(v.path)
+        bars = pd.DataFrame({"date": dates, "symbol": pd.Series([""] * len(dates), dtype=str)})
+        return bars, normalize_actions(None), dv.is_synthetic
+    bars = store.load_bars(v, symbols=syms)
+    return bars, store.load_actions(v, symbols=syms), dv.is_synthetic
+
+
+def _bar_dates(path: Path) -> pd.Series:
+    """Every distinct bar date of a dataset version: the column and the set that
+    marketdata.bar_dates counts, and that sorted(load_bars(v)["date"].unique()) gives,
+    without reading any other column (PyArrow, as there: DuckDB doesn't survive a fork)."""
+    column = pq.read_table(path / "bars.parquet", columns=["date"]).column("date")
+    return pd.Series(pc.unique(column).to_pandas()).sort_values(ignore_index=True)
 
 
 def _tx_out(t: PortfolioTransaction) -> dict[str, Any]:

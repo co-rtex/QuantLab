@@ -67,10 +67,14 @@ $QUANTLAB_DATA_DIR/
 
 ## Observability
 
-Prometheus scrapes two kinds of process, both behind the same bearer token
+Prometheus scrapes three kinds of process, all behind the same bearer token
 (`QUANTLAB_METRICS_TOKEN`, required in production by each process that serves metrics):
 * **The API**, at `api:8000/metrics`: HTTP latency by route template and DB statement
-  latency, aggregated over its uvicorn processes.
+  latency, aggregated over its uvicorn processes. Also
+  `quantlab_rate_limiter_breaker_open{limiter="login"}` (#207, `livemax`): 1 while any
+  live API process's rate limiter counts in-process after a Redis error, still limiting.
+  The API never marks a dead uvicorn process, so a process that died with its breaker
+  open leaves 1 until the container restarts.
 * **Each worker replica**, at `<replica>:9101/metrics` (#165): queue wait, job run time and
   outcomes, retries, running jobs, DB statement latency, cache hit/miss, latest dataset rows
   and freshness, ingestion quality.
@@ -91,12 +95,35 @@ Prometheus scrapes two kinds of process, both behind the same bearer token
     not even the last bit of a float sum.
   * The directory holds the worker process's own two files and three archives, plus the
     running job's files while one runs, however many jobs have run.
+  * Retries here are the ones a worker schedules after a retryable error. Retries after a
+    lost worker are the reaper's (below).
   * Measured on 2026-11-01 in the worker image on a real tmpfs, on an 8-CPU machine with a
     3.83 GiB Docker VM, at load average about 2.5 (`benchmarks/worker_metric_files.py`;
     `benchmarks/results/20261101T043624Z-worker-metric-files.log`). Without the fold,
     every job left three files and about 20 KiB of tmpfs, which counts against the
     worker's memory limit. Every scrape read them all: 483 ms at 5,000 jobs. With it, a
     scrape takes about 0.4 ms at any count, and a fold about 0.23 ms.
+* **The reaper**, at `reaper:9102/metrics` (#179): retries after a lost worker
+  (`quantlab_job_retries_total{reason="lease_expired"}`), the outcomes it decides (cancelled,
+  timed out, out of attempts, and cancelled before any worker saw it), and its DB statement
+  latency.
+  * It serves only when `QUANTLAB_REAPER_METRICS_PORT` is set (compose sets 9102). Without
+    the port it serves nothing and needs no token, like the Terraform ECS task.
+  * It is one process that never forks, so its samples are in its own registry, with no
+    multiprocess directory. A restart starts its counters from zero, which Prometheus reads
+    as a reset.
+  * It counts a decision only once it is committed, so a failed commit counts nothing and
+    the next pass counts it once.
+  * If its metrics port can't be bound, the reaper stops at start, before its first
+    pass. Compose restarts it under the default restart policy (`unless-stopped`; a
+    worktree slot's `no` leaves it stopped).
+* **Each job's terminal outcome is counted once**, by whichever process's write wins the
+  job's row: the worker (`completed`, `failed`, `timed_out`, `cancelled`), or the reaper
+  when it decides first.
+  * A worker whose write is fenced, because the reaper already decided the job after its
+    lease ran out, counts `quantlab_job_outcomes_total{outcome="lease_lost"}` instead.
+  * `lease_lost` and `retry` are not terminal outcomes. A sum of terminal outcomes, for
+    example jobs finished per hour, must exclude both.
 
 Structured JSON logs (structlog) carry `request_id`, and job logs carry the originating
 request id.

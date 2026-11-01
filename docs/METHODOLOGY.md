@@ -298,6 +298,74 @@ Per session `k`:
    fill prices, every buy is scaled by the same factor (then rounded to whole shares
    unless fractional shares are enabled) and flagged `partial`, so no symbol is favoured
    by sort order. Orders without a price on the fill date are rejected (`no_price`).
+   **The factor** (#195, engine 1.5.0) is exact:
+   * **Cash after sells** is the cash plus each sell's proceeds at the fill price with
+     slippage, `v - max(commission_min, v x bps)`, where `v` is the sell's value.
+   * **The buys** are those with a fill price that can fill: not delisted, and at least
+     one share with whole shares. Each has a value `v_i = q_i x p_i x (1 + slippage)` at
+     its fill price, and costs `v_i + max(commission_min, v_i x bps)`.
+   * **When they cost more than the cash after sells,** the factor `s` is the largest
+     `s <= 1` with `sum_i [s v_i + max(commission_min, s v_i bps)] <= cash`. The total is
+     increasing and piecewise linear in `s` (buy `i` pays the minimum until
+     `s = commission_min / (v_i bps)`), so `s` is solved exactly on its segment.
+   * **Rounding is safe.** Rounding a scaled quantity down to whole shares stays within
+     the cash, because a smaller quantity never raises `max(commission_min, ...)`.
+   * **When even the minimum commissions exceed the cash** (`n x commission_min >=
+     cash`), no `s > 0` is feasible, and every buy is rejected `insufficient_cash`.
+     Dropping some buys instead would have to choose which, by an order this rule
+     avoids. A small account spreading over many names can therefore stay in cash: with
+     a minimum of 5, ten buys need more than 50 before any of them fills.
+
+   **Example.** Cash after sells 1,000; buys worth 900 and 300 at the fill price;
+   commission 10 bps with a minimum of 5.
+   * At full size they cost 905 + 305 = 1,210.
+   * Both buys pay the minimum for every `s <= 1`: their breakpoints are 5/0.9 and
+     5/0.3. So `1,200 s + 10 = 1,000`, `s = 0.825`. The buys become 742.5 and 247.5,
+     costing 747.5 + 252.5 = 1,000.
+   * Before 1.5.0 the factor was `cash / sum(v_i x (1 + bps) + commission_min)` =
+     1,000 / 1,211.2 = 0.82563. That needed 1,000.75, so the last buy by symbol was cut
+     to fit. The sells' proceeds also ignored the minimum.
+   * With no minimum commission, both factors and the proceeds are the same as before.
+   **A buy the cash cuts to nothing is rejected `insufficient_cash`** (#184, engine
+   1.4.1). The quantity recorded depends on the case:
+   * **No cash.** Cash left after the sells of at most a billionth of the buys' need is
+     rounding dust from an earlier fill, and counts as none. Every buy is then rejected
+     at its decided quantity: none is scaled, and none spends the dust. Before 1.4.1,
+     positive dust scaled every buy to dust quantities. Those were logged `InvalidOrder`
+     near 1e-17 shares, or in a large fractional account (where a billionth of the need
+     is dollars) bought at dust size by the first symbols in sort order. Zero or
+     negative dust logged the same buys `insufficient_cash`.
+   * **Scaled below one whole share** (whole shares): it is rejected at its scaled
+     quantity. Before 1.4.1 it was dropped with no record.
+   * **Affordable quantity under the ledger's smallest** (1e-9 shares, fractional
+     shares): it is rejected at the quantity it reached the fill with, after any scaling.
+
+   **A rounding-level overdraw cuts the buy instead of rejecting it** (#196, engine 1.5.0).
+   * The ledger refuses to take cash more than 1e-9 dollars below zero, while the
+     affordable quantity is computed in shares, with a 1e-9-share slack.
+   * From about 1e7 of cash, float rounding can leave a buy a fraction of a cent over
+     the cash. That buy was rejected whole (`InsufficientCash`): at capital 3e9, buys of
+     a median $84M were rejected for shortfalls of 1.4e-9 to 9.5e-7 dollars.
+   * Such a buy is now cut until it fits and flagged `partial`. It loses one share at a
+     time, or with fractional shares a step that starts at one unit in the last place and
+     doubles.
+   * A sell whose proceeds don't cover `commission_min`, when the cash can't pay the
+     difference, is rejected `commission_exceeds_proceeds`. That replaces the ledger's
+     internal `InsufficientCash`.
+   **A whole-share buy under one share at the fill is rejected `below_one_share`**
+   (#187, engine 1.5.0), with its quantity as it reached the fill. It takes no part in the
+   pro-rata scaling: it is left out of the need and not scaled.
+   * The test is made at the fill, on the quantity after any split restatement, since
+     orders decided before a split are restated in post-split shares.
+     * A 0.5-share top-up that a 2-for-1 split turns into 1 share fills.
+     * A 1-share buy that a 1-for-2 reverse split turns into 0.5 is rejected.
+   * Such a buy is typically the top-up of a holding a split left fractional (2.96
+     shares, target 3), which can never fill.
+   * The decision log keeps the strategy's targets as decided.
+   * Before 1.5.0 the buy counted toward the need, so it could scale the real buys
+     down. It was then dropped with no record or, if scaled, rejected
+     `insufficient_cash`. A buy that scaling cuts below one share is still
+     `insufficient_cash`: cash is the cause there.
    **A bar printed with zero volume is not tradable** (#149, engine 1.4.0): a vendor may
    repeat the last open and close with volume 0 through a halt, and nobody could trade at
    those prices.
@@ -381,6 +449,31 @@ replay); equity equals cash plus marked positions every day; cash never negative
 positions never negative; deterministic fingerprints for identical inputs; truncating
 data after a decision date leaves that decision unchanged (no look-ahead).
 
+**Independent reference (#180).** `tests/oracle/reference.py` is a second, deliberately
+simple backtester, written from this section and the *Data* section and importing nothing
+from `quantlab`.
+* It keys ticker-level data by instrument from the symbol history itself.
+* It applies the same rules: placement and ordering of corporate actions, both delisting
+  rules, fills, costs, pro-rata buys, stale marks and the as-of strategy view.
+* `tests/unit/test_engine_oracle.py` requires the engine to agree with it to 1e-9 on 200
+  seeded adversarial synthetic universes, plus eleven hand-computed cases.
+* A mutation harness (`tests/oracle/mutate.py`) shows the comparison catches 31 injected
+  engine and adjuster defects.
+* **What is independent and what is not** (#209 review).
+  * Since 1.5.0 the sell proceeds and the pro-rata factor are written from this text; the
+    reference finds the factor by bisection, where the engine solves it in closed form.
+  * Still mirrored from the engine's code rather than this text: the affordability cut's
+    1e-9-share slack, the #196 cut that fits a buy to the cash, and the ledger's 1e-9
+    dollar limit together with the float order of its cash update.
+  * A defect shared there would not show.
+
+It is evidence that the engine implements these rules as written. It is not evidence that
+the rules match any vendor's data.
+
+Since #196, a quarter of the generated universes run a large account (1e8 to 1e12), where
+cash rounding is dollars. Before, capital was capped at 1e6, because both implementations
+emulated the same cliff: a whole buy rejected for a shortfall of a fraction of a cent.
+
 **Memory and size limits (#163).**
 * **Storage:** the engine keeps trades, position rows and decisions by column while it
   simulates (float columns in float64 arrays), instead of one Python dict per trade.
@@ -400,9 +493,21 @@ data after a decision date leaves that decision unchanged (no look-ahead).
     * Sessions are the larger of the exchange calendar's count and the dataset version's
       distinct bar dates, from the data's first bar to the end date. The engine loads that
       whole history whatever the start.
+    * Rebalances are counted with the engine's own rule (`rebalance_mask`) over the traded
+      window, also on whichever of the calendar or the bar dates gives more (#181). The
+      engine rebalances on its bar dates, so a version with bars on weekends rebalances
+      more often than the calendar says.
+    * Symbols are the instruments the job runs (#181). That is a universe's distinct
+      tickers, or without a universe every instrument of the version: a reused ticker
+      counts once per holder.
     * A long history of few symbols is inside the range.
   * For 2005–2023 the effective caps are 199 symbols daily and 400 weekly, monthly or
-    quarterly.
+    quarterly. On data with a bar every day (a 7-day-week CSV), the daily cap is 137.
+    Before #181 it was 172, because rebalances were counted on the calendar's 4,785
+    sessions while the engine made 6,935. At 172 symbols that admitted an estimated
+    1,439 MB under a 1,228 MB limit.
+  * A refusal shows the estimate rounded up to 0.1 MB, in the message and in
+    `details.estimated_mb`, so it never appears equal to the limit.
   * Details are in `docs/RUNBOOK.md` and `benchmarks/results/*-worker-memory-*.json`.
 
 **Reproduction.** The input hash covers the dataset version, strategy, parameters,
@@ -421,6 +526,75 @@ bootstrap take explicit seeds. This was measured on macOS arm64 with the locked
 dependencies; CI checks it on Linux (`tests/unit/test_reproducibility_processes.py`).
 
 **Engine versions.**
+* History (versions before 1.2.0 are in the git history):
+  * 1.2.0 (#27): corporate-action placement on the next bar, ordering and ingestion
+    gates.
+  * 1.3.0 (#62): jobs keyed by permanent instrument id.
+  * 1.4.0 (#149): no fills on zero-volume bars, plus stale-mark accounting.
+  * 1.4.1 (#184): a buy the cash cuts to nothing is rejected `insufficient_cash` instead
+    of dropped or logged `InvalidOrder`, and rounding dust does not count as cash.
+    * **Economics.** 1.4.0 scaled buys to dust quantities when cash was dust. In a large
+      fractional account that bought dust positions; 1.4.1 buys nothing then. The
+      difference starts at dust level but need not stay there.
+      * **The mechanism:** a dust trade changes later float rounding. With #196's cliff (a
+        whole buy rejected for a rounding-level shortfall), that can turn into a whole
+        buy filled by one version and rejected by the other.
+      * **On the final 1.4.1 code**, the #190 review's re-check against 1.4.0 found 5 of
+        480 large-account runs that differ: seeds 1000-1119, capital 3e9, fractional,
+        two strategies × two modes. They are seed 1015 random (both modes) and seeds
+        1074, 1081 and 1094 momentum.
+      * **The worst** is seed 1094 at `next_close`: $2.47M, 5.6e-4 relative. On
+        2022-02-03, 1.4.0 bought 2.66e-9 shares of dust. Later it rejected a whole $32M
+        buy for a rounding-level shortfall, which 1.4.1 fills.
+      * 1.5.0 removes the cliff (#196).
+      * **Elsewhere the economics are identical:** equity, trades, positions, ledger and
+        fingerprints match 1.4.0 in all 962 runs of `tests/oracle/ab.py`, including 54
+        with capital 3e9 and fractional shares.
+    * **The rejection log** differs in 134 of those runs: 105 of the 800 differential
+      runs, and 29 of the library-strategy runs (not broken down: the reference does not
+      run those strategies).
+      * On 1.4.0, the 800 differential runs dropped 933 decided buys without a record,
+        in 141 runs. 461 of them (in 89 runs) were scaled below one whole share, and
+        1.4.1 rejects them. The other 472 (in 96 runs) were unscaled top-ups under one
+        share, which 1.4.1 still drops (#187).
+      * The 105 changed runs are those 89, plus 16 runs whose 1.4.0 log held dust:
+        `InvalidOrder` rows or quantities under 1e-9.
+    * The hand cases are in `tests/unit/test_engine_oracle.py`, including a 3e9 account
+      (`test_dust_cash_in_a_large_account_buys_nothing`).
+  * 1.5.0: **Economics change**, in three parts. Each was measured with
+    `tests/oracle/ab.py` (962 runs) against the step before it.
+    * **#187:** with whole shares, a buy under one share at the fill (after any split
+      restatement) is rejected `below_one_share` and kept out of the pro-rata scaling.
+      Before, such a buy (typically a top-up of a holding a split left fractional) could
+      never fill but counted toward the need, and scaled real buys down.
+      * **A/B against 1.4.1:** 8 runs change their equity, trades, positions and ledger;
+        98 change their rejection log.
+      * **Attribution:** each of the 98 had a whole-share buy under one share at a fill,
+        and none changed without one. Of the 9 runs in this grid that had one and kept
+        their economics and log, 4 met no fill price and 5 a delisting, which rejects the
+        buy first in both versions.
+      * The rejection log also changes where such a buy meets no fill price or a
+        zero-volume bar: it is no longer scaled before the rejection, so its recorded
+        quantity is the restated one (in the #209 review's grid: seed 1030, ID3, 0.428809
+        before, 0.5 now).
+      * Hand cases: `test_a_sub_share_top_up_does_not_scale_a_real_buy` and
+        `test_the_lot_check_uses_the_quantity_restated_across_a_split`.
+    * **#195:** the pro-rata factor is exact (step 4), and sell proceeds net of each
+      sell's actual commission.
+      * **A/B against the #187 step:** 129 runs change, 89 of them economically.
+      * **Attribution:** every one has a minimum commission. Runs without one, including
+        all 108 library-strategy runs, are bit-for-bit unchanged: the earlier arithmetic
+        is kept for them.
+      * Hand case: `test_the_pro_rata_factor_is_exact_with_a_minimum_commission`.
+    * **#196:** a rounding-level overdraw cuts the buy instead of rejecting it, and a sell
+      whose commission exceeds its proceeds is logged `commission_exceeds_proceeds`.
+      * **A/B against the #195 step,** with the generator's large accounts: 54 runs
+        change, all economically. 15 are large accounts among the differential runs;
+        39 are library-strategy runs at 3e9 with fractional shares.
+      * **Attribution:** every one had an `InsufficientCash` refusal before, and every
+        run with one changed.
+      * Hand cases: `test_a_rounding_level_overdraw_cuts_the_buy_instead_of_rejecting_it`
+        and `test_a_sell_whose_commission_exceeds_its_proceeds_says_so`.
 * A worker refuses a backtest stamped for another engine version (#152).
 * A validation run re-runs backtests on the worker's current engine, so it records that
   engine (`engine_version`) beside the experiment's (`experiment_engine_version`), plus

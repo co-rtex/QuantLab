@@ -19,3 +19,14 @@ scrape_configs:
         type: A
         port: 9101
         refresh_interval: 30s
+  # The reaper's lease-loss retries and the outcomes it decides (#179), at :9102 (never
+  # published). By name, like the workers, so a stopped reaper is no target, not an error.
+  - job_name: quantlab-reaper
+    metrics_path: /metrics
+    authorization:
+      credentials_file: /etc/prometheus/metrics_token
+    dns_sd_configs:
+      - names: ["reaper"]
+        type: A
+        port: 9102
+        refresh_interval: 30s

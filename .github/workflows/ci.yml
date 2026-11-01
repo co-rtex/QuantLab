@@ -15,7 +15,9 @@ permissions:
 jobs:
   python:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    # The suite takes about 10 min with coverage (1500 tests); runners have run it 2x slower
+    # on 2026-11-01 (runs cancelled at 20 min on unrelated PRs), so 30 leaves headroom.
+    timeout-minutes: 30
     services:
       postgres:
         image: postgres:17-alpine

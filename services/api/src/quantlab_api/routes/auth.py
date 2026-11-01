@@ -15,6 +15,7 @@ from quantlab_api.security import (
     DEVICE_FAILURES,
     DEVICE_WINDOW,
     CurrentUser,
+    Reservation,
     audit,
     create_access_token,
     hash_password,
@@ -118,14 +119,14 @@ def login(body: LoginIn, request: Request, response: Response, db: DB) -> TokenO
     # capped too, and past that cap it falls back to the account budget. Reserve
     # atomically before verifying; refunded below if the login succeeds.
     device = trusted_device(request, email, user)
-    budget: tuple[str, int] | None = None
+    budget: Reservation | None = None
     if device is not None:
-        dev_key = f"login:dev:{device}"
-        if login_limiter.reserve(dev_key, DEVICE_FAILURES, DEVICE_WINDOW):
-            budget = (dev_key, DEVICE_WINDOW)
+        dev = login_limiter.reserve_receipt(f"login:dev:{device}", DEVICE_FAILURES, DEVICE_WINDOW)
+        if dev:
+            budget = dev
     if budget is None:
-        budget = (f"login:fail:{email}", 60)
-        if not login_limiter.reserve(budget[0], limit * 3):
+        budget = login_limiter.reserve_receipt(f"login:fail:{email}", limit * 3)
+        if not budget:
             raise ApiError(429, "rate_limited", "Too many failed attempts; try again later")
     if (
         not verify_password(body.password, user.password_hash if user else None)
@@ -142,7 +143,7 @@ def login(body: LoginIn, request: Request, response: Response, db: DB) -> TokenO
         )
         db.commit()
         raise ApiError(401, "invalid_credentials", "Invalid email or password")
-    login_limiter.refund(*budget)
+    login_limiter.refund(budget)  # where it was counted: Redis, or nowhere
     audit(db, request, "user.login", user=user, target_type="user", target_id=user.id)
     db.commit()
     set_device_cookie(response, user, device)

@@ -58,6 +58,15 @@ JOBS_RUNNING = Gauge(
     "quantlab_jobs_running", "Jobs currently executing", multiprocess_mode="livesum"
 )
 CACHE_EVENTS = Counter("quantlab_cache_events_total", "Cache lookups", ["cache", "result"])
+# 1 while any live API process's rate limiter counts locally after a Redis error (#207).
+# Labelled, so no process writes a sample (in multiprocess mode, a file) until a breaker
+# opens: an unlabelled gauge would add one to every work horse's directory.
+RATE_LIMITER_BREAKER_OPEN = Gauge(
+    "quantlab_rate_limiter_breaker_open",
+    "1 while the rate limiter skips Redis after an error and counts in the process",
+    ["limiter"],
+    multiprocess_mode="livemax",
+)
 DATASET_ROWS = Gauge(
     "quantlab_dataset_rows",
     "Rows in the most recently ingested dataset version",
@@ -85,19 +94,31 @@ def _add_request_id(_: Any, __: str, event: MutableMapping[str, Any]) -> Mutable
 
 def configure_logging(level: str = "INFO", json: bool = True) -> None:
     logging.basicConfig(format="%(message)s", stream=sys.stdout, level=level)
+    # Tracebacks without frame locals, in both formats: structlog's defaults (dict_tracebacks,
+    # and the console's rich tracebacks) log them, so any logged 500 printed request bodies
+    # such as passwords (#8). The exception is rendered to frames for JSON only: the console
+    # renderer prints a traceback itself, and given those frames it raised TypeError instead,
+    # inside the handler that was logging (#202).
+    renderer: list[Any] = (
+        [
+            structlog.processors.ExceptionRenderer(ExceptionDictTransformer(show_locals=False)),
+            structlog.processors.JSONRenderer(),
+        ]
+        if json
+        else [structlog.dev.ConsoleRenderer(exception_formatter=structlog.dev.plain_traceback)]
+    )
     structlog.configure(
         processors=[
             structlog.contextvars.merge_contextvars,
             _add_request_id,
             structlog.processors.add_log_level,
             structlog.processors.TimeStamper(fmt="iso", utc=True),
-            # Frames without their local variables: structlog's default (dict_tracebacks)
-            # logs them, so any logged 500 printed request bodies such as passwords.
-            structlog.processors.ExceptionRenderer(ExceptionDictTransformer(show_locals=False)),
-            structlog.processors.JSONRenderer() if json else structlog.dev.ConsoleRenderer(),
+            *renderer,
         ],
         wrapper_class=structlog.make_filtering_bound_logger(logging.getLevelName(level)),
-        cache_logger_on_first_use=True,
+        # Not cached: a cached logger keeps the configuration it first logged with, so one
+        # used before this call never got it, and which call came first decided the format.
+        cache_logger_on_first_use=False,
     )
 
 
@@ -278,10 +299,41 @@ def worker_metrics_app(token: str | None) -> WSGIApp:
 
     ``token`` None (development) serves without one, as the API does.
     """
-    from prometheus_client import CONTENT_TYPE_LATEST, CollectorRegistry, generate_latest
+    from prometheus_client import CollectorRegistry
 
     registry = CollectorRegistry()
     worker_collector()(registry)
+    return _metrics_app(token, registry)
+
+
+# What the reaper records (#179): lease-loss retries, the outcomes it decides, and its DB
+# statements. Its endpoint serves only these, not the zero-valued rest of the registry
+# (an extra quantlab_dataset_rows 0 series, for one).
+REAPER_METRICS = (JOB_RETRIES, JOB_OUTCOMES, DB_QUERY_SECONDS)
+
+
+def reaper_metrics_app(token: str | None) -> WSGIApp:
+    """``GET /metrics`` for the reaper, behind the API's bearer token (#179).
+
+    The reaper is one process that never forks, so its samples are in its own registry: no
+    multiprocess directory is needed. Its counters start from zero when it restarts, which
+    Prometheus reads as a reset, as for any process.
+    """
+    from prometheus_client import REGISTRY, CollectorRegistry
+
+    names = {next(iter(m.describe())).name for m in REAPER_METRICS}
+
+    class Only:
+        def collect(self) -> Iterable[Any]:
+            return (family for family in REGISTRY.collect() if family.name in names)
+
+    registry = CollectorRegistry(auto_describe=False)
+    registry.register(Only())
+    return _metrics_app(token, registry)
+
+
+def _metrics_app(token: str | None, registry: Any) -> WSGIApp:
+    from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 
     def app(environ: dict[str, Any], start_response: Callable[..., Any]) -> Iterable[bytes]:
         if environ.get("PATH_INFO") != "/metrics" or environ.get("REQUEST_METHOD") != "GET":
@@ -324,12 +376,18 @@ class _ThreadingServer(socketserver.ThreadingMixIn, WSGIServer):
 
 
 def serve_worker_metrics(port: int, token: str | None) -> WSGIServer:
-    """Serve :func:`worker_metrics_app` from a daemon thread of the worker process.
+    """Serve :func:`worker_metrics_app` from a daemon thread of the worker process."""
+    return _serve(port, worker_metrics_app(token))
 
-    All interfaces inside the container: Prometheus reaches each replica over the compose
-    network, and the port is never published to the host.
-    """
-    app = worker_metrics_app(token)
+
+def serve_reaper_metrics(port: int, token: str | None) -> WSGIServer:
+    """Serve :func:`reaper_metrics_app` from a daemon thread of the reaper (#179)."""
+    return _serve(port, reaper_metrics_app(token))
+
+
+def _serve(port: int, app: WSGIApp) -> WSGIServer:
+    """All interfaces inside the container: Prometheus reaches it over the compose network,
+    and the port is never published to the host."""
     server = make_server(
         "0.0.0.0",  # noqa: S104
         port,
