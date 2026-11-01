@@ -14,6 +14,8 @@ const FORWARD_RESPONSE = [
   "content-disposition",
   "content-security-policy",
 ];
+// The API's interactive docs and their schema (#201): never proxied, see forward().
+const API_DOCS = new Set(["docs", "openapi.json", "redoc"]);
 // Largest body the API accepts (CSV import, services/api/src/quantlab_api/limits.py).
 const MAX_BODY_BYTES = 110 * 1024 * 1024;
 
@@ -53,6 +55,13 @@ async function forward(req: NextRequest, ctx: { params: Promise<{ path: string[]
   const { path } = await ctx.params;
   // Only proxy the versioned API; never let dot segments or separators escape it.
   if (path[0] !== "v1" || path.some((seg) => seg === "." || seg === ".." || /[\\/]/.test(seg))) {
+    return Response.json({ error: { code: "not_found", message: "Not found" } }, { status: 404 });
+  }
+  // Never the API's interactive docs (#201): Swagger UI loads a CDN script and runs an
+  // inline one, which here would be on the app's origin, outside the pages' CSP. The API
+  // serves them only in development, and then on its own port. No API route lives under
+  // these names, so nothing below them is proxied either.
+  if (API_DOCS.has(path[1])) {
     return Response.json({ error: { code: "not_found", message: "Not found" } }, { status: 404 });
   }
   const upstream = process.env.API_INTERNAL_URL ?? "http://localhost:8000";
