@@ -480,6 +480,36 @@ every decision up to each cut to match the full run.
     sizes by their count. Its decisions differ between the two runs, and the check reports
     "failed". So does a planted look-ahead with a late-listed member. Both fail at a cut
     before the listing (`tests/unit/test_research.py`).
+* **The instrument master (#247).** The truncated run gets the master as it was knowable
+  at the kept session (`master_as_of`).
+  * A delisting dated on or before it is public, so it is kept with its reason and
+    return. A later one is blanked, as for a security still listed.
+  * Listing dates and names are kept: the backtest doesn't read them, and a listing shows
+    in the bars anyway.
+  * **One stated exemption:** a name that is held at the cut and prints no bar on the kept
+    session keeps its delisting fact.
+    * "Held" is read from the full run's trades dated up to the cut. That is the full
+      run's own state at the cut, not data from after it.
+    * The kept fact changes the truncated run only where it holds the name too: through
+      the halt rule, which needs a held position. A name the truncated run doesn't hold is
+      untradable without bars either way.
+    * That fact is what the engine's halt rule consumes. A halted security the master
+      later delists is held to its delisting return rather than sold at its last close
+      (see *Delistings*), because a halted stock can't be sold.
+    * It isn't a strategy channel. The rule decides no target and only resolves a position
+      that can't trade. Without the exemption, the truncated run would sell the name at a
+      last close no holder could get, and an honest strategy would be reported "failed".
+    * Pinned in `tests/unit/test_leakage_master.py`: an equal-weight run through a
+      15-session halt that ends in a −90% delisting is verified, and fails once the
+      exemption is removed (mutation M34).
+  * Before #247 both runs got the full master, so an engine path that acted on a delisting
+    before it was public behaved identically in both and went unseen. A planted one, an
+    engine that acts on each delisting 10 days early, is now "failed"; with the full master
+    it was "verified" (`tests/unit/test_leakage_master.py`).
+  * **The limit:** strategies never receive the master (`MarketView` has none), so the
+    library can't leak through it. A custom strategy that keeps its own copy of the master
+    and reads it ahead can't be caught by truncating the engine's input. The check sees
+    only what reaches the backtest through its arguments.
 * When a backtest inside the suite cannot run, the job fails with "validation could not
   run: …". It names each instrument by its ticker as of the experiment's start:
   * for an instrument listed later, the ticker it first listed under;
@@ -586,6 +616,18 @@ reports apart from their `generated_at` timestamp. The hash seed (`PYTHONHASHSEE
 the BLAS/OpenMP thread count (1, 2 or 4) don't change them. The ML models and the
 bootstrap take explicit seeds. This was measured on macOS arm64 with the locked
 dependencies; CI checks it on Linux (`tests/unit/test_reproducibility_processes.py`).
+
+**Byte-identical holds within one platform and BLAS, not across them.**
+* Optimizer outputs for one seeded version were measured on macOS (Accelerate) and in the
+  Linux image (OpenBLAS), with numpy 2.5.4 and scipy 1.18.1 on both. They agree only at
+  float level: 148 floats differ, by at most 2.22e-15 absolute.
+* The platform's jobs all run in the Linux image, so a reproduction within one deployment
+  is exact. Comparing a deployment's results with a run on a developer's Mac needs a float
+  tolerance.
+* Only the optimizer outputs were compared across platforms. Whole backtests and their
+  fingerprints were not. A float-level difference can cross one of the engine's
+  thresholds (an order's noise floor, a whole share), so across platforms a fingerprint
+  match is not guaranteed.
 
 **Engine versions.**
 * History (versions before 1.2.0 are in the git history):

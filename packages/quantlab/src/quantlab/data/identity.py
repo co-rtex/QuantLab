@@ -37,6 +37,8 @@ own permanent instrument (``instrument_id == symbol``), so re-keying is the iden
 
 from __future__ import annotations
 
+from collections.abc import Iterable
+
 import numpy as np
 import pandas as pd
 
@@ -200,6 +202,25 @@ def normalize_master(frame: pd.DataFrame) -> pd.DataFrame:
     if orphan.any():
         raise IdentityError("delisting reason or return given without a delisting_date")
     return m[MASTER_COLUMNS].sort_values("instrument_id").reset_index(drop=True)
+
+
+def master_as_of(
+    master: pd.DataFrame, when: pd.Timestamp | str, keep: Iterable[str] = ()
+) -> pd.DataFrame:
+    """The instrument master as it was knowable at the close of ``when`` (#247).
+
+    A delisting is public on its date, so one dated on or before ``when`` is kept, with its
+    reason and return. A later one is not known yet: its date, reason and return are
+    blanked, as for a security still listed. Listing dates and names are kept. The engine
+    does not read them, and a listing shows in the bars anyway. Instruments in ``keep``
+    keep their delisting facts whatever the date.
+    """
+    m = normalize_master(master)
+    later = (m["delisting_date"] > pd.Timestamp(when)) & ~m["instrument_id"].isin(set(keep))
+    m.loc[later, "delisting_date"] = pd.NaT
+    m.loc[later, "delisting_reason"] = None
+    m.loc[later, "delisting_return"] = np.nan
+    return m
 
 
 def _rows(frame: pd.DataFrame) -> list[dict[str, object]]:
