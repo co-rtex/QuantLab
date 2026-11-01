@@ -4,7 +4,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useState, type FormEvent } from "react";
 import { PageHeader } from "@/components/Shell";
-import { ErrorNote, Panel, QueryError, SyntheticLabel } from "@/components/ui";
+import { BusyNote, ErrorNote, Panel, QueryError, SyntheticLabel } from "@/components/ui";
 import { api, ApiError, type DatasetVersion } from "@/lib/api";
 import { dateTime, shortHash } from "@/lib/format";
 import { useSynthetic } from "@/lib/synthetic";
@@ -35,14 +35,21 @@ export default function PortfoliosPage() {
   const inst = useInstruments(dvId);
   const indexes = inst.data?.items.filter((i) => i.asset_class === "index_fund") ?? [];
   const [err, setErr] = useState<ApiError>();
+  // In flight (including a busy server's wait): the button is disabled, so one click
+  // creates one portfolio.
+  const [pending, setPending] = useState(false);
+  const [busy, setBusy] = useState<number>();
 
   async function create(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();
+    if (pending) return;
     const f = new FormData(e.currentTarget);
     setErr(undefined);
+    setPending(true);
     try {
       const p = await api<{ id: string }>(`/workspaces/${ws}/portfolios`, {
         method: "POST",
+        onBusy: setBusy, // the server is busy: api() tries once more after this wait
         json: {
           name: f.get("name"),
           dataset_version_id: dvId,
@@ -55,6 +62,8 @@ export default function PortfoliosPage() {
     } catch (x) {
       setErr(x as ApiError);
     }
+    setBusy(undefined);
+    setPending(false);
   }
 
   return (
@@ -132,8 +141,9 @@ export default function PortfoliosPage() {
               </select>
             </label>
             <ErrorNote error={err} />
-            <button className="btn btn-primary" disabled={!dvId}>
-              Create portfolio
+            <BusyNote seconds={busy} />
+            <button className="btn btn-primary" disabled={!dvId || pending}>
+              {pending ? "Creating…" : "Create portfolio"}
             </button>
           </form>
         </Panel>

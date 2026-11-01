@@ -45,13 +45,19 @@ def test_a_vm_below_the_minimum_is_warned_about_on_stderr_only(tmp_path: Path) -
     out = run(tmp_path, f"echo {3918 * MIB}")  # this machine's VM
     assert out.returncode == 0
     assert "warning: the Docker VM has 3918 MiB" in out.stderr
-    assert "4608 MiB (4.5 GiB)" in out.stderr
+    assert "5120 MiB (5 GiB)" in out.stderr
     assert out.stdout == reference(tmp_path)  # the eval'd output is unchanged
     assert "warning" not in out.stdout
 
 
+def test_the_old_minimum_is_warned_about_now_that_the_api_has_a_limit(tmp_path: Path) -> None:
+    """4.5 GiB predates the API's memory limit (#220): it no longer holds the limits."""
+    out = run(tmp_path, f"echo {4608 * MIB}")
+    assert "warning: the Docker VM has 4608 MiB" in out.stderr
+
+
 def test_a_vm_at_or_above_the_minimum_is_not_warned_about(tmp_path: Path) -> None:
-    for mib in (4608, 8192):
+    for mib in (5120, 8192):
         out = run(tmp_path, f"echo {mib * MIB}")
         assert out.returncode == 0 and out.stderr == "", (mib, out.stderr)
         assert out.stdout == reference(tmp_path)

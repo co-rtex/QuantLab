@@ -1,19 +1,11 @@
 import type { NextRequest } from "next/server";
 
 import { edgeClientAddress, edgeRequiredResponse, fromEdge } from "@/lib/edge";
+import { FORWARD_RESPONSE } from "@/lib/proxyHeaders";
 
 // Same-origin proxy to the QuantLab API so the httpOnly session cookie is first-party.
 // The upstream URL is read at request time, which keeps container images portable.
 const FORWARD_REQUEST = ["content-type", "authorization", "idempotency-key", "x-request-id", "cookie"];
-// content-security-policy: the API serves HTML reports under a sandboxing CSP; dropping it here served
-// them same-origin with the app and no policy.
-const FORWARD_RESPONSE = [
-  "content-type",
-  "x-request-id",
-  "set-cookie",
-  "content-disposition",
-  "content-security-policy",
-];
 // The API's interactive docs and their schema (#201): never proxied, see forward().
 const API_DOCS = new Set(["docs", "openapi.json", "redoc"]);
 // Largest body the API accepts (CSV import, services/api/src/quantlab_api/limits.py).

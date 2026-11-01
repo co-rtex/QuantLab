@@ -60,7 +60,18 @@ services:
     environment:
       <<: *app-env
       PROMETHEUS_MULTIPROC_DIR: /tmp/prometheus
-    command: ["sh", "-c", "alembic -c services/api/alembic.ini upgrade head && rm -rf \"$$PROMETHEUS_MULTIPROC_DIR\" && mkdir -p \"$$PROMETHEUS_MULTIPROC_DIR\" && uvicorn quantlab_api.main:app --host 0.0.0.0 --port 8000 --proxy-headers --workers ${QUANTLAB_API_WORKERS:-4}"]
+      # Heavy request-time work (optimize, the portfolio ledger) per API process (#223).
+      QUANTLAB_HEAVY_REQUESTS_PER_PROCESS: ${QUANTLAB_HEAVY_REQUESTS_PER_PROCESS:-1}
+      QUANTLAB_RATE_LIMIT_OPTIMIZE_PER_MINUTE: ${QUANTLAB_RATE_LIMIT_OPTIMIZE_PER_MINUTE:-10}
+    command: ["sh", "-c", "alembic -c services/api/alembic.ini upgrade head && rm -rf \"$$PROMETHEUS_MULTIPROC_DIR\" && mkdir -p \"$$PROMETHEUS_MULTIPROC_DIR\" && uvicorn quantlab_api.main:app --host 0.0.0.0 --port 8000 --proxy-headers --workers ${QUANTLAB_API_WORKERS:-2}"]
+    # A memory limit (#220): without one, concurrent heavy requests drove the whole Docker
+    # VM into a global OOM, in which the kernel may kill any container, Postgres included
+    # (#223). With it, an OOM kills an API process inside this container only. 1880M is the
+    # measured peak of 2 API processes at 1 heavy request each (1566 MiB anonymous) plus
+    # 20%; 4 processes need QUANTLAB_API_MEMORY=2560M. docs/RUNBOOK.md, "Resources".
+    deploy:
+      resources:
+        limits: { memory: "${QUANTLAB_API_MEMORY:-1880M}" }
     ports: ["127.0.0.1:${QUANTLAB_API_PORT:-8000}:8000"]
     volumes: [appdata:/data]
     depends_on:
