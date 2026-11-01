@@ -128,6 +128,14 @@ Export `QUANTLAB_SLOT` in every shell (`export QUANTLAB_SLOT=21`), then use `mak
 `make test`, `make app-up`, `make e2e` as usual. Integration tests use a per-worktree test
 database.
 
+**Restart policy on slots (#162).** Compose services restart unless stopped, but
+`scripts/stack-env.sh` sets `QUANTLAB_RESTART_POLICY=no` for every slot except the main
+checkout's 0. A Docker Desktop restart therefore doesn't bring back every worktree's stack
+at once in the shared VM. Named volumes are kept either way. Two consequences:
+* A stack left up on a slot stays down after a Docker restart.
+* A crash-recovery probe on a worktree slot must set `QUANTLAB_RESTART_POLICY=unless-stopped`
+  itself, and still run under `scripts/fullstack-lock.sh run ...`.
+
 **Docker memory budget.** The Docker VM on this machine has 3.8 GiB. A full `make app-up`
 stack peaks around 1.7 GB, and three full stacks at once caused API OOM kills
 (2026-10-30). Rules:
