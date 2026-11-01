@@ -83,11 +83,12 @@ test("pages are sent with a nonce policy and the browser refuses nothing on them
     expect(await violations(page), path).toEqual([]);
   }
 
-  // Next's not-found page, signed in (signed out it is a redirect to /login): it renders
-  // style attributes in its HTML, which style-src-attr allows (lib/csp.ts).
+  // The not-found page, signed in (signed out it is a redirect to /login). Next's built-in
+  // one carried a <style> element without the nonce, which was refused: it is ours now.
   const missing = await page.goto("/no-such-page");
   expect(missing?.status()).toBe(404);
   await checkPage(missing, "/no-such-page");
+  await expect(page.getByRole("heading", { name: "Page not found" })).toBeVisible();
   expect(await violations(page), "/no-such-page").toEqual([]);
 
   // The chart pages, once their charts have rendered: an experiment and a portfolio.
