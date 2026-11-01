@@ -202,12 +202,8 @@ ROUTES: dict[str, Spec] = {
     "GET /api/v1/dataset-versions/{version_id}": Spec(WORKSPACE, V),
     "GET /api/v1/dataset-versions/{version_id}/instruments": Spec(WORKSPACE, V),
     "GET /api/v1/dataset-versions/{version_id}/bars/{symbol}": Spec(WORKSPACE, V),
-    "POST /api/v1/dataset-versions/{version_id}/optimize": Spec(
-        WORKSPACE,
-        V,  # a computation over the version, no write
-        body=lambda w: {"json": {"symbols": ["SYN001", "SYN002", "SYN003"], "as_of": "2021-12-31"}},
-    ),
-    # A job since #224: it writes a run and a job, so editors only.
+    # A job since #224 (the viewer-level synchronous route is gone): it writes a run and a
+    # job, so editors only.
     "POST /api/v1/dataset-versions/{version_id}/optimizations": Spec(
         WORKSPACE,
         E,

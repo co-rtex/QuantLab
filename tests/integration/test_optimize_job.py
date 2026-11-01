@@ -1,11 +1,16 @@
-"""Portfolio optimization as a worker job (#224, part 1).
+"""Portfolio optimization as a worker job (#224).
 
-The job's stored result must be the synchronous route's response for the same request:
-that route is removed in part 2, so these comparisons are the record of equivalence.
+The job's stored result must be what the synchronous route (removed in part 2) answered
+for the same request. Its responses for ``BODIES`` on the ``seeded`` version were captured
+before the removal, from #250's branch, into ``fixtures/optimize_sync_responses.json``;
+part 1 compared the two live.
 """
 
 from __future__ import annotations
 
+import json
+import math
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -19,6 +24,8 @@ from tests.limiter_clock import limiter_clock  # noqa: F401 - the fixture below
 
 # Fixed-window limits: counted against a frozen clock, never across a window boundary.
 pytestmark = pytest.mark.usefixtures("limiter_clock")
+
+SYNC = json.loads((Path(__file__).parent / "fixtures" / "optimize_sync_responses.json").read_text())
 
 SYMS = [f"SYN{i:03d}" for i in range(1, 9)]
 BODIES: list[dict[str, Any]] = [
@@ -39,11 +46,35 @@ def jobs_count() -> int:
         return db.scalar(select(func.count()).select_from(Job).where(Job.kind == "optimize")) or 0
 
 
-@pytest.mark.parametrize("body", BODIES)
-def test_the_job_result_equals_the_synchronous_response(client, seeded, body) -> None:
-    h, dv = seeded["headers"], seeded["dv"]
-    sync = client.post(f"/api/v1/dataset-versions/{dv}/optimize", headers=h, json=body)
-    assert sync.status_code == 200, sync.text
+def same(got: Any, want: Any, path: str = "") -> None:
+    """Equal, floats within 1e-9 relative or 1e-12 absolute, and only because of the BLAS.
+
+    The fixture was captured on macOS, whose NumPy uses Accelerate; CI and the images use
+    OpenBLAS. On the same version (same hash), compute() for these bodies differed in 148
+    floats between the two: at most 2.2e-15 absolute and 9.8e-13 relative for values above
+    1e-12 (near-zero weights differ by ~1e-16). On one platform the route and the job
+    compared JSON-equal (part 1)."""
+    if isinstance(want, float) and isinstance(got, float):
+        assert math.isclose(got, want, rel_tol=1e-9, abs_tol=1e-12), f"{path}: {got} != {want}"
+    elif isinstance(want, dict):
+        assert isinstance(got, dict) and got.keys() == want.keys(), path
+        for k in want:
+            same(got[k], want[k], f"{path}.{k}")
+    elif isinstance(want, list):
+        assert isinstance(got, list) and len(got) == len(want), path
+        for i, (g, w) in enumerate(zip(got, want, strict=True)):
+            same(g, w, f"{path}[{i}]")
+    else:
+        assert got == want, f"{path}: {got!r} != {want!r}"
+
+
+def test_the_fixture_was_captured_for_these_bodies() -> None:
+    assert [c["body"] for c in SYNC["captures"]] == BODIES
+
+
+@pytest.mark.parametrize("i", range(len(BODIES)))
+def test_the_job_result_equals_the_synchronous_response(client, seeded, i) -> None:
+    h, dv, body = seeded["headers"], seeded["dv"], BODIES[i]
     r = submit(client, h, dv, body)
     assert r.status_code == 202, r.text
     queued = r.json()
@@ -54,7 +85,7 @@ def test_the_job_result_equals_the_synchronous_response(client, seeded, body) ->
     assert got.status_code == 200, got.text
     run = got.json()
     assert run["status"] == "completed" and run["job"]["status"] == "completed"
-    assert run["result"] == sync.json()
+    same(run["result"], SYNC["captures"][i]["response"])
     assert run["params"]["symbols"] == body["symbols"]
 
 
@@ -99,9 +130,8 @@ def test_symbols_the_version_does_not_list_are_refused_before_a_job(client, seed
     ],
 )
 def test_data_problems_fail_the_job_with_the_routes_message(client, seeded, body, message) -> None:
+    # The messages the synchronous route answered as its 422 (compared live in part 1).
     h, dv = seeded["headers"], seeded["dv"]
-    sync = client.post(f"/api/v1/dataset-versions/{dv}/optimize", headers=h, json=body)
-    assert sync.status_code == 422 and sync.json()["error"]["message"] == message
     run = submit(client, h, dv, body).json()["id"]
     assert run_pending_jobs() == ["failed"]  # permanent: no retry
     out = client.get(f"/api/v1/optimizations/{run}", headers=h).json()

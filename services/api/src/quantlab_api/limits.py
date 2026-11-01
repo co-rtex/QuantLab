@@ -312,12 +312,12 @@ def check_optimize_memory(cost: OptimizeCost, limit_mb: int) -> None:
 
 
 # ------------------------------------------------------- heavy request-time work (#223)
-# Routes that compute over full price histories in the API process itself (optimize, the
-# portfolio ledger). FastAPI runs a sync route in its process's thread pool, up to 40 at
-# once, so concurrent heavy requests stacked in memory: 16 optimizations of 100 symbols
-# drove the Docker VM into a global OOM, in which the kernel killed API processes and
-# could have killed Postgres. Each process admits at most heavy_requests_per_process of
-# them at a time; more are refused at once, never queued.
+# Routes that compute over full price histories in the API process itself: the portfolio
+# ledger (optimization has been a worker job since #224). FastAPI runs a sync route in its
+# process's thread pool, up to 40 at once, so concurrent heavy requests stacked in memory:
+# 16 optimizations of 100 symbols drove the Docker VM into a global OOM, in which the
+# kernel killed API processes and could have killed Postgres. Each process admits at most
+# heavy_requests_per_process of them at a time; more are refused at once, never queued.
 _heavy_lock = threading.Lock()
 _heavy: threading.BoundedSemaphore | None = None
 HEAVY_RETRY_AFTER_SECONDS = 2

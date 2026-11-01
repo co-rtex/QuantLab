@@ -76,10 +76,14 @@ backtest admission cap.
   `503`, `{"error": {"code": "server_busy", …}}`, with `Retry-After: 2`.
   * **The web app** says "The server is busy with other analyses. Retrying in N s…" and
     sends the request again once after that wait, which is safe because nothing was done.
-  * **Heavy routes:** `POST /dataset-versions/{id}/optimize`, and the portfolio ledger,
-    which values a ledger over full price histories: `POST /workspaces/{id}/portfolios`,
-    `POST /portfolios/{id}/transactions` (its slot is taken before the row lock) and
-    `GET /portfolios/{id}/valuation`.
+  * **Heavy routes:** the portfolio ledger, which values a ledger over full price
+    histories: `POST /workspaces/{id}/portfolios`, `POST /portfolios/{id}/transactions` (its
+    slot is taken before the row lock) and `GET /portfolios/{id}/valuation`.
+  * **Not optimization, since #224:** it runs as a worker job and takes no API slot.
+    `POST /dataset-versions/{id}/optimizations` answers `202` with a run, and
+    `GET /optimizations/{id}` reads it back. Submissions keep the per-user minute limit, and
+    one that can't fit the worker is refused at once with `422 optimization_too_large` (see
+    "Optimization memory").
   * **Counted in** `quantlab_heavy_requests_refused_total{route}`.
 * **The settings:**
 
@@ -96,8 +100,9 @@ backtest admission cap.
 * **When to raise `QUANTLAB_HEAVY_REQUESTS_PER_PROCESS` or `QUANTLAB_API_WORKERS`:** only when
   `server_busy` refusals are frequent, and only together with `QUANTLAB_API_MEMORY`,
   measured again as below.
-  * An optimization at its maximum (100 symbols, `lookback` 1260, 4.6M bars) took
-    285–590 MiB of anonymous memory each (#225).
+  * The measurements below are #223's, when optimization still ran in the API: one at its
+    maximum (100 symbols, `lookback` 1260, 4.6M bars) took 285–590 MiB of anonymous memory
+    (about 190 MiB after #225). It has run in a worker since #224.
   * Example: 4 processes at 2 slots each in 2048M were OOM-killed inside the API (below).
   * The VM must hold the sum of all limits plus the other services ("Resources").
 * **An API OOM kill**, measured with 4 processes at 2 slots in 2048M, 16 concurrent
@@ -366,6 +371,30 @@ experiment; results of failed jobs are never stored.
     needs measured jobs out there, with sessions varied as well as symbols. Then refit.
   * The estimate's coefficients (`quantlab_api/limits.py`) come from the measured envelope
     in `benchmarks/results/*-worker-memory-after-*.json`.
+
+### Optimization memory (#224)
+* **At submission:** `422 optimization_too_large`, with `details.reason`:
+  * **`outside_measured_range`:** more series × sessions than the 101 × 7,056 measured
+    (100 symbols and a benchmark over about 28 years), so it is refused rather than
+    estimated.
+  * **`estimated_memory`:** the estimate exceeds `QUANTLAB_MAX_BACKTEST_MEMORY_MB`, the same
+    per-job worker budget as a backtest (1228 MB by default). With the defaults this doesn't
+    happen inside the measured range, where the estimate peaks at 661.5 MB.
+* **The estimate:** 332.7 MB plus 461.4 MB per million series-sessions.
+  * Series are the distinct symbols plus the benchmark.
+  * Sessions run from the data's first to `as_of`: the larger of the calendar's count and
+    the version's distinct bar dates, as for backtests. The whole history up to `as_of` is
+    loaded whatever the look-back, so an earlier `as_of` or fewer symbols reduce it.
+  * It's an envelope over nine measured jobs. `benchmarks/optimize_memory.py` ran them on one
+    recreated 1536 MB worker, sampling every 0.1 s: 756, 3,275 and 7,056 sessions, 10, 50
+    and 100 symbols, every method, look-back 1260.
+  * Raw results: `benchmarks/results/20261101T1700Z-optimize-memory-8afffa4.json`. Peaks
+    were 162–526 MB, with no OOM kill.
+* **Widening the range** needs measured jobs there: rerun the benchmark with longer spans,
+  then refit `OPTIMIZE_*` in `quantlab_api/limits.py`.
+* **Data problems** fail the job, not the submission: "Symbols without data up to as_of"
+  and "Fewer than two symbols have enough history in the look-back window". The message is
+  in the job's `error`, the job isn't retried, and the page shows it.
 
 ### ML runs fail with "submitted for pipeline version N"
 Deploy the API and the workers together, at the same release. The API stamps its

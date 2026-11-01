@@ -65,7 +65,7 @@ SAFE_ERROR_TYPES = frozenset(
         "ValidationError",
         "ValueError",
         "OptimizationError",
-        "OptimizeInputError",  # the optimize route's 422 messages, raised in the job (#224)
+        "OptimizeInputError",  # an optimize job's input problems, for the user (#224)
         "InfeasibleConstraints",
         "JobTimeoutError",
         "LeaseExpired",
