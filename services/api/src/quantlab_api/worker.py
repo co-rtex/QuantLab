@@ -7,8 +7,6 @@ crashing or runaway job cannot take the worker down.
 
 from __future__ import annotations
 
-import os
-
 from rq import Worker
 
 from quantlab_api import tasks  # noqa: F401 - registers job handlers
@@ -21,7 +19,8 @@ from quantlab_api.tracing import setup_tracing
 def main() -> None:
     configure_logging(json=get_settings().environment != "development")
     setup_tracing("quantlab-worker", synchronous=True)
-    name = os.environ.get("QUANTLAB_WORKER_NAME") or worker_identity().replace(":", "-")
+    # A new name per start unless QUANTLAB_WORKER_NAME fixes one (#162): see worker_identity.
+    name = worker_identity()
     # JSON only, trusted jobs only (#115): a worker without these unpickles the queue.
     worker = Worker(
         [get_queue()],

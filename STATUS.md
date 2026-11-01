@@ -1,6 +1,6 @@
 # Status (authoritative handoff)
 
-_Last updated: 2026-10-31 (lead integration cycle 2: 98 PRs merged before this update, per `gh pr list --state merged`; main `82f1cd3`)_
+_Last updated: 2026-10-31 (lead integration cycle 2: 105 PRs merged before this update, per `gh pr list --state merged`; main `0939811`)_
 
 ## Where things stand
 All roadmap phases 0–10 are implemented. An independent audit on 2026-10-30
@@ -185,10 +185,26 @@ leases and migration slots: [docs/COORDINATION.md](docs/COORDINATION.md).
     report fails only when nothing in the universe could be traded (volume recorded as 0)
     and otherwise warns. Follow-up: #152 (the worker should check the engine version).
   * #118 closed: every criterion of the cross-feature PIT sweep is covered by a named test.
+  * #154 the worker refuses a backtest stamped for another engine version (#152).
+  * #156 validation runs record the engine they ran on and the experiment's. A mismatch
+    warns that the results are not directly comparable under identical engine rules, and
+    pre-#155 validations can be re-run (suite version 2) (#155).
+  * #157 the user's 2026-10-31 decisions recorded (below).
+  * #158 (lead) Caddyfiles validated **locally** (adapt and validate on Caddy 2.10.2, PROXY
+    v1/v2 behaviour on an internal network). This does not clear #39.
+  * **#159 (lead) Playwright runs in GitHub Actions** on PRs touching the web, API, library
+    or compose files: one worker, flaky counts as failure, artifacts on failure, usage
+    controlled. Verified by a green run and a deliberate failure (#17).
+  * #161 benchmark figures from a quiet window: small and medium only; every figure was
+    checked against the raw JSON. Large, load and scaling ended contended and are not
+    published (#160). Closes #24.
+  * **Release-candidate assessment** (independent, at da8767a): see
+    [docs/RELEASE_READINESS.md](docs/RELEASE_READINESS.md). It found one private-use
+    blocker (#162) and, for public use, #39, #163 and #168.
 * Every merge had an independent read-only lead review: no blockers. Should-fix items are
   tracked in #8, #51, #52 and #55 (Agent 2), #39 (gate), and #41, #50 and #54 (Agent 3).
 
-## Last verified (2026-10-31, main `82f1cd3`)
+## Last verified (2026-10-31, main `0939811`)
 Each merge was verified on a trial merge with current main, with pytest output written to a
 file rather than piped:
 * #28, #32, #36, #29, #30, #31: tree identical to main afterwards; 314 passed;
@@ -258,21 +274,36 @@ file rather than piped:
   changed (no fixture has volume 0); **E2E 44/44**. Two independent reviews with probe
   scripts. The second found the first revision force-sold held names on zero-volume
   rebalance days, and that was fixed before merge.
+* #154: **1267 passed**, E2E 44/44. #156: **1278 passed**, E2E 44/44, after an independent
+  review. #159: GitHub Actions E2E 44/44 (runs 41240295056 and 41241457401); a deliberate
+  failure (run 41240739623) uploaded the report, traces, screenshots and compose logs.
+* Independent RC assessment at da8767a, from a fresh clone on slot 88:
+  * unit and golden 721 passed, integration 557 passed, E2E 44/44;
+  * mutation testing caught 7 of 8 injected financial defects (the 8th is #164);
+  * a backtest hand-checked to 1e-6;
+  * job recovery not ready (#162, #163).
 * #101 + #103 + #104: 899 passed, E2E 27/27. #105 + #106 (byte-identical to main
   `f7e399f`): **906 passed, E2E 30/30**.
 
-CI is green on every merged head. CI doesn't run Playwright (#17).
+CI is green on every merged head. Playwright runs in Actions on relevant PRs since #159; it
+is not yet a required check (#17).
 
 E2E failures this cycle were resource starvation, not regressions:
 * parallel Playwright workers, registrations' Argon2id hashes queued, load up to 35;
 * OOMKilled false in every run;
 * each failing spec passed when run serially.
 
-Full-stack runs are now serialized machine-wide (`make e2e-serial`).
+Full-stack runs are serialized by `scripts/fullstack-lock.sh` (`make e2e-serial`). The lock
+lives in the repository's git directory, so it covers every worktree of this clone but not
+a separate clone.
 
 ## Next steps (issues carry owners and acceptance criteria)
-1. **Agent 2:** no unblocked issue; standing by for reviews.
-2. **Agent 3:** #152 (the worker checks the submitted engine version, mirroring #143).
+1. **Release blockers** (docs/RELEASE_READINESS.md):
+   * **#162** (P1, Agent 2): workers rejoin after an unclean exit, and compose restart
+     policies;
+   * **#163** (P1, Agent 3): memory-exhausting backtests within the limits.
+2. **Agent 2, then:** #167 (per-attempt timeout), #165 (worker metrics), #166 (CSP).
+3. **Agent 3, then:** #164 (adjuster look-ahead test), #160 (benchmark contention).
 3. **Lead:** integrate.
 4. **User decisions (2026-10-31):**
    * Public deployment and paid infrastructure **stay blocked** (#39 gate, any
@@ -297,6 +328,12 @@ Full-stack runs are now serialized machine-wide (`make e2e-serial`).
    * #15 hosted eval (LLM key);
    * #20 (load host);
    * any `terraform apply` (cloud account, cost).
+
+## Incidents
+* **2026-10-31:** E2E test data was written into the main checkout's Docker volumes by a
+  run that bypassed `scripts/stack-env.sh`. Root cause, effect and fix are in
+  [docs/COORDINATION.md](docs/COORDINATION.md) ("Incident"). **User decision: leave it all
+  untouched.** Any cleanup needs separate explicit approval and a verified backup first.
 
 ## Blockers
 No LLM API key, market-data API key or cloud credentials (docs/BLOCKERS.md).

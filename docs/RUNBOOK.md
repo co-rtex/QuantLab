@@ -80,6 +80,32 @@ database time. The reaper then does one of four things:
 A late heartbeat or commit from the dead worker is fenced out by the attempt counter, so
 no duplicate result can be written.
 
+### A worker died or was restarted
+* **A crash or OOM kill restarts by itself.** The core services run with
+  `restart: unless-stopped`, so Docker restarts a worker that crashes or is OOM-killed. In
+  the #162 probe, both workers were back 4.7 s after a SIGKILL.
+  * This holds for the main checkout and for the edge overlay (`infra/edge/compose.yml`),
+    which pins `unless-stopped`.
+  * A linked worktree's stack runs with `restart: no` instead, because
+    `scripts/stack-env.sh` sets `QUANTLAB_RESTART_POLICY=no` for any slot but 0. That way a
+    Docker restart doesn't bring back every agent's dev stack at once.
+  * `QUANTLAB_RESTART_POLICY` overrides either default. A crash-recovery probe on a
+    worktree slot must set `QUANTLAB_RESTART_POLICY=unless-stopped` explicitly.
+* **A stop you ran stays stopped.** Docker treats `docker compose stop` and
+  `docker compose kill` as manual stops. Start the workers again with
+  `docker compose --profile app up -d --no-deps worker`, which leaves the API and
+  databases as they are.
+* **A restarted worker rejoins at once.** Each start takes a new RQ name,
+  `<container hostname>-<pid>-<random>`.
+  * The dead process's name stays in `rq info` as a stale worker until its registration
+    expires, 8 minutes later. It holds no work.
+  * Its job is recovered as in the previous section, once its lease expires. In the probe,
+    the job completed on attempt 2 about 90–100 s after the kill.
+* **`QUANTLAB_WORKER_NAME` fixes the name instead.** Use it only for a single worker that
+  is always stopped cleanly. After an unclean exit, RQ refuses that name until the stale
+  registration expires. Until then the worker exits 1, and with the restart policy Docker
+  keeps restarting it. The name must not contain `:` and is at most 128 characters.
+
 ### A job keeps failing
 `GET /api/v1/jobs/{id}` → `error.type`, `error.message`, `error.trace` and `retryable`.
 Retryable errors are retried with the backoff above until `max_attempts`. Permanent
@@ -300,8 +326,9 @@ resources and needs the user's account and approval. What differs from compose:
 * **Edge:** an NLB terminates TLS (ACM) and sends PROXY protocol v2 to Caddy, which
   accepts that header only from the NLB's subnets and overwrites `X-Forwarded-For` with the
   stated client (`infra/terraform/edge/Caddyfile`). Run `infra/edge/verify.sh` against the
-  public name before announcing it. That Caddyfile has not been checked with
-  `caddy adapt` yet; do that before building the edge image.
+  public name before announcing it. That Caddyfile passes local checks
+  (`infra/terraform/edge/check-proxy-protocol.sh`: adapt, validate, PROXY v1/v2), but it
+  has not been verified behind a real NLB (#39).
 * **Trusted proxies:** the web tier runs in its own subnets, and
   `QUANTLAB_TRUSTED_PROXIES` is exactly those CIDRs. Never schedule other tasks there.
 * **Data directory:** EFS, mounted by api, worker **and reaper** (the reaper's sweeps and
