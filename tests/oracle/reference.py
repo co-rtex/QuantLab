@@ -432,6 +432,17 @@ def run_reference(
                         can = math.floor(can + 1e-9)
                     if can < q - 1e-9:
                         q, partial = max(can, 0.0), True
+                    # The cash may not go more than 1e-9 dollars below zero. A buy that float
+                    # rounding leaves a hair over is made smaller until it fits (#196).
+                    # One share at a time, or a fractional step that doubles from one unit in
+                    # the last place.
+                    shave, tries = math.ulp(q), 0
+                    while q > 0 and cash - (q * px + fee(q * px)) < -EPS and tries < 128:
+                        if whole:
+                            q -= 1
+                        else:
+                            q, shave = max(q - shave, 0.0), 2 * shave
+                        partial, tries = True, tries + 1
                     # Nothing left to buy (scaled under one share, or no affordable amount
                     # the ledger can book): a shortfall of cash (#184).
                     if q < EPS:
@@ -442,8 +453,12 @@ def run_reference(
                 if abs(q) < EPS:
                     reject(day, o, "InvalidOrder")
                     continue
-                if cash - q * px - commission < -EPS:
-                    reject(day, o, "InsufficientCash")
+                # As the cash is updated below, cash - (cost), not (cash - value) - fee:
+                # at 1e8 and more the two round differently by more than EPS.
+                if cash - (q * px + commission) < -EPS:
+                    # Only a sell can get here: its commission is more than its proceeds and
+                    # the cash can cover (#196).
+                    reject(day, o, "commission_exceeds_proceeds" if q < 0 else "InsufficientCash")
                     continue
                 cash -= q * px + commission
                 set_qty(o.iid, held + q)

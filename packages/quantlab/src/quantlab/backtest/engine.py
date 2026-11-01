@@ -50,7 +50,7 @@ from quantlab.data.adjust import PointInTimeAdjuster, total_returns
 from quantlab.data.identity import PERFORMANCE_REASONS, normalize_master
 from quantlab.data.schema import wide
 from quantlab.portfolio.ledger import EPS as LEDGER_EPS
-from quantlab.portfolio.ledger import Ledger, LedgerError
+from quantlab.portfolio.ledger import InsufficientCash, Ledger, LedgerError
 from quantlab.strategies.base import MarketView, Strategy
 
 ENGINE_VERSION = "1.5.0"
@@ -348,6 +348,10 @@ def run_backtest(
     slip = config.slippage_bps / 1e4
     comm = config.commission_bps / 1e4
 
+    def buy_cost(value: float) -> float:
+        """Cash a buy of this value at the fill price takes, commission included."""
+        return value + max(config.commission_min, value * comm) if value else 0.0
+
     def below_one_share(o: Order) -> bool:
         """A whole-share buy that is under one share as it reaches the fill, after any
         split restatement: for example the top-up of a holding a split left fractional
@@ -461,6 +465,21 @@ def run_backtest(
                     affordable = math.floor(affordable + 1e-9)
                 if affordable < qty - 1e-9:
                     qty, partial = max(affordable, 0.0), True
+                # The ledger refuses an overdraw of more than 1e-9 dollars, while the cut above
+                # works in shares; with cash of 1e7 or more, float rounding can leave a buy a
+                # fraction of a cent over. It is cut to fit instead of rejected whole (#196): a
+                # share less, or (fractional shares) by a step that starts at one unit in the
+                # last place and doubles, so any rounding-level shortfall is covered in a few
+                # dozen steps and overshot by at most a factor of two.
+                step = math.ulp(qty)
+                for _ in range(128):
+                    if qty <= 0 or ledger.cash - buy_cost(qty * px) >= -LEDGER_EPS:
+                        break
+                    if config.fractional_shares:
+                        qty, step = max(qty - step, 0.0), step * 2
+                    else:
+                        qty -= 1
+                    partial = True
                 # A buy the cash cut to nothing is rejected, not dropped (#184): one scaled
                 # below a whole share, or cut below the ledger's smallest quantity.
                 if qty < LEDGER_EPS:
@@ -480,13 +499,16 @@ def run_backtest(
             try:
                 ledger.trade(d, o.symbol, qty, px, commission=commission, slippage=slip_cost)
             except LedgerError as exc:
+                # A sell whose proceeds do not cover commission_min, with too little cash to
+                # pay the difference, is refused by the ledger (#196): say so plainly.
+                short = isinstance(exc, InsufficientCash) and qty < 0
                 rejects.append(
                     {
                         "date": d,
                         "decision_date": o.decision_date,
                         "symbol": o.symbol,
                         "quantity": o.quantity,
-                        "reason": type(exc).__name__,
+                        "reason": "commission_exceeds_proceeds" if short else type(exc).__name__,
                     }
                 )
                 continue

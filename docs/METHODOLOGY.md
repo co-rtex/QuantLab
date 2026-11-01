@@ -338,6 +338,18 @@ Per session `k`:
      quantity. Before 1.4.1 it was dropped with no record.
    * **Affordable quantity under the ledger's smallest** (1e-9 shares, fractional
      shares): it is rejected at the quantity it reached the fill with, after any scaling.
+
+   **A rounding-level overdraw cuts the buy instead of rejecting it** (#196, engine 1.5.0).
+   * The ledger refuses to take cash more than 1e-9 dollars below zero, while the
+     affordable quantity is computed in shares, with a 1e-9-share slack.
+   * From about 1e7 of cash, float rounding can leave a buy a fraction of a cent over
+     the cash. That buy was rejected whole (`InsufficientCash`): at capital 3e9, buys of
+     a median $84M were rejected for shortfalls of 1.4e-9 to 9.5e-7 dollars.
+   * Such a buy is now cut until it fits, by one share or, with fractional shares, to the
+     next float down, and flagged `partial`.
+   * A sell whose proceeds don't cover `commission_min`, when the cash can't pay the
+     difference, is rejected `commission_exceeds_proceeds`. That replaces the ledger's
+     internal `InsufficientCash`.
    **A whole-share buy under one share at the fill is rejected `below_one_share`**
    (#187, engine 1.5.0), with its quantity as it reached the fill. It takes no part in the
    pro-rata scaling: it is left out of the need and not scaled.
@@ -507,13 +519,21 @@ names changed-input re-runs and leaves the check "not assessed" if they are the 
         `InvalidOrder` rows or quantities under 1e-9.
     * The hand cases are in `tests/unit/test_engine_oracle.py`, including a 3e9 account
       (`test_dust_cash_in_a_large_account_buys_nothing`).
-  * 1.5.0 (#187): with whole shares, a buy under one share at the fill (after any split
-    restatement) is rejected `below_one_share` and kept out of the pro-rata scaling.
-    Before, such a buy (a top-up of a holding a split left fractional, typically) could
-    never fill but counted toward the need, and scaled real buys down. **Economics
-    change.** A1B_PENDING The hand cases are
-    `test_a_sub_share_top_up_does_not_scale_a_real_buy` and
-    `test_the_lot_check_uses_the_quantity_restated_across_a_split`.
+  * 1.5.0: **Economics change**, in three parts, each with its own A/B in its commit.
+    * **#187:** with whole shares, a buy under one share at the fill (after any split
+      restatement) is rejected `below_one_share` and kept out of the pro-rata scaling.
+      Before, such a buy (typically a top-up of a holding a split left fractional) could
+      never fill but counted toward the need, and scaled real buys down. A187_PENDING
+      Hand cases: `test_a_sub_share_top_up_does_not_scale_a_real_buy` and
+      `test_the_lot_check_uses_the_quantity_restated_across_a_split`.
+    * **#195:** the pro-rata factor is exact (step 4), and sell proceeds net of each
+      sell's actual commission. It changes only runs with a minimum commission.
+      A195_PENDING Hand case: `test_the_pro_rata_factor_is_exact_with_a_minimum_commission`.
+    * **#196:** a rounding-level overdraw cuts the buy instead of rejecting it, and a sell
+      whose commission exceeds its proceeds is logged `commission_exceeds_proceeds`.
+      A196_PENDING Hand cases:
+      `test_a_rounding_level_overdraw_cuts_the_buy_instead_of_rejecting_it` and
+      `test_a_sell_whose_commission_exceeds_its_proceeds_says_so`.
 * A worker refuses a backtest stamped for another engine version (#152).
 * A validation run re-runs backtests on the worker's current engine, so it records that
   engine (`engine_version`) beside the experiment's (`experiment_engine_version`), plus

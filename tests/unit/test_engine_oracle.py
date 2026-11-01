@@ -363,6 +363,43 @@ def test_the_pro_rata_factor_is_exact_with_a_minimum_commission():
     assert diff(eng, ref, 1000.0) == []
 
 
+def test_a_rounding_level_overdraw_cuts_the_buy_instead_of_rejecting_it():
+    # #196. With cash 100000 - 5e-7 and a price of 1000, 100 shares are "affordable" to
+    # within the engine's 1e-9-share slack but cost 5e-7 more than the cash, over the
+    # ledger's 1e-9-dollar limit: the whole buy was rejected InsufficientCash. Now one
+    # share less fills.
+    from quantlab.strategies.library import create_strategy
+
+    bars = [("AAA", d, 1000.0, 1000.0, 1e4) for d in DAYS[:3]]
+    capital = 100_000 - 5e-7
+    sc = _scenario(bars, [], {"initial_capital": capital})
+    eng, ref = _both(sc, create_strategy("buy_and_hold"), S.BuyAndHoldRef())
+    t = eng.trades.iloc[0]
+    assert (t["quantity"], t["price"], bool(t["partial"])) == (99, 1000.0, True)
+    assert len(eng.rejections) == 0
+    assert eng.equity["cash"].iloc[1] == pytest.approx(capital - 99_000, rel=1e-12)
+    assert diff(eng, ref, capital) == []
+
+
+def test_a_sell_whose_commission_exceeds_its_proceeds_says_so():
+    # #196. Capital 10, whole shares, a minimum commission of 5: the buy of 10 at 1 is
+    # scaled to 5 shares (5 + 5 = 10), leaving no cash. Selling them at 0.5 brings 2.5,
+    # less than the 5 commission, and there is no cash for the rest: the ledger refuses it,
+    # which was logged with the internal name InsufficientCash.
+    bars = [
+        ("AAA", DAYS[0], 1.0, 1.0, 1e4),
+        ("AAA", DAYS[1], 1.0, 0.5, 1e4),
+        ("AAA", DAYS[2], 0.5, 0.5, 1e4),
+    ]
+    weights = _Fixed({DAYS[0]: {"AAA": 1.0}, DAYS[1]: {}})
+    sc = _scenario(bars, [], {"initial_capital": 10.0, "commission_min": 5.0})
+    eng, ref = _both(sc, weights.engine(), weights)
+    assert eng.trades["quantity"].tolist() == [5]
+    rej = eng.rejections[["date", "symbol", "quantity", "reason"]].values.tolist()
+    assert rej == [[DAYS[2], "AAA", -5.0, "commission_exceeds_proceeds"]]
+    assert diff(eng, ref, 10.0) == []
+
+
 @pytest.mark.parametrize("seed", SEEDS)
 def test_engine_matches_reference(seed):
     assert compare(seed) == []

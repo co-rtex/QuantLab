@@ -256,6 +256,20 @@ MUTATIONS = [
         "        scale = cash / sum(v * (1 + comm) + cmin for v in values)",
         "the old pro-rata factor, which double-counts the minimum commission (#195)",
     ),
+    Mutation(
+        "M30",
+        ENG,
+        "                for _ in range(128):",
+        "                for _ in range(0):",
+        "a rounding-level overdraw rejects the whole buy (#196)",
+    ),
+    Mutation(
+        "M31",
+        ENG,
+        '"reason": "commission_exceeds_proceeds" if short else type(exc).__name__,',
+        '"reason": type(exc).__name__,',
+        "a sell refused for its commission logged with the internal name (#196)",
+    ),
 ]
 
 
