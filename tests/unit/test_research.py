@@ -142,6 +142,80 @@ def test_leakage_check_detects_planted_lookahead(monkeypatch):
         REGISTRY.pop(LowestPrice.key, None)
 
 
+def _late_listing_market():
+    # SYN005 is first listed on 2020-03-06, after the earliest cuts of a 2020-01-02 start.
+    m = generate_market(
+        SyntheticSpec(
+            n_assets=8,
+            start="2019-01-02",
+            end="2021-12-31",
+            seed=1,
+            late_listing_fraction=0.5,
+            split_probability=0.01,
+        )
+    )
+    first = m.bars.groupby("symbol")["date"].min()
+    assert first["SYN005"] == pd.Timestamp("2020-03-06")
+    universe = sorted(s for s in first.index if s != "SYNIDX")
+    return m, universe, first["SYN005"]
+
+
+def test_leakage_check_with_a_member_listed_after_the_cut():
+    # #237: with an explicit universe, a truncated run before SYN005's first bar raised
+    # "no data for symbols: ['SYN005']" and failed the whole validation suite.
+    m, universe, listed = _late_listing_market()
+    cfg = CFG.model_copy(update={"universe": universe, "rebalance": "weekly"})
+    res = leakage_check(m.bars, m.actions, "equal_weight", {}, cfg, samples=40)
+    assert res["status"] == "verified", res
+    assert any(pd.Timestamp(d) < listed for d in res["dates_tested"])  # a cut before it
+
+
+def test_leakage_check_still_catches_a_leak_with_a_late_listed_member(monkeypatch):
+    # The restricted universe must not weaken the check (#237).
+    m, universe, listed = _late_listing_market()
+    cfg = CFG.model_copy(update={"universe": universe, "rebalance": "weekly"})
+    REGISTRY[LowestPrice.key] = LowestPrice
+    try:
+        ok = leakage_check(m.bars, m.actions, LowestPrice.key, {}, cfg, samples=40)
+        assert ok["status"] == "verified", ok
+        monkeypatch.setattr(
+            adjust.PointInTimeAdjuster, "scale_as_of", lambda self, pos: np.ones(self._rev.shape[1])
+        )
+        leaky = leakage_check(m.bars, m.actions, LowestPrice.key, {}, cfg, samples=40)
+        assert leaky["status"] == "failed", leaky
+        # A mismatch at a cut the universe was restricted at, not only after the listing.
+        assert any(pd.Timestamp(d) < listed for d in leaky["mismatches"]), leaky
+    finally:
+        REGISTRY.pop(LowestPrice.key, None)
+
+
+class PerColumn(Strategy):
+    """Sizes by the view's column count, which includes members not listed yet: that
+    count is information from after the decision date."""
+
+    key = "test_per_column"
+    name = "per column"
+    description = ""
+    Params = StrategyParams
+
+    def target_weights(self, view: MarketView):
+        return pd.Series(1 / len(view.close.columns), index=view.universe)
+
+
+def test_leakage_check_catches_a_strategy_that_counts_not_yet_listed_columns():
+    # The full run keeps a not-yet-listed member as an untradable NaN column (#243 review),
+    # so a strategy that reads columns rather than view.universe sees the later listing.
+    m, universe, listed = _late_listing_market()
+    cfg = CFG.model_copy(update={"universe": universe, "rebalance": "weekly"})
+    REGISTRY[PerColumn.key] = PerColumn
+    try:
+        res = leakage_check(m.bars, m.actions, PerColumn.key, {}, cfg, samples=40)
+        assert res["status"] == "failed", res
+        assert any(pd.Timestamp(d) < listed for d in res["mismatches"]), res
+    finally:
+        REGISTRY.pop(PerColumn.key, None)
+
+
 def test_psr_dsr_properties():
     rng = np.random.default_rng(0)
     strong = pd.Series(rng.normal(0.002, 0.01, 1000))

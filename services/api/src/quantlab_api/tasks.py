@@ -45,7 +45,7 @@ from quantlab_api.models import (
     ExperimentResult,
     Instrument,
 )
-from quantlab_api.observability import DATASET_FRESHNESS_DAYS, DATASET_ROWS, INGEST_QUALITY
+from quantlab_api.observability import DATASET_FRESHNESS_DAYS, DATASET_ROWS, INGEST_QUALITY, log
 from quantlab_api.storage import version_lock
 
 
@@ -633,6 +633,25 @@ def _headline(a: dict[str, Any]) -> dict[str, Any]:
     return out
 
 
+def name_instruments(message: str, history: pd.DataFrame, start: pd.Timestamp | None) -> str:
+    """The engine names instruments by id; a user knows them by ticker (#237). Each id in
+    ``message`` becomes its display ticker as of ``start``, the date the universe was
+    resolved on (:func:`label_ids`): the ticker valid then; else the last one before (it
+    delisted); else the one it first listed under (it lists later, #243 review). An id
+    the history does not know stays as it is."""
+    import re
+
+    known = set(history["instrument_id"].astype(str))
+    token = re.compile(r"(?<![\w.-])[\w.-]+(?![\w.-])")
+    found = sorted({t for t in token.findall(message) if t in known})
+    if not found:
+        return message
+    when = start if start is not None else history["valid_from"].min()
+    labels = label_ids(history, found, when)
+    # One pass: a ticker written in is never read again as another instrument's id.
+    return token.sub(lambda m: labels.get(m.group(0), m.group(0)), message)
+
+
 @handler("research.validation")
 def validation_task(ctx: JobContext) -> Finalizer:
     from quantlab.research.suite import run_validation_suite
@@ -654,16 +673,27 @@ def validation_task(ctx: JobContext) -> Finalizer:
     def progress(f: float, msg: str) -> None:
         ctx.heartbeat(0.02 + 0.95 * f, msg)
 
-    result = run_validation_suite(
-        inputs.bars,
-        inputs.actions,
-        key,
-        params,
-        inputs.cfg,
-        on_progress=progress,
-        seed=int(ctx.payload.get("seed", 0)),
-        instruments=inputs.master,
-    )
+    from quantlab.backtest.engine import BacktestError
+
+    try:
+        result = run_validation_suite(
+            inputs.bars,
+            inputs.actions,
+            key,
+            params,
+            inputs.cfg,
+            on_progress=progress,
+            seed=int(ctx.payload.get("seed", 0)),
+            instruments=inputs.master,
+        )
+    except BacktestError as exc:  # a backtest in the suite could not run: say which tickers
+        message = str(exc)
+        if inputs.keyed:
+            try:
+                message = name_instruments(message, inputs.history, inputs.start)
+            except Exception:  # naming is a courtesy: never let it replace the real error
+                log.warning("validation_error_naming_failed", exc_info=True)
+        raise PermanentJobError(f"validation could not run: {message}") from exc
     # The suite re-runs backtests on this worker's engine, which can be newer than the one
     # that computed the experiment. Both are recorded so a mismatch is labelled, not
     # hidden behind the experiment's version (#155).
