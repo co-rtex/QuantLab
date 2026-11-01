@@ -112,3 +112,6 @@ def test_a_bare_compose_in_the_worktree_never_resolves_to_quantlab(checkouts) ->
 
     assert name(worktree) == "quantlab-agent-9-probe"
     assert name(main) == "quantlab"  # the main checkout: unchanged
+    # What make exports still wins over the file's name (-p > COMPOSE_PROJECT_NAME > name:).
+    env["COMPOSE_PROJECT_NAME"] = "quantlab-lead-trial"
+    assert name(worktree) == "quantlab-lead-trial"
