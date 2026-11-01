@@ -133,7 +133,10 @@ export default function OptimizePage() {
             </div>
             <ErrorNote error={err} />
             <BusyNote seconds={serverBusy} />
-            <button className="btn btn-primary" disabled={busy || !dvId}>
+            {/* Disabled while a request is pending (a busy server's wait included), and before the
+                instruments load: the default symbols are their first 12, and a click before then
+                sent "symbols": [] and got 422 "Request validation failed" (seen in #232's CI). */}
+            <button className="btn btn-primary" disabled={busy || !dvId || !inst.data}>
               {busy ? "Optimizing…" : "Compare allocations"}
             </button>
           </form>

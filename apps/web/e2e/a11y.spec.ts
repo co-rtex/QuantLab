@@ -30,6 +30,12 @@ test("core pages have no WCAG 2.1 AA violations detected by axe", async ({ page 
   for (const path of ["/data", `/data/${dv}`, "/experiments/new", "/portfolios", "/optimize", "/ml", "/compare", "/settings"]) {
     await page.goto(path);
     await page.waitForLoadState("networkidle");
+    if (path === "/data") {
+      // Audited with its synthetic version row rendered (#230): the row's tag sits next to
+      // the version link, which once failed link-in-text-block only when the row was there.
+      const versionRow = page.getByRole("row").filter({ has: page.locator(`a[href="/data/${dv}"]`) });
+      await expect(versionRow.getByText("Synthetic data")).toBeVisible();
+    }
     await audit(page, path);
   }
 

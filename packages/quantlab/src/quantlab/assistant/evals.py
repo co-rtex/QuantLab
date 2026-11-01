@@ -158,11 +158,12 @@ class FailingProvider:
         raise ProviderError("simulated outage")
 
 
-def evaluate(facts: list[Fact], provider: Any = None) -> dict[str, Any]:
+def evaluate(facts: list[Fact], provider: Any = None, *, synthetic: bool = True) -> dict[str, Any]:
+    """``synthetic``: the evaluation's facts come from synthetic data, as in main() (#230)."""
     by_topic = {t: {f.id for f in facts if t in f.topics} for f0 in facts for t in f0.topics}
     rows = []
     for case in CASES:
-        ans = answer_question(case.question, facts, provider)
+        ans = answer_question(case.question, facts, provider, synthetic=synthetic)
         check = verify_answer(ans.text, facts)
         consistent = not check["unsupported"]
         if case.advice:
