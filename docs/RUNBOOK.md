@@ -43,7 +43,8 @@ at this Redis.
 ## Incidents
 
 Job timing runs on PostgreSQL's clock, not any host's (#130). That covers leases,
-heartbeats, retry backoffs, the reaper's cutoffs, claims and `created_at`. When reading
+heartbeats, retry backoffs, the reaper's cutoffs, claims (`started_at`,
+`attempt_started_at`) and `created_at`. When reading
 these columns, compare them with `SELECT now()` in the database, not with `date` on a host.
 A worker, reaper or API host with a skewed clock no longer moves any job deadline.
 
@@ -73,9 +74,23 @@ A worker, reaper or API host with a skewed clock no longer moves any job deadlin
 A worker died mid-job. Its lease (default 60 s, `QUANTLAB_JOB_LEASE_SECONDS`) expires in
 database time. The reaper then does one of four things:
 * marks the job `cancelled` if a cancel was requested;
-* marks it `timed_out` once it has run past `timeout_seconds`;
+* marks it `timed_out` if its current attempt ran past `timeout_seconds`;
 * fails it once `max_attempts` is reached;
 * otherwise requeues it to run at once, with no backoff.
+
+**The timeout counts each attempt's run time (#167)**, from `attempt_started_at` (the
+attempt's claim) to when its lease ran out (`lease_expires_at`).
+* Two kinds of time don't count: waiting for a worker between attempts, and the time since
+  the lease expired. So a job requeued after an outage, even one the reaper was down for,
+  is retried, not timed out.
+* The lease's end counts, rather than the last heartbeat, because with a long
+  `QUANTLAB_JOB_LEASE_SECONDS` the keepalive beats only every lease/3. An attempt killed
+  for overrunning may have last beaten before the timeout. Measuring to the lease's end
+  over-counts by at most one lease.
+* `started_at` stays the job's first claim. Rows from before `attempt_started_at` existed
+  are timed from `started_at`.
+* The worker checks the same limit at each progress heartbeat, and RQ kills an attempt at
+  timeout + 60 s.
 
 A late heartbeat or commit from the dead worker is fenced out by the attempt counter, so
 no duplicate result can be written.

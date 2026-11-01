@@ -607,6 +607,7 @@ def claim(job_id: uuid.UUID, worker_id: str) -> Job | None:
                 lease_expires_at=t + timedelta(seconds=lease),
                 heartbeat_at=t,
                 started_at=func.coalesce(Job.started_at, t),
+                attempt_started_at=t,  # the timeout is per attempt (#167)
                 error=None,
                 message="running",
             )
@@ -872,13 +873,22 @@ def reap(redeliver_after_seconds: int = 120) -> dict[str, int]:
             .with_for_update(skip_locked=True)
         ).all()
         for job in stale:
-            started = job.started_at or job.created_at
+            # How long this attempt ran: from its claim until its lease ran out (#167).
+            # Waiting for a worker between attempts does not count, and neither does the
+            # time since the lease expired: a reaper that was down through an outage would
+            # otherwise time out every job that was running when it began. The lease's end,
+            # not the last heartbeat: keepalive beats every lease/3, so with a long lease
+            # an attempt RQ killed for overrunning (at timeout + 60 s) could have last beaten
+            # before the timeout. This over-counts by at most one lease. Rows from before
+            # attempt_started_at existed are timed from their first start.
+            started = job.attempt_started_at or job.started_at or job.created_at
+            ran = min(t, job.lease_expires_at or t) - started
             if job.cancel_requested:
                 job.status = JobStatus.cancelled
                 job.message = "cancelled (worker stopped before observing the request)"
                 job.finished_at = t
                 stats["cancelled"] = stats.get("cancelled", 0) + 1
-            elif (t - started).total_seconds() > job.timeout_seconds:
+            elif ran.total_seconds() > job.timeout_seconds:
                 job.status = JobStatus.timed_out
                 job.message = "exceeded timeout (worker unresponsive)"
                 job.finished_at = t
