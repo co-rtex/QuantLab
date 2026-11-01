@@ -128,7 +128,10 @@ export default function OptimizePage() {
               </label>
             </div>
             <ErrorNote error={err} />
-            <button className="btn btn-primary" disabled={busy || !dvId}>
+            {/* Not before the instruments load: the default symbols are their first 12, and a
+                click before then sent "symbols": [] and got 422 "Request validation failed"
+                (seen in #232's CI). */}
+            <button className="btn btn-primary" disabled={busy || !dvId || !inst.data}>
               {busy ? "Optimizing…" : "Compare allocations"}
             </button>
           </form>

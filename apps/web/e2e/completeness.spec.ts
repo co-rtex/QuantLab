@@ -198,10 +198,13 @@ test("synthetic data is labelled on the pages that had no test for it (#230)", a
   await page.goto(`/portfolios/${pf.id}`);
   await expect(label()).toBeVisible();
 
-  // Optimize: its result.
+  // Optimize: its result. The button waits for the instruments (its default symbols), and the
+  // response's status is checked, so a 422 or a 503 fails here as itself, not as a timeout.
   await page.goto("/optimize");
+  const optimized = page.waitForResponse((r) => r.url().includes("/optimize") && r.request().method() === "POST");
   await page.getByRole("button", { name: "Compare allocations" }).click();
-  await expect(page.getByRole("cell", { name: "Expected volatility" })).toBeVisible({ timeout: 60_000 });
+  expect((await optimized).status()).toBe(200);
+  await expect(page.getByRole("cell", { name: "Expected volatility" })).toBeVisible();
   await expect(label()).toBeVisible();
 
   // ML: a run in the list is labelled, whatever its outcome. On this small version the run

@@ -172,7 +172,10 @@ export default function DataPage() {
                         {byDataset(d.id).map((v) => (
                           <tr key={v.id}>
                             <td>
-                              <Link href={`/data/${v.id}`} className="text-cobalt hover:underline">
+                              {/* Underlined, not only coloured: next to the tag's text the link
+                                  sits in a block of text, and must be told apart without colour
+                                  (WCAG 1.4.1, axe link-in-text-block). */}
+                              <Link href={`/data/${v.id}`} className="text-cobalt underline">
                                 {shortHash(v.version_hash, 12)}
                               </Link>
                               {v.is_synthetic && <span className="ml-2"><SyntheticTag /></span>}
