@@ -64,7 +64,7 @@ def test_each_claim_records_its_own_start_and_keeps_the_first(client, seeded):
 
 def test_a_requeue_after_a_long_gap_is_not_timed_out_and_attempt_2_completes(client, seeded):
     """Attempt 1's worker died 30 s into it, two hours ago, and nothing ran since (the
-    reaper too was down). Two hours is far past the 900 s timeout, but the attempt ran 30 s."""
+    reaper too was down). Two hours is far past the 900 s timeout, but the attempt ran at most 90 s (to its lease's end)."""
     job_id, exp_id = _backtest(client, seeded)
     J.claim(job_id, "lost-worker")
     _set(
@@ -108,7 +108,7 @@ def test_an_attempt_2_that_loses_its_lease_after_a_long_gap_is_retried(client, s
 def test_an_attempt_that_itself_ran_past_the_timeout_is_still_timed_out(client, seeded):
     job_id, exp_id = _backtest(client, seeded)
     J.claim(job_id, "stuck-worker")
-    # Claimed 2000 s ago and heartbeating until 30 s ago: it ran 1970 s, past 900 s.
+    # Claimed 2000 s ago, heartbeating until 30 s ago, lease out 1 s ago: 1999 s, past 900 s.
     _set(job_id, attempt_started_at=_ago(2000), heartbeat_at=_ago(30), lease_expires_at=_ago(1))
     stats = J.reap()
     assert stats["timed_out"] == 1 and stats["requeued"] == 0
