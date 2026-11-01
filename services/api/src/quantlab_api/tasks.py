@@ -45,7 +45,7 @@ from quantlab_api.models import (
     ExperimentResult,
     Instrument,
 )
-from quantlab_api.observability import DATASET_FRESHNESS_DAYS, DATASET_ROWS, INGEST_QUALITY
+from quantlab_api.observability import DATASET_FRESHNESS_DAYS, DATASET_ROWS, INGEST_QUALITY, log
 from quantlab_api.storage import version_lock
 
 
@@ -633,6 +633,25 @@ def _headline(a: dict[str, Any]) -> dict[str, Any]:
     return out
 
 
+def name_instruments(message: str, history: pd.DataFrame, start: pd.Timestamp | None) -> str:
+    """The engine names instruments by id; a user knows them by ticker (#237). Each id in
+    ``message`` becomes its display ticker as of ``start``, the date the universe was
+    resolved on (:func:`label_ids`): the ticker valid then; else the last one before (it
+    delisted); else the one it first listed under (it lists later, #243 review). An id
+    the history does not know stays as it is."""
+    import re
+
+    known = set(history["instrument_id"].astype(str))
+    token = re.compile(r"(?<![\w.-])[\w.-]+(?![\w.-])")
+    found = sorted({t for t in token.findall(message) if t in known})
+    if not found:
+        return message
+    when = start if start is not None else history["valid_from"].min()
+    labels = label_ids(history, found, when)
+    # One pass: a ticker written in is never read again as another instrument's id.
+    return token.sub(lambda m: labels.get(m.group(0), m.group(0)), message)
+
+
 @handler("research.validation")
 def validation_task(ctx: JobContext) -> Finalizer:
     from quantlab.research.suite import run_validation_suite
@@ -654,30 +673,6 @@ def validation_task(ctx: JobContext) -> Finalizer:
     def progress(f: float, msg: str) -> None:
         ctx.heartbeat(0.02 + 0.95 * f, msg)
 
-    def with_tickers(message: str) -> str:
-        """The engine names instruments by id; a user knows them by ticker (#237). Each id
-        in the message becomes its ticker as of the date the universe was resolved on, else
-        its last ticker, else stays the id."""
-        import re
-
-        from quantlab.data.identity import symbols_as_of
-
-        if not inputs.keyed:
-            return message
-        h = inputs.history
-        for iid in sorted(set(h["instrument_id"].astype(str)), key=len, reverse=True):
-            pattern = rf"(?<![\w.-]){re.escape(iid)}(?![\w.-])"
-            if not re.search(pattern, message):
-                continue
-            ticker = None
-            if inputs.start is not None:
-                ticker = symbols_as_of(h, pd.Series([iid]), pd.Series([inputs.start])).iloc[0]
-            if ticker is None:
-                rows = h[h["instrument_id"].astype(str) == iid].sort_values("valid_from")
-                ticker = rows["symbol"].iloc[-1] if len(rows) else iid
-            message = re.sub(pattern, str(ticker), message)
-        return message
-
     from quantlab.backtest.engine import BacktestError
 
     try:
@@ -692,7 +687,13 @@ def validation_task(ctx: JobContext) -> Finalizer:
             instruments=inputs.master,
         )
     except BacktestError as exc:  # a backtest in the suite could not run: say which tickers
-        raise PermanentJobError(f"validation could not run: {with_tickers(str(exc))}") from exc
+        message = str(exc)
+        if inputs.keyed:
+            try:
+                message = name_instruments(message, inputs.history, inputs.start)
+            except Exception:  # naming is a courtesy: never let it replace the real error
+                log.warning("validation_error_naming_failed", exc_info=True)
+        raise PermanentJobError(f"validation could not run: {message}") from exc
     # The suite re-runs backtests on this worker's engine, which can be newer than the one
     # that computed the experiment. Both are recorded so a mismatch is labelled, not
     # hidden behind the experiment's version (#155).

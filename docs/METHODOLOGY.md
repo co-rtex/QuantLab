@@ -468,13 +468,23 @@ every decision up to each cut to match the full run.
   truncated data. The truncated run is given only the members the kept data lists, and a
   cut with none listed is skipped (`dates_skipped`). The check is "unassessed" when every
   sampled cut was skipped.
-* This does not weaken the check. In the full run that member has no bar up to the cut,
-  so it is untradable there and the engine leaves it out, exactly as it does for a late
-  listing without an explicit universe. Any decision up to the cut that depended on the
-  later listing shows as a mismatch, and a planted look-ahead with a late-listed member
-  still fails (`tests/unit/test_research.py`).
+* This does not weaken the check.
+  * In the full run, that member is still in the strategy's view up to the cut: a column
+    of NaN prices, marked untradable. The engine leaves it out only of `view.universe` (the
+    tradable members) and of the targets. A late listing without an explicit universe is
+    treated the same way.
+  * A strategy that picks from `view.universe`, as all nine library strategies do, decides
+    the same in both runs. Over 2,277 sampled cuts with late listings on synthetic data,
+    0 mismatches (#243 review).
+  * A strategy that reads the view's columns sees the later listing, for example one that
+    sizes by their count. Its decisions differ between the two runs, and the check reports
+    "failed". So does a planted look-ahead with a late-listed member. Both fail at a cut
+    before the listing (`tests/unit/test_research.py`).
 * When a backtest inside the suite cannot run, the job fails with "validation could not
-  run: …" and names tickers as of the experiment's start, not instrument ids.
+  run: …". It names each instrument by its ticker as of the experiment's start:
+  * for an instrument listed later, the ticker it first listed under;
+  * for one delisted before the start, its last ticker;
+  * otherwise, or if naming fails, the id itself.
 
 **Independent reference (#180).** `tests/oracle/reference.py` is a second, deliberately
 simple backtester, written from this section and the *Data* section and importing nothing

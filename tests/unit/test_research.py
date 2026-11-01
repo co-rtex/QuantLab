@@ -183,9 +183,37 @@ def test_leakage_check_still_catches_a_leak_with_a_late_listed_member(monkeypatc
         )
         leaky = leakage_check(m.bars, m.actions, LowestPrice.key, {}, cfg, samples=40)
         assert leaky["status"] == "failed", leaky
-        assert any(pd.Timestamp(d) < listed for d in leaky["dates_tested"])
+        # A mismatch at a cut the universe was restricted at, not only after the listing.
+        assert any(pd.Timestamp(d) < listed for d in leaky["mismatches"]), leaky
     finally:
         REGISTRY.pop(LowestPrice.key, None)
+
+
+class PerColumn(Strategy):
+    """Sizes by the view's column count, which includes members not listed yet: that
+    count is information from after the decision date."""
+
+    key = "test_per_column"
+    name = "per column"
+    description = ""
+    Params = StrategyParams
+
+    def target_weights(self, view: MarketView):
+        return pd.Series(1 / len(view.close.columns), index=view.universe)
+
+
+def test_leakage_check_catches_a_strategy_that_counts_not_yet_listed_columns():
+    # The full run keeps a not-yet-listed member as an untradable NaN column (#243 review),
+    # so a strategy that reads columns rather than view.universe sees the later listing.
+    m, universe, listed = _late_listing_market()
+    cfg = CFG.model_copy(update={"universe": universe, "rebalance": "weekly"})
+    REGISTRY[PerColumn.key] = PerColumn
+    try:
+        res = leakage_check(m.bars, m.actions, PerColumn.key, {}, cfg, samples=40)
+        assert res["status"] == "failed", res
+        assert any(pd.Timestamp(d) < listed for d in res["mismatches"]), res
+    finally:
+        REGISTRY.pop(PerColumn.key, None)
 
 
 def test_psr_dsr_properties():

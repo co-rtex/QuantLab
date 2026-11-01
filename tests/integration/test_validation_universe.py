@@ -70,12 +70,34 @@ def test_a_suite_error_names_tickers_not_instrument_ids(client, seeded, monkeypa
     from quantlab.research import suite
 
     def failing(*args, **kwargs):
-        raise BacktestError("no data for symbols: ['QLSYN005', 'QLGONE']")
+        raise BacktestError("no data for symbols: ['QLSYN001', 'QLSYN005', 'QLGONE']")
 
     monkeypatch.setattr(suite, "run_validation_suite", failing)
     dv, tickers = _late_listing_version(seeded)
     val = _validate(client, seeded, dv, tickers)
     assert val["status"] == "failed", val
     message = val["job"]["error"]["message"]
-    # SYN005 is QLSYN005's ticker; an id with no ticker in the history is kept, not dropped.
-    assert "validation could not run: no data for symbols: ['SYN005', 'QLGONE']" in message
+    # QLSYN001 is listed at the start (its ticker then); QLSYN005 lists after it (its first
+    # ticker); an id with no ticker in the history is kept, not dropped.
+    expected = "validation could not run: no data for symbols: ['SYN001', 'SYN005', 'QLGONE']"
+    assert expected in message
+
+
+def test_a_naming_failure_keeps_the_original_error(client, seeded, monkeypatch):
+    from quantlab.backtest.engine import BacktestError
+    from quantlab.research import suite
+    from quantlab_api import tasks
+
+    def failing(*args, **kwargs):
+        raise BacktestError("no data for symbols: ['QLSYN005']")
+
+    def broken(*args, **kwargs):
+        raise KeyError("history without valid_from")
+
+    monkeypatch.setattr(suite, "run_validation_suite", failing)
+    monkeypatch.setattr(tasks, "name_instruments", broken)
+    dv, tickers = _late_listing_version(seeded)
+    val = _validate(client, seeded, dv, tickers)
+    assert val["status"] == "failed", val
+    message = val["job"]["error"]["message"]
+    assert "validation could not run: no data for symbols: ['QLSYN005']" in message
