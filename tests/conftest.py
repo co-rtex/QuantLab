@@ -1,9 +1,21 @@
 from __future__ import annotations
 
+from collections.abc import Iterator
+
 import pandas as pd
 import pytest
+import structlog
 
 from quantlab.data.synthetic import SyntheticMarket, SyntheticSpec, generate_market
+
+
+@pytest.fixture(autouse=True)
+def _logging_left_as_found() -> Iterator[None]:
+    """A test that configures logging (create_app does, by its environment) puts it back
+    afterwards: the next test's log format never depends on which tests ran first (#202)."""
+    saved = structlog.get_config()
+    yield
+    structlog.configure(**saved)
 
 
 @pytest.fixture(scope="session")
