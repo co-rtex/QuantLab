@@ -519,7 +519,7 @@ def test_concurrent_authorized_uploads_each_get_their_own_staging(client, upload
 
 
 def test_openapi_still_documents_the_multipart_body(client):
-    spec = client.get("/api/v1/openapi.json").json()
+    spec = client.app.openapi()  # built, though not served outside development (#201)
     op = spec["paths"]["/api/v1/workspaces/{workspace_id}/datasets/csv"]["post"]
     schema = op["requestBody"]["content"]["multipart/form-data"]["schema"]
     assert set(schema["required"]) == {"slug", "name", "source", "license", "bars"}
