@@ -45,7 +45,9 @@ def test_the_worker_endpoint_requires_the_token(multiproc: Path) -> None:
     app = worker_metrics_app(TOKEN)
     assert call(app)[0].startswith("401")
     assert call(app, auth="Bearer wrong")[0].startswith("401")
-    assert call(app, auth=TOKEN)[0].startswith("401")  # the scheme is required
+    assert call(app, auth=f"Bearer {TOKEN[:-1]}")[0].startswith("401")
+    # As the API's /metrics: an optional "Bearer " prefix, then the token compared exactly.
+    assert call(app, auth=TOKEN)[0].startswith("200")
     status, headers, _ = call(app, auth=f"Bearer {TOKEN}")
     assert status.startswith("200") and headers["Content-Type"].startswith("text/plain")
 
