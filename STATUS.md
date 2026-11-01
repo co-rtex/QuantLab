@@ -1,6 +1,69 @@
 # Status (authoritative handoff)
 
-_Last updated: 2026-11-01 (lead integration cycle 3: 142 PRs merged, per `gh pr list --state merged`; release-candidate main `7fc89ee`)_
+_Last updated: 2026-11-01, end of week (handoff below; main `07eece0`)_
+
+## Handoff (2026-11-01, end of week): read this first
+**State.** Main `07eece0`, CI green. The latest verified private release candidate is
+**`v0.1.0-rc.2` on `87449b2`** (READY; docs/RELEASE_READINESS.md). Its tags `v0.1.0-rc.1`
+(`7fc89ee`) and `v0.1.0-rc.2` exist **locally only**; the user decides whether to
+`git push origin v0.1.0-rc.1 v0.1.0-rc.2`. **Main after rc.2 is not release-gated**: merged
+PRs were each trialled, but no full RC gate or assessment has run on the newer main. Public
+deployment stays prohibited (#39).
+
+**Merged after rc.2** (each trialled on its main, CI green): #248 (load_bars streaming),
+#250 and #255 (optimize as a job, migration M6 `aec87540a0ac`, editor-only submit,
+ADR-0013), #251 (engine **1.7.0**, min_variance dust), #257 (portfolio transaction cap,
+default 10,000), #258 (ML predictions paging), #264 (validation panel shows why a run ended, rerun after a timeout; #260), merged in the final session after a trial (one load-timing E2E failure, re-run alone 2/2 green).
+
+**Open PRs.**
+* **#259** (#247, leakage check with an as-of instrument master; Agent 3). CI green at
+  `949b8f0`, but the independent review's items 1–5 (listed on the PR) are not on it. They're
+  on branch `a3/247-review-fixes` (`9d4afc8`), still unverified under the lock: M34 and M35
+  and the full tests/unit are not yet run. Next: run them, fast-forward the PR branch, then a
+  lead trial with QUANTLAB_ORACLE_SLOW.
+
+**Open issues.**
+* Release-blocking for private use: none known.
+* Important: #247 (via #259), #253 (mean_variance fails at the optimize API's 100-symbol
+  defaults; reproduced, mode 8 at the optimum; plan: KKT-verified acceptance, ε from a
+  measured gap, engine 1.8.0), #263 (Playwright in a worktree defaults to the main
+  checkout's :3000. **Workaround: run E2E only via `QUANTLAB_SLOT=n make e2e-serial`.**)
+* Optional or test-only: #252, #254, #261 (two Redis timing tests flaky under load; the
+  outage one is not reproduced alone; plan: instrument it, then 2 full-suite runs under
+  load), #262.
+* Externally blocked (user): #39, #168, #11/#12 (licence and key), #15 (LLM key), #20
+  (load host), #17 as a required check (branch protection), AWS credentials and cost.
+* Environment: the Docker VM is 3918 MiB, below the documented 5120 MiB minimum.
+
+**Branches and owners** (Agent 2 = security and backend, Agent 3 = data and quant).
+* Agent 2: `a2/263-e2e-base-url` (`86fe3ef`, no PR; the guard works, but one typecheck error
+  is noted on #263); `a2/261-redis-tests` (`6bc9d9c`, no PR; instrumentation plus the
+  readiness fix, not run).
+* Agent 3: `a3/247-review-fixes` (`9d4afc8`); `a3/253-slsqp-kkt` (`a7bab1b`, repro scripts and
+  NOTES.md; 7 ruff findings in the scripts; ε_KKT not chosen).
+* Lead worktrees: `lead-trial` (detached at main, slot 86), `lead-docs`, `lead-verify`.
+  `audit-quantlab` is an older audit branch.
+* Leases open: `apps/web/playwright.config.ts` to Agent 2 for #263. Migration slots: none in
+  flight (M6 merged).
+
+**Verified.** rc.2's gate and assessment (RELEASE_READINESS). Each post-rc.2 PR's trial:
+full pytest, unit, web, serial Playwright, plus the oracle slow mode for engine changes.
+**Unverified on current main:** a fresh full gate, the migration round trip with M6 on a
+data-bearing DB, and an independent assessment.
+
+**Next steps when usage resets** (in this order):
+1. Lead: `git fetch`; check `gh pr list`. Trial and merge #259 once Agent 3 pushes the
+   review items listed on the PR. Then, if a new RC is wanted, run the full gate on main
+   (scratchpad `gate2.sh` pattern: lock held; `make down` only, **never `down -v`**) and an
+   independent fresh-clone assessment, before any READY claim or rc.3 tag.
+2. Agent 2: #263 (fail-closed Playwright guard; lease on `apps/web/playwright.config.ts`),
+   then #261.
+3. Agent 3: finish #259's review items, then #253 (engine 1.8.0, attributed A/B), then
+   #262, #252 and #254.
+
+**Resume.** `cd ~/Developer/QuantLab && git fetch && git log --oneline -5 origin/main &&
+gh pr list && scripts/fullstack-lock.sh status`. Trials: lead-trial worktree, slot 86,
+under `scripts/fullstack-lock.sh run`; E2E only through `make e2e-serial`.
 
 ## Where things stand
 All roadmap phases 0–10 are implemented. An independent audit on 2026-10-30
