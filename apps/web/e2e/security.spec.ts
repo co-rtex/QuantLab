@@ -10,6 +10,18 @@ test("proxy refuses paths outside the versioned API", async ({ request }) => {
   }
 });
 
+test("proxy never serves the API's interactive docs (#201)", async ({ request }) => {
+  // The e2e API runs in development, where it serves them on its own port: the proxy must
+  // still refuse them, since Swagger UI's CDN and inline scripts would run on this origin.
+  for (const p of ["/api/v1/docs", "/api/v1/openapi.json", "/api/v1/redoc", "/api/v1/docs/oauth2-redirect"]) {
+    const r = await request.get(p, { maxRedirects: 0 });
+    expect(r.status(), p).toBe(404);
+    const body = await r.text();
+    expect(body, p).not.toContain("swagger");
+    expect(body, p).not.toContain('"openapi"');
+  }
+});
+
 for (const next of ["/\\evil.example.com", "/.//evil.example.com", "//evil.example.com", "https://evil.example.com"]) {
 test(`post-login redirect stays on this origin: ${next}`, async ({ page, baseURL }) => {
   const email = `redir-${Date.now()}-${Math.random().toString(36).slice(2)}@example.com`;
