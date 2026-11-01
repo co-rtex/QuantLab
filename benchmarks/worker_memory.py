@@ -21,11 +21,13 @@ import argparse
 import itertools
 import json
 import os
+import re
 import subprocess
 import sys
 import threading
 import time
 import uuid
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -37,6 +39,8 @@ from load_and_scaling import wait
 
 API = os.environ.get("QUANTLAB_BENCH_API", "http://localhost:8000")
 COMPOSE = ["docker", "compose", "--profile", "app"]
+# A reaper cycle that requeued jobs, in JSON or key=value logs.
+REQUEUED = re.compile(r"requeued\W{1,3}([1-9]\d*)")
 
 
 def _compose(*args: str) -> str:
@@ -130,8 +134,26 @@ def setup(c: httpx.Client, assets: int, start: str, end: str) -> dict[str, Any]:
     return {"h": h, "ws": ws, "dv": dv["id"], "rows": dv["rows"], "symbols": dv["symbol_count"]}
 
 
+def _logs(service: str, since: str) -> str:
+    out = []
+    for cid in _compose("ps", "-q", service).split():
+        r = subprocess.run(
+            ["docker", "logs", "--timestamps", "--since", since, cid],
+            capture_output=True,
+            text=True,
+        )
+        out.append(f"===== {service} {cid[:12]}\n{r.stdout}{r.stderr}")
+    return "\n".join(out)
+
+
 def one(
-    c: httpx.Client, s: dict[str, Any], universe: int, rebalance: str, strategy: str, start: str
+    c: httpx.Client,
+    s: dict[str, Any],
+    universe: int,
+    rebalance: str,
+    strategy: str,
+    start: str,
+    logs: Path | None = None,
 ) -> dict[str, Any]:
     # A new container is a new cgroup, so its peak belongs to this job alone. One replica,
     # so the job runs in the container measured.
@@ -163,10 +185,16 @@ def one(
             "error": r.json().get("error"),
         }
     t = time.time()
+    since = datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
     sampler.start()
     (job,) = wait(c, s["h"], [r.json()["job"]["id"]])
     anon = sampler.stop()
     assert _worker() == cid, "the worker container changed during the job"
+    # Every attempt's story: the horse's deaths (worker) and lease recoveries (reaper).
+    worker_log, reaper_log = _logs("worker", since), _logs("reaper", since)
+    if logs is not None:
+        logs.mkdir(parents=True, exist_ok=True)
+        (logs / f"{universe}-{rebalance}-{strategy}.log").write_text(worker_log + "\n" + reaper_log)
     return {
         "universe": universe,
         "rebalance": rebalance,
@@ -174,6 +202,10 @@ def one(
         "status": job["status"],
         "attempts": job.get("attempts"),
         "error": job.get("error"),
+        "message": job.get("message"),
+        "horse_deaths_logged": worker_log.count("Work-horse terminated unexpectedly"),
+        "oom_classified_logged": worker_log.count("job_out_of_memory"),
+        "reaper_requeues_logged": len(REQUEUED.findall(reaper_log)),
         "container": cid[:12],
         "wall_s": round(time.time() - t, 1),
         "anon_peak_mb": round(anon / 2**20, 1),
@@ -203,7 +235,8 @@ def main() -> None:
     load = harness.load_snapshot()
     rows = []
     for n, reb, strat in itertools.product(a.universe, a.rebalance, a.strategy):
-        rows.append(one(c, s, n, reb, strat, a.start))
+        logs = a.out.with_name(a.out.stem + "-logs") if a.out else None
+        rows.append(one(c, s, n, reb, strat, a.start, logs))
         print(json.dumps(rows[-1]), flush=True)
     res = harness.finalize(
         {
