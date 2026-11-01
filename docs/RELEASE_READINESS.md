@@ -13,6 +13,10 @@ behaviour that the rc sections below describe:
 * **load_bars** streams row groups pruned by symbol statistics (#248, #225). Per-optimize
   memory is about 574 → 190 MiB at 2 API processes, with backtest outputs byte-identical.
   No limit changed.
+* Also merged after rc.2: #251 (engine **1.7.0**, min_variance dust), #257 (portfolio
+  transaction cap, default 10,000), #258 (ML predictions paging), #264 (validation panel
+  reasons). **No release gate or assessment has run on main since rc.2** (`07eece0` at
+  handoff), so rc.2 stays the latest verified candidate.
 * The rc.2 evidence and limitations below describe `87449b2` and are kept as recorded.
 
 ## Release candidate 2 (2026-11-01, main `87449b2`)
