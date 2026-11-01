@@ -979,6 +979,14 @@ def _classify_horse_death(rq_job: RQJob, retpid: int, ret_val: int, rusage: Any)
     log.warning("job_out_of_memory", job_id=args[0], peak_mb=round(peak), limit_mb=limit)
 
 
+def _count(decided: list[tuple[str, str]], requeued: list[str]) -> None:
+    """The reaper's decisions in the job metrics, as the worker counts its own (#179)."""
+    for kind, outcome in decided:
+        JOB_OUTCOMES.labels(kind, outcome).inc()
+    for kind in requeued:
+        JOB_RETRIES.labels(kind, "lease_expired").inc()
+
+
 def reap(redeliver_after_seconds: int = 120) -> dict[str, int]:
     """Recover jobs whose worker died and re-deliver queued jobs that were never picked up."""
     stats = {"requeued": 0, "failed": 0, "timed_out": 0, "redelivered": 0, "uploads_swept": 0}
@@ -993,6 +1001,8 @@ def reap(redeliver_after_seconds: int = 120) -> dict[str, int]:
             .where(Job.status == JobStatus.running, Job.lease_expires_at < t)
             .with_for_update(skip_locked=True)
         ).all()
+        decided: list[tuple[str, str]] = []  # (kind, outcome) of jobs it finished
+        requeued: list[str] = []  # kinds it requeued after a lost worker
         for job in stale:
             # How long this attempt ran: from its claim until its lease ran out (#167).
             # Waiting for a worker between attempts does not count, and neither does the
@@ -1009,11 +1019,13 @@ def reap(redeliver_after_seconds: int = 120) -> dict[str, int]:
                 job.message = "cancelled (worker stopped before observing the request)"
                 job.finished_at = t
                 stats["cancelled"] = stats.get("cancelled", 0) + 1
+                decided.append((job.kind, JobStatus.cancelled.value))
             elif ran.total_seconds() > job.timeout_seconds:
                 job.status = JobStatus.timed_out
                 job.message = "exceeded timeout (worker unresponsive)"
                 job.finished_at = t
                 stats["timed_out"] += 1
+                decided.append((job.kind, JobStatus.timed_out.value))
             elif job.attempts >= job.max_attempts:
                 job.status = JobStatus.failed
                 job.error = {
@@ -1024,14 +1036,18 @@ def reap(redeliver_after_seconds: int = 120) -> dict[str, int]:
                 job.message = "failed: worker lost and attempts exhausted"
                 job.finished_at = t
                 stats["failed"] += 1
+                decided.append((job.kind, JobStatus.failed.value))
             else:
                 job.status = JobStatus.queued
                 job.message = "requeued after worker loss"
                 job.lease_expires_at = None
                 stats["requeued"] += 1
-                JOB_RETRIES.labels(job.kind, "lease_expired").inc()
+                requeued.append(job.kind)
             _mirror_status(db, job, job.status)
         db.commit()
+        # Counted once committed (#179): a failed commit decided nothing, and the next pass
+        # decides again, so counting first would count it twice.
+        _count(decided, requeued)
         for job in stale:
             if job.status == JobStatus.queued:
                 enqueue(job)
@@ -1049,6 +1065,7 @@ def reap(redeliver_after_seconds: int = 120) -> dict[str, int]:
         if orphaned:
             stats["cancelled"] = stats.get("cancelled", 0) + len(orphaned)
             db.commit()
+            _count([(job.kind, JobStatus.cancelled.value) for job in orphaned], [])
         waiting = db.scalars(
             select(Job)
             .where(
