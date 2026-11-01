@@ -110,6 +110,16 @@ Prometheus scrapes three kinds of process, all behind the same bearer token
     as a reset.
   * It counts a decision only once it is committed, so a failed commit counts nothing and
     the next pass counts it once.
+  * If its metrics port can't be bound, the reaper stops at start, before its first
+    pass. Compose restarts it under the default restart policy (`unless-stopped`; a
+    worktree slot's `no` leaves it stopped).
+* **Each job's terminal outcome is counted once**, by whichever process's write wins the
+  job's row: the worker (`completed`, `failed`, `timed_out`, `cancelled`), or the reaper
+  when it decides first.
+  * A worker whose write is fenced, because the reaper already decided the job after its
+    lease ran out, counts `quantlab_job_outcomes_total{outcome="lease_lost"}` instead.
+  * `lease_lost` and `retry` are not terminal outcomes. A sum of terminal outcomes, for
+    example jobs finished per hour, must exclude both.
 
 Structured JSON logs (structlog) carry `request_id`, and job logs carry the originating
 request id.

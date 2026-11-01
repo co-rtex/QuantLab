@@ -743,18 +743,21 @@ def _run_claimed(job: Job, jid: uuid.UUID, wid: str) -> str:
             _mirror_status(db, locked, JobStatus.completed)
             db.commit()
         outcome = "completed"
+    # Each outcome below is this attempt's only if its write wins the row (#179): the reaper
+    # may have decided the job first (a stalled worker's lease ran out), and counted it.
+    # A fenced write is "lease_lost", never a second terminal outcome.
     except JobCancelledError:
-        outcome = "cancelled"
-        _finish(jid, ctx.attempt, JobStatus.cancelled, message="cancelled by user")
+        won = _finish(jid, ctx.attempt, JobStatus.cancelled, message="cancelled by user")
+        outcome = "cancelled" if won else "lease_lost"
     except JobTimeoutError as exc:
-        outcome = "timed_out"
-        _finish(
+        won = _finish(
             jid,
             ctx.attempt,
             JobStatus.timed_out,
             message=str(exc),
             error={"type": "JobTimeoutError", "message": str(exc)},
         )
+        outcome = "timed_out" if won else "lease_lost"
     except LeaseLostError as exc:
         outcome = "lease_lost"
         bound.warning("job_lease_lost", error=str(exc))
@@ -770,10 +773,9 @@ def _run_claimed(job: Job, jid: uuid.UUID, wid: str) -> str:
         }
         cancelled = _cancel_requested(jid)
         if cancelled:
-            outcome = "cancelled"
-            _finish(jid, ctx.attempt, JobStatus.cancelled, message="cancelled by user")
+            won = _finish(jid, ctx.attempt, JobStatus.cancelled, message="cancelled by user")
+            outcome = "cancelled" if won else "lease_lost"
         elif not permanent and ctx.attempt < job.max_attempts:
-            outcome = "retry"
             delay = min(60.0, 2.0**ctx.attempt)
             with SessionLocal() as db:
                 res = db.execute(
@@ -793,17 +795,18 @@ def _run_claimed(job: Job, jid: uuid.UUID, wid: str) -> str:
                     _mirror_status(db, job, JobStatus.queued)
                 db.commit()
                 again = db.get(Job, jid)
+            outcome = "retry" if res.rowcount else "lease_lost"  # type: ignore[attr-defined]
             if res.rowcount and again is not None:  # type: ignore[attr-defined]
                 JOB_RETRIES.labels(job.kind, type(exc).__name__).inc()
                 enqueue(again, delay_seconds=delay)
         else:
-            outcome = "failed"
             public = (
                 str(exc)[:500]
                 if type(exc).__name__ in SAFE_ERROR_TYPES
                 else f"failed: {type(exc).__name__} (details in server logs)"
             )
-            _finish(jid, ctx.attempt, JobStatus.failed, message=public, error=err)
+            won = _finish(jid, ctx.attempt, JobStatus.failed, message=public, error=err)
+            outcome = "failed" if won else "lease_lost"
         bound.error("job_error", error=str(exc), outcome=outcome)
     finally:
         JOBS_RUNNING.dec()

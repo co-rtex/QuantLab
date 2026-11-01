@@ -129,3 +129,85 @@ def test_a_queued_job_cancelled_before_any_worker_saw_it_is_counted(seeded):
         db.commit()
     J.reap()
     assert outcomes(kind, "cancelled") == 1
+
+
+def test_a_failed_orphan_cancel_commit_counts_nothing(seeded, monkeypatch):
+    """The second commit of a pass is the orphan cancels' (the first is the stale jobs')."""
+    kind = f"t.{uuid.uuid4().hex[:8]}"
+    with SessionLocal() as db:
+        user, ws = db.scalar(select(User)), db.scalar(select(Workspace))
+        job, _ = J.submit_job(
+            db, workspace_id=ws.id, user_id=user.id, kind=kind, payload={}, dispatch=False
+        )
+        job.cancel_requested = True
+        db.commit()
+        jid = job.id
+    real_commit = Session.commit
+    calls = {"n": 0}
+
+    def fail_second(self: Session) -> None:
+        calls["n"] += 1
+        if calls["n"] == 2:
+            raise RuntimeError("injected: the orphan commit failed")
+        real_commit(self)
+
+    monkeypatch.setattr(Session, "commit", fail_second)
+    with pytest.raises(RuntimeError, match="orphan commit"):
+        J.reap()
+    assert outcomes(kind, "cancelled") == 0
+    with SessionLocal() as db:
+        assert db.get(Job, jid).status == JobStatus.queued
+    monkeypatch.setattr(Session, "commit", real_commit)
+    J.reap()
+    assert outcomes(kind, "cancelled") == 1
+
+
+@pytest.mark.parametrize(
+    ("raises", "cancel"),
+    [
+        (J.JobTimeoutError("exceeded 900s"), False),
+        (J.JobCancelledError("cancel requested"), False),
+        (RuntimeError("after a cancel request"), True),
+        (ValueError("bad input"), False),
+        (ConnectionError("transient"), False),
+    ],
+    ids=["timed_out", "cancelled", "cancelled_after_error", "failed", "retry"],
+)
+def test_when_the_reaper_decides_first_the_job_is_counted_once(seeded, monkeypatch, raises, cancel):
+    """The race from the #189 review. A worker stalls, its lease runs out, and the reaper
+    times the job out and counts it. Then the worker's own path runs (its local timeout
+    check, a cancel, an error). Its write is fenced, so it must count lease_lost, not a
+    second outcome or a retry."""
+    kind = f"t.{uuid.uuid4().hex[:8]}"
+
+    def stalled(ctx):
+        with SessionLocal() as db:  # the reaper's view: the lease ran out long after the start
+            db.execute(
+                update(Job)
+                .where(Job.id == ctx.job_id)
+                .values(
+                    attempt_started_at=func.now() - timedelta(seconds=2000),
+                    lease_expires_at=func.now() - timedelta(seconds=1),
+                )
+            )
+            db.commit()
+        assert J.reap()["timed_out"] == 1  # the reaper decides, and counts
+        raise raises  # then the worker's own path
+
+    monkeypatch.setitem(J.HANDLERS, kind, stalled)
+    if cancel:
+        monkeypatch.setattr(J, "_cancel_requested", lambda jid: True)
+    with SessionLocal() as db:
+        user, ws = db.scalar(select(User)), db.scalar(select(Workspace))
+        job, _ = J.submit_job(
+            db, workspace_id=ws.id, user_id=user.id, kind=kind, payload={}, dispatch=False
+        )
+        jid = job.id
+    assert J.execute_job(str(jid), "stalled-worker") == "lease_lost"
+    with SessionLocal() as db:
+        assert db.get(Job, jid).status == JobStatus.timed_out  # the reaper's decision stands
+    assert outcomes(kind, "timed_out") == 1
+    assert outcomes(kind, "lease_lost") == 1
+    for other in ("cancelled", "failed", "retry", "completed"):
+        assert outcomes(kind, other) == 0, other
+    assert scraped("quantlab_job_retries_total", kind=kind, reason=type(raises).__name__) == 0
