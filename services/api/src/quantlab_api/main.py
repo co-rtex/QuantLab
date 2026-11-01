@@ -46,13 +46,19 @@ def create_app() -> FastAPI:
     settings = get_settings()
     settings.require_api_secrets()  # only the API holds the signing key (#117)
     configure_logging(json=settings.environment != "development")
+    # The interactive docs and their schema only in development (#201). Swagger UI is an
+    # HTML page that loads its script from a CDN and runs an inline one, and the web proxy
+    # served it on the app's own origin with no Content-Security-Policy: a compromised CDN
+    # file or a Swagger UI flaw would have run with the user's session. The schema is still
+    # built by app.openapi(); it is just not served.
+    docs = settings.environment == "development"
     app = FastAPI(
         title="QuantLab API",
         version="0.1.0",
         description="Reproducible quantitative research platform. All market data served by "
         "a synthetic provider is labelled `is_synthetic=true`.",
-        openapi_url=f"{API_PREFIX}/openapi.json",
-        docs_url=f"{API_PREFIX}/docs",
+        openapi_url=f"{API_PREFIX}/openapi.json" if docs else None,
+        docs_url=f"{API_PREFIX}/docs" if docs else None,
         redoc_url=None,
     )
     install_error_handlers(app)
