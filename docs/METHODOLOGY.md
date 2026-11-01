@@ -461,6 +461,21 @@ replay); equity equals cash plus marked positions every day; cash never negative
 positions never negative; deterministic fingerprints for identical inputs; truncating
 data after a decision date leaves that decision unchanged (no look-ahead).
 
+**Look-ahead check in the validation suite** (`leakage_check`). The suite re-runs the
+experiment on data truncated one session after four sampled decision dates and requires
+every decision up to each cut to match the full run.
+* **Explicit universe (#237).** A member first listed after a cut has no bars in the
+  truncated data. The truncated run is given only the members the kept data lists, and a
+  cut with none listed is skipped (`dates_skipped`). The check is "unassessed" when every
+  sampled cut was skipped.
+* This does not weaken the check. In the full run that member has no bar up to the cut,
+  so it is untradable there and the engine leaves it out, exactly as it does for a late
+  listing without an explicit universe. Any decision up to the cut that depended on the
+  later listing shows as a mismatch, and a planted look-ahead with a late-listed member
+  still fails (`tests/unit/test_research.py`).
+* When a backtest inside the suite cannot run, the job fails with "validation could not
+  run: …" and names tickers as of the experiment's start, not instrument ids.
+
 **Independent reference (#180).** `tests/oracle/reference.py` is a second, deliberately
 simple backtester, written from this section and the *Data* section and importing nothing
 from `quantlab`.

@@ -654,16 +654,45 @@ def validation_task(ctx: JobContext) -> Finalizer:
     def progress(f: float, msg: str) -> None:
         ctx.heartbeat(0.02 + 0.95 * f, msg)
 
-    result = run_validation_suite(
-        inputs.bars,
-        inputs.actions,
-        key,
-        params,
-        inputs.cfg,
-        on_progress=progress,
-        seed=int(ctx.payload.get("seed", 0)),
-        instruments=inputs.master,
-    )
+    def with_tickers(message: str) -> str:
+        """The engine names instruments by id; a user knows them by ticker (#237). Each id
+        in the message becomes its ticker as of the date the universe was resolved on, else
+        its last ticker, else stays the id."""
+        import re
+
+        from quantlab.data.identity import symbols_as_of
+
+        if not inputs.keyed:
+            return message
+        h = inputs.history
+        for iid in sorted(set(h["instrument_id"].astype(str)), key=len, reverse=True):
+            pattern = rf"(?<![\w.-]){re.escape(iid)}(?![\w.-])"
+            if not re.search(pattern, message):
+                continue
+            ticker = None
+            if inputs.start is not None:
+                ticker = symbols_as_of(h, pd.Series([iid]), pd.Series([inputs.start])).iloc[0]
+            if ticker is None:
+                rows = h[h["instrument_id"].astype(str) == iid].sort_values("valid_from")
+                ticker = rows["symbol"].iloc[-1] if len(rows) else iid
+            message = re.sub(pattern, str(ticker), message)
+        return message
+
+    from quantlab.backtest.engine import BacktestError
+
+    try:
+        result = run_validation_suite(
+            inputs.bars,
+            inputs.actions,
+            key,
+            params,
+            inputs.cfg,
+            on_progress=progress,
+            seed=int(ctx.payload.get("seed", 0)),
+            instruments=inputs.master,
+        )
+    except BacktestError as exc:  # a backtest in the suite could not run: say which tickers
+        raise PermanentJobError(f"validation could not run: {with_tickers(str(exc))}") from exc
     # The suite re-runs backtests on this worker's engine, which can be newer than the one
     # that computed the experiment. Both are recorded so a mismatch is labelled, not
     # hidden behind the experiment's version (#155).
