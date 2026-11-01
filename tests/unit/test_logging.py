@@ -11,6 +11,7 @@ from __future__ import annotations
 import json
 
 import pytest
+import structlog
 
 from quantlab_api.observability import configure_logging, log
 
@@ -23,10 +24,12 @@ def _fail() -> None:
 
 
 def _log_a_failure() -> None:
+    # A fresh logger, so the configuration just made is the one used even where loggers
+    # are cached (as they were): the module's `log` could still hold an earlier test's.
     try:
         _fail()
     except RuntimeError:
-        log.exception("unhandled_error", path="/probe")
+        structlog.get_logger("quantlab").exception("unhandled_error", path="/probe")
 
 
 @pytest.mark.parametrize("as_json", [True, False], ids=["json", "console"])
