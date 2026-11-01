@@ -84,7 +84,7 @@ Sources:
 |---|---|---|---|
 | Daily bars | `GET /v2/aggs/ticker/{ticker}/range/1/day/{from}/{to}?adjusted=false&sort=asc` [12] | `o h l c v t` → open, high, low, close, volume, session date (`t` = Unix ms of the window start in New York time) | `limit` max 50000 base aggregates; `next_url` paging. **Aggregates include pre-market and after-hours trades** [12], so `o`/`c` may differ from the official opening and closing auction prices. Unverified: must be reconciled against a second source before research use. |
 | Splits | `GET /stocks/v1/splits` [13] | `ticker, execution_date` (ex-date), `split_to / split_from` (ratio), `adjustment_type` (`forward_split`, `reverse_split`, `stock_dividend`), `id` | Since 1978-10-25 (vendor-stated, unverified); `limit` max 5000. A stock dividend is a share-count change, so it is mapped as a split. |
-| Dividends | `GET /stocks/v1/dividends` [4] | `ticker, ex_dividend_date, cash_amount, declaration_date, record_date, pay_date, distribution_type, currency, id` | Non-USD amounts are rejected rather than converted. |
+| Dividends | `GET /stocks/v1/dividends` [4] | `ticker, ex_dividend_date, cash_amount, declaration_date, record_date, pay_date, distribution_type, currency` | Non-USD amounts are rejected rather than converted. The record's `id` is not kept: the canonical actions schema has no column for it (see the open questions below). |
 | Security master | `GET /v3/reference/tickers?active=…&date=…` [1] | `ticker, name, active, delisted_utc, share_class_figi, composite_figi, cik` | `limit` max 1000. |
 | Ticker history | `GET /vX/reference/tickers/{id}/events?types=ticker_change` [3] | `events[].date, events[].ticker_change.ticker` | Experimental. `id` is documented as a ticker, CUSIP or **composite** FIGI, so the adapter passes `composite_figi` (a security without one is skipped, not guessed). |
 
@@ -147,6 +147,20 @@ Sources:
   security. Provenance records the full counts of unidentified and skipped securities.
   Provenance (`fetched_at`, request counts) is not part of the version hash, so an
   identical re-fetch reuses the existing version and keeps its first provenance.
+
+## Open questions for the vendor (#11)
+
+* **Dividend corrections: unknown.** QuantLab pays every dividend row, and two rows on
+  one ex-date with different amounts are legitimate (a regular and a special dividend).
+  * If the vendor ever returns an original and its correction side by side, both would be
+    paid.
+  * Whether Massive's dividends endpoint can do so is **unknown**. No account has been
+    opened, and nothing in this repository assumes either way.
+  * Since #210 the quality report warns, without blocking, on several dividends on one
+    ex-date (`multiple_dividends_on_ex_date`), so an operator can confirm or remove one.
+  * Keeping the vendor's record `id` would let a correction feed be reconciled. It needs
+    a column in the canonical actions schema, which is part of the content-addressed
+    version, so it is left until a vendor is chosen.
 
 ## Licensing rules for this repository
 
