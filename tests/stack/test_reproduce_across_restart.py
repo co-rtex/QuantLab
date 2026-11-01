@@ -3,10 +3,14 @@
 Synthetic data only. Opt-in: it needs a running app stack and restarts its containers, so
 it runs only when ``QUANTLAB_STACK_API`` names the stack's API, under the full-stack lock::
 
-    eval "$(QUANTLAB_SLOT=31 scripts/stack-env.sh)"
-    scripts/fullstack-lock.sh run sh -c 'make app-up && \\
-        QUANTLAB_STACK_API=http://localhost:$QUANTLAB_API_PORT \\
-        uv run pytest tests/stack -q; make down'
+    scripts/fullstack-lock.sh run sh -c '
+        set -a && eval "$(QUANTLAB_SLOT=31 scripts/stack-env.sh)" && set +a &&
+        make app-up &&
+        QUANTLAB_STACK_API=http://localhost:$QUANTLAB_API_PORT uv run pytest tests/stack -q;
+        make down'
+
+The restart passes ``-p $COMPOSE_PROJECT_NAME``; without a slot's project the test fails
+rather than restart the main checkout's stack.
 
 It submits a backtest, reproduces and validates it, restarts the ``api`` and ``worker``
 services, then reproduces and validates again: every run must carry the original
@@ -42,8 +46,26 @@ def _wait(fetch, done, what: str, timeout: float = 600) -> Any:
     raise AssertionError(f"timed out waiting for {what}: {value}")
 
 
+MAIN_PROJECT = "quantlab"  # the main checkout's compose project: its stack and volumes
+
+
+def compose_project() -> str:
+    """The compose project this test may restart: a worktree slot's, set by
+    ``scripts/stack-env.sh``. Never the main checkout's, which a bare ``docker compose``
+    in a worktree targets when ``COMPOSE_PROJECT_NAME`` is not exported."""
+    name = os.environ.get("COMPOSE_PROJECT_NAME", "").strip()
+    if not name or name == MAIN_PROJECT:
+        raise RuntimeError(
+            f"COMPOSE_PROJECT_NAME is {name or 'unset'!r}: refusing to restart the main "
+            f"checkout's stack ({MAIN_PROJECT!r}). Run under "
+            '`eval "$(QUANTLAB_SLOT=<n> scripts/stack-env.sh)"` (see the docstring).'
+        )
+    return name
+
+
 def _restart() -> None:
-    subprocess.run(["docker", "compose", "restart", "api", "worker"], cwd=ROOT, check=True)
+    cmd = ["docker", "compose", "-p", compose_project(), "restart", "api", "worker"]
+    subprocess.run(cmd, cwd=ROOT, check=True)
 
 
 def _comparable(result: dict[str, Any]) -> str:
@@ -54,6 +76,8 @@ def _comparable(result: dict[str, Any]) -> str:
 
 def test_a_reproduction_after_restarting_the_api_and_worker_matches():
     import httpx
+
+    compose_project()  # fail, not skip, before touching anything, if this is not a slot
 
     with httpx.Client(base_url=str(API), timeout=60) as c:
         email = f"repro-{uuid.uuid4().hex[:10]}@example.com"
