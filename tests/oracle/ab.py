@@ -8,7 +8,7 @@ Usage::
 
 It runs the 800 differential runs (``default_runs`` over seeds 0-199) and every library
 strategy on three synthetic markets (both execution modes; whole shares, fractional shares
-with a small capital so cash runs short, and a 3e9 fractional account), 962 runs in all.
+with a small capital so cash runs short, and a 3e9 fractional account), plus 40 large fractional runs with a minimum commission (seeds 1060-1069, #215): 1002 runs in all.
 For each run it stores a hash of each
 output separately: equity, trades, positions, decisions, ledger transactions, meta
 (without ``engine_version``), the fingerprint and the rejections. ``compare`` lists the
@@ -74,6 +74,23 @@ def runs() -> dict[str, dict[str, str]]:
             engine_strategy, _ = strategies_for(name, seed)
             res = run_engine(sc, {**sc.cfg, "execution": execution}, engine_strategy, data)
             out[f"oracle/{seed}/{execution}/{name}"] = digest(res)
+    # Large fractional accounts with a minimum commission, where a target equal to a
+    # holding of about 1e7 shares up to rounding leaves a float-noise delta (#215).
+    for seed in range(1060, 1070):
+        sc = scenario(seed)
+        data = keyed(sc)
+        for execution in ("next_open", "next_close"):
+            for name in ("price_weight", "equal_weight"):
+                engine_strategy, _ = strategies_for(name, seed)
+                cfg = {
+                    **sc.cfg,
+                    "initial_capital": 3e9,
+                    "fractional_shares": True,
+                    "commission_min": 5.0,
+                    "execution": execution,
+                }
+                res = run_engine(sc, cfg, engine_strategy, data)
+                out[f"large/{seed}/{execution}/{name}"] = digest(res)
     small = {"lookback": 30, "skip": 5, "fast": 10, "slow": 40}
     for mseed in (3, 11, 29):
         market = generate_market(
