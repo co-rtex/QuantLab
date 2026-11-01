@@ -47,7 +47,13 @@ def jobs_count() -> int:
 
 
 def same(got: Any, want: Any, path: str = "") -> None:
-    """Equal, floats to 1e-9 relative: the fixture may come from another platform's BLAS."""
+    """Equal, floats within 1e-9 relative or 1e-12 absolute, and only because of the BLAS.
+
+    The fixture was captured on macOS, whose NumPy uses Accelerate; CI and the images use
+    OpenBLAS. On the same version (same hash), compute() for these bodies differed in 148
+    floats between the two: at most 2.2e-15 absolute and 9.8e-13 relative for values above
+    1e-12 (near-zero weights differ by ~1e-16). On one platform the route and the job
+    compared JSON-equal (part 1)."""
     if isinstance(want, float) and isinstance(got, float):
         assert math.isclose(got, want, rel_tol=1e-9, abs_tol=1e-12), f"{path}: {got} != {want}"
     elif isinstance(want, dict):
