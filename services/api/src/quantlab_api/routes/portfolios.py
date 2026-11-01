@@ -30,6 +30,7 @@ from quantlab.portfolio.ledger import LedgerError
 from quantlab.portfolio.valuation import Entry, summary, time_weighted_returns, value_portfolio
 from quantlab_api import provenance
 from quantlab_api.errors import ApiError
+from quantlab_api.limits import heavy
 from quantlab_api.models import Instrument, Portfolio, PortfolioTransaction, Role
 from quantlab_api.routes.datasets import load_version
 from quantlab_api.schemas import BoundedDate
@@ -133,6 +134,7 @@ def _tx_out(t: PortfolioTransaction) -> dict[str, Any]:
 
 
 @router.post("/workspaces/{workspace_id}/portfolios", status_code=201)
+@heavy("portfolio_create")
 def create_portfolio(
     workspace_id: uuid.UUID, body: PortfolioIn, user: CurrentUser, db: DB, request: Request
 ) -> dict[str, Any]:
@@ -225,6 +227,7 @@ def get_portfolio(portfolio_id: uuid.UUID, user: CurrentUser, db: DB) -> dict[st
 
 
 @router.post("/portfolios/{portfolio_id}/transactions", status_code=201)
+@heavy("portfolio_transaction")  # taken before the row lock: a refusal never holds it
 def add_transaction(
     portfolio_id: uuid.UUID, body: TransactionIn, user: CurrentUser, db: DB, request: Request
 ) -> dict[str, Any]:
@@ -277,6 +280,7 @@ def add_transaction(
 
 
 @router.get("/portfolios/{portfolio_id}/valuation")
+@heavy("portfolio_valuation")
 def valuation(portfolio_id: uuid.UUID, user: CurrentUser, db: DB) -> dict[str, Any]:
     p = _load(db, user, portfolio_id)
     entries = _entries(list(p.transactions))

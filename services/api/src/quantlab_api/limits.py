@@ -3,11 +3,14 @@ memory bound a backtest must fit at submission (#163)."""
 
 from __future__ import annotations
 
+import functools
 import math
-from collections.abc import Iterable
+import threading
+from collections.abc import Callable, Iterable, Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import date
-from typing import Any
+from typing import Any, TypeVar
 
 import pandas as pd
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
@@ -230,3 +233,70 @@ def check_backtest_memory(cost: BacktestCost, limit_mb: int) -> None:
                 "rebalances": cost.rebalances,
             },
         )
+
+
+# ------------------------------------------------------- heavy request-time work (#223)
+# Routes that compute over full price histories in the API process itself (optimize, the
+# portfolio ledger). FastAPI runs a sync route in its process's thread pool, up to 40 at
+# once, so concurrent heavy requests stacked in memory: 16 optimizations of 100 symbols
+# drove the Docker VM into a global OOM, in which the kernel killed API processes and
+# could have killed Postgres. Each process admits at most heavy_requests_per_process of
+# them at a time; more are refused at once, never queued.
+F = TypeVar("F", bound=Callable[..., Any])
+_heavy_lock = threading.Lock()
+_heavy: threading.BoundedSemaphore | None = None
+HEAVY_RETRY_AFTER_SECONDS = 2
+
+
+def _heavy_semaphore() -> threading.BoundedSemaphore:
+    global _heavy
+    with _heavy_lock:
+        if _heavy is None:
+            from quantlab_api.config import get_settings
+
+            _heavy = threading.BoundedSemaphore(get_settings().heavy_requests_per_process)
+        return _heavy
+
+
+def reset_heavy_slots() -> None:
+    """Test hook: the next heavy request reads the setting again."""
+    global _heavy
+    with _heavy_lock:
+        _heavy = None
+
+
+@contextmanager
+def heavy_slot(route: str) -> Iterator[None]:
+    """Hold one of this process's heavy-work slots for the block, or refuse with 503."""
+    from quantlab_api.observability import HEAVY_REFUSED
+
+    sem = _heavy_semaphore()
+    if not sem.acquire(blocking=False):
+        HEAVY_REFUSED.labels(route).inc()
+        raise ApiError(
+            503,
+            "server_busy",
+            "The server is busy with other analyses; try again in a few seconds.",
+            {"retry_after_seconds": HEAVY_RETRY_AFTER_SECONDS},
+            headers={"Retry-After": str(HEAVY_RETRY_AFTER_SECONDS)},
+        )
+    try:
+        yield
+    finally:
+        sem.release()
+
+
+def heavy(route: str) -> Callable[[F], F]:
+    """``heavy_slot`` around a whole sync route. FastAPI resolves its dependencies (the
+    signed-in user among them) before calling it, so only authorized requests take a slot.
+    """
+
+    def deco(fn: F) -> F:
+        @functools.wraps(fn)
+        def wrapper(*args: Any, **kwargs: Any) -> Any:
+            with heavy_slot(route):
+                return fn(*args, **kwargs)
+
+        return wrapper  # type: ignore[return-value]
+
+    return deco

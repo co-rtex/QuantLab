@@ -58,6 +58,13 @@ JOBS_RUNNING = Gauge(
     "quantlab_jobs_running", "Jobs currently executing", multiprocess_mode="livesum"
 )
 CACHE_EVENTS = Counter("quantlab_cache_events_total", "Cache lookups", ["cache", "result"])
+# Heavy request-time work refused because its process had no free slot (#223). Labelled,
+# so no process writes a sample (in multiprocess mode, a file) until one is refused.
+HEAVY_REFUSED = Counter(
+    "quantlab_heavy_requests_refused_total",
+    "Heavy requests refused with 503 server_busy: their API process had no free slot",
+    ["route"],
+)
 # 1 while any live API process's rate limiter counts locally after a Redis error (#207).
 # Labelled, so no process writes a sample (in multiprocess mode, a file) until a breaker
 # opens: an unlabelled gauge would add one to every work horse's directory.

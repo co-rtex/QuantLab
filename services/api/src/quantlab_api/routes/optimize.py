@@ -23,10 +23,12 @@ from quantlab.optimize.allocators import (
     risk_contributions,
     risk_parity,
 )
+from quantlab_api.config import get_settings
 from quantlab_api.errors import ApiError
+from quantlab_api.limits import heavy_slot
 from quantlab_api.routes.datasets import load_version
 from quantlab_api.schemas import BoundedDate
-from quantlab_api.security import DB, CurrentUser
+from quantlab_api.security import DB, CurrentUser, login_limiter
 from quantlab_api.tasks import dataset_store
 
 router = APIRouter(tags=["optimization"])
@@ -51,8 +53,18 @@ class OptimizeIn(BaseModel):
 
 @router.post("/dataset-versions/{version_id}/optimize")
 def optimize(version_id: uuid.UUID, body: OptimizeIn, user: CurrentUser, db: DB) -> dict[str, Any]:
-    """Allocations from returns dated on or before ``as_of`` only (no look-ahead)."""
+    """Allocations from returns dated on or before ``as_of`` only (no look-ahead).
+
+    Computed in this process over each symbol's full history, so bounded (#223): per user
+    and minute (429, the login limiter's fail-safe breaker included), and per process at
+    once (503 server_busy with Retry-After, never queued)."""
     dv, ds = load_version(db, user, version_id)
+    login_limiter.check(f"optimize:user:{user.id}", get_settings().rate_limit_optimize_per_minute)
+    with heavy_slot("optimize"):
+        return _optimize(dv, ds, body)
+
+
+def _optimize(dv: Any, ds: Any, body: OptimizeIn) -> dict[str, Any]:
     store = dataset_store()
     v = store.open(ds.slug, dv.version_hash)
     syms = sorted({s.upper() for s in body.symbols})
