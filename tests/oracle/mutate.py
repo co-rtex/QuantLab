@@ -19,6 +19,7 @@ M1-M8 are the mutations of the release-candidate assessment (2026-10-31), matche
 from __future__ import annotations
 
 import os
+import signal
 import subprocess
 import sys
 import time
@@ -232,7 +233,13 @@ def _verdict(code: int) -> str:
     return {0: "missed", 1: "caught"}.get(code, f"error (exit {code})")
 
 
+def _stop(signum: int, frame: object) -> None:
+    raise SystemExit(f"stopped by signal {signum}")  # runs the finally that restores a file
+
+
 def run(keys: list[str], seeds: int, others: bool = True) -> int:
+    signal.signal(signal.SIGTERM, _stop)
+    sys.stdout.reconfigure(line_buffering=True)  # type: ignore[attr-defined]  # rows as they finish
     env = {**os.environ, "QUANTLAB_ORACLE_SEEDS": str(seeds), "PYTHONPATH": str(ROOT)}
     chosen = [m for m in MUTATIONS if not keys or m.key in keys]
     paths = sorted({m.path for m in chosen})
