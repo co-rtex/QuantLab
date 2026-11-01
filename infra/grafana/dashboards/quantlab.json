@@ -237,6 +237,7 @@
       "id": 9,
       "type": "timeseries",
       "title": "Dataset freshness (days)",
+      "description": "Each worker replica reports the freshness of the latest dataset version it ingested (#165); the panel shows the largest of them, so one series however many replicas run.",
       "datasource": {
         "type": "prometheus",
         "uid": "prometheus"
@@ -256,8 +257,8 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "quantlab_dataset_freshness_days",
-          "legendFormat": "latest version"
+          "expr": "max(quantlab_dataset_freshness_days)",
+          "legendFormat": "latest version (stalest replica)"
         }
       ]
     },

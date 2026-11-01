@@ -76,7 +76,15 @@ services:
   worker:
     build: { context: ., dockerfile: services/api/Dockerfile }
     restart: ${QUANTLAB_RESTART_POLICY:-unless-stopped}
-    environment: *app-env
+    environment:
+      <<: *app-env
+      # Job metrics are recorded in forked work horses; each container serves its own
+      # directory at :9101/metrics (#165). A tmpfs, so every start, a restart included,
+      # begins empty: a reused gauge file from a horse killed mid-job would read 1.
+      PROMETHEUS_MULTIPROC_DIR: /tmp/prometheus
+    # Owned by the image's user (uid 10001, services/api/Dockerfile): a default tmpfs is
+    # root's, and the worker could not create its metric files there.
+    tmpfs: ["/tmp/prometheus:uid=10001,gid=10001,mode=0700"]
     command: ["quantlab-worker"]
     volumes: [appdata:/data]
     depends_on:

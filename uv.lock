@@ -1543,7 +1543,7 @@ requires-dist = [
     { name = "opentelemetry-exporter-otlp-proto-http", specifier = ">=1.30" },
     { name = "opentelemetry-instrumentation-fastapi", specifier = ">=0.51b0" },
     { name = "opentelemetry-sdk", specifier = ">=1.30" },
-    { name = "prometheus-client", specifier = ">=0.21" },
+    { name = "prometheus-client", specifier = ">=0.21,<0.27" },
     { name = "psycopg", extras = ["binary"], specifier = ">=3.2" },
     { name = "pwdlib", extras = ["argon2"], specifier = ">=0.2" },
     { name = "pydantic-settings", specifier = ">=2.6" },

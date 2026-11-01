@@ -22,6 +22,7 @@ from rq.job import Job, JobStatus
 from rq.serializers import JSONSerializer
 from rq.webhook import Webhook
 
+from quantlab_api.config import Settings
 from quantlab_api.jobs import RQ_OPTIONS, TRUSTED_FUNC, TrustedJob, UntrustedJobError
 
 
@@ -178,7 +179,10 @@ def test_the_worker_uses_the_trusted_options(monkeypatch: pytest.MonkeyPatch) ->
         def work(self, **_: object) -> None:
             return None
 
-    monkeypatch.setattr(worker, "Worker", Recorder)
+    monkeypatch.setattr(worker, "QuantlabWorker", Recorder)
+    # Its own settings: worker.get_settings may still be bound to another test's
+    # production settings (test_api_secrets imports the module under a patch).
+    monkeypatch.setattr(worker, "get_settings", lambda: Settings(environment="development"))
     monkeypatch.setattr(worker, "redis_conn", fakeredis.FakeRedis)
     monkeypatch.setattr(
         worker, "get_queue", lambda: Queue("q", connection=fakeredis.FakeRedis(), **RQ_OPTIONS)

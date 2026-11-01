@@ -7,3 +7,15 @@ scrape_configs:
       credentials_file: /etc/prometheus/metrics_token
     static_configs:
       - targets: ["api:8000"]
+  # Job, dataset, cache and ingest metrics are recorded in the workers (#165). Each replica
+  # serves its own at :9101 (never published); the compose name `worker` resolves to every
+  # replica, so one target per worker follows the replica count.
+  - job_name: quantlab-worker
+    metrics_path: /metrics
+    authorization:
+      credentials_file: /etc/prometheus/metrics_token
+    dns_sd_configs:
+      - names: ["worker"]
+        type: A
+        port: 9101
+        refresh_interval: 30s

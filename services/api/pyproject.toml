@@ -16,7 +16,11 @@ dependencies = [
   "duckdb>=1.1",
   "pyjwt>=2.10",
   "pwdlib[argon2]>=0.2",
-  "prometheus-client>=0.21",
+  # Below 0.27: the worker's metrics (observability.py, #165) rely on internals,
+  # prometheus_client.mmap_dict.MmapedDict (its file format and read_all_values_from_file)
+  # and MultiProcessCollector._path, merge() and the *.db file naming. Re-check before
+  # raising the bound (tests/unit/test_worker_metrics.py).
+  "prometheus-client>=0.21,<0.27",
   "structlog>=24.4",
   "httpx>=0.28",
   "email-validator>=2.2",

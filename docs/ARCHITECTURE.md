@@ -67,7 +67,36 @@ $QUANTLAB_DATA_DIR/
 
 ## Observability
 
-Prometheus metrics at `/metrics`: HTTP latency by route template, DB statement latency,
-queue wait, job run time and outcomes, retries, running jobs, cache hit/miss, latest
-dataset rows and freshness, ingestion quality. Structured JSON logs (structlog) carry
-`request_id`, and job logs carry the originating request id.
+Prometheus scrapes two kinds of process, both behind the same bearer token
+(`QUANTLAB_METRICS_TOKEN`, required in production by each process that serves metrics):
+* **The API**, at `api:8000/metrics`: HTTP latency by route template and DB statement
+  latency, aggregated over its uvicorn processes.
+* **Each worker replica**, at `<replica>:9101/metrics` (#165): queue wait, job run time and
+  outcomes, retries, running jobs, DB statement latency, cache hit/miss, latest dataset rows
+  and freshness, ingestion quality.
+  * A worker serves only when `PROMETHEUS_MULTIPROC_DIR` is set (compose sets it); without
+    it the job metrics are lost with each horse, and the worker needs no token.
+  * Prometheus finds the replicas through DNS on the `worker` service name. The port is
+    never published.
+  * Jobs run in RQ's forked work horses, so each worker container keeps its own Prometheus
+    multiprocess directory, on a tmpfs, and its worker process serves that directory.
+  * The directory is never shared with another container, where every worker is pid 1 and
+    the per-pid files would collide, or with the API.
+  * After each horse exits, its live gauges are removed (`mark_process_dead`), so a horse
+    killed mid-job doesn't leave `quantlab_jobs_running` raised.
+  * Its other files are folded into one archive file per kind
+    (`observability.compact_dead_process`), all or nothing. Counters and histograms are
+    added, so they never go down, and scrapes wait while a fold runs. The collector adds
+    files in a fixed order (archives, then by pid), so a fold changes no scraped value,
+    not even the last bit of a float sum.
+  * The directory holds the worker process's own two files and three archives, plus the
+    running job's files while one runs, however many jobs have run.
+  * Measured on 2026-11-01 in the worker image on a real tmpfs, on an 8-CPU machine with a
+    3.83 GiB Docker VM, at load average about 2.5 (`benchmarks/worker_metric_files.py`;
+    `benchmarks/results/20261101T043624Z-worker-metric-files.log`). Without the fold,
+    every job left three files and about 20 KiB of tmpfs, which counts against the
+    worker's memory limit. Every scrape read them all: 483 ms at 5,000 jobs. With it, a
+    scrape takes about 0.4 ms at any count, and a fold about 0.23 ms.
+
+Structured JSON logs (structlog) carry `request_id`, and job logs carry the originating
+request id.
