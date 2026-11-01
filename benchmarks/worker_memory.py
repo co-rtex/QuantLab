@@ -88,19 +88,19 @@ class _AnonSampler(threading.Thread):
     def __init__(self, cid: str) -> None:
         super().__init__(daemon=True)
         self.cid, self.peak, self.samples = cid, 0, 0
-        self._stop = threading.Event()
+        self._halt = threading.Event()
 
     def run(self) -> None:
-        while not self._stop.is_set():
+        while not self._halt.is_set():
             try:
                 self.peak = max(self.peak, _stat(self.cid, "anon"))
                 self.samples += 1
             except (subprocess.CalledProcessError, ValueError):
                 pass  # the container restarting or gone: nothing to sample
-            self._stop.wait(1.0)
+            self._halt.wait(1.0)
 
     def stop(self) -> int:
-        self._stop.set()
+        self._halt.set()
         self.join()
         return self.peak
 
