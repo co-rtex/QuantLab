@@ -10,6 +10,7 @@ from __future__ import annotations
 import os
 from typing import Any
 
+import redis
 from rq import Worker
 from rq.exceptions import StopRequested
 
@@ -24,6 +25,10 @@ from quantlab_api.observability import (
 )
 from quantlab_api.tracing import setup_tracing
 
+# Redis unreachable or not answering. A job's state is in PostgreSQL, whose lease and
+# keepalive run without Redis (jobs.py), so these are not a reason to stop a worker.
+REDIS_DOWN = (redis.exceptions.ConnectionError, redis.exceptions.TimeoutError)
+
 
 class QuantlabWorker(Worker):
     """RQ's forking worker. Once a work horse has exited, however it ended (#165):
@@ -32,9 +37,39 @@ class QuantlabWorker(Worker):
       decrements them, and they would read 1 until the container restarts;
     * its other metric files are folded into the archive (``compact_dead_process``), so the
       directory and each scrape stay the same size however many jobs have run.
+
+    It also outlasts a Redis outage (#185). RQ's horse monitor heartbeats through Redis,
+    and an error there quit the worker: in a container, pid 1 exited, the running horse died
+    with it, the job lost an attempt and waited out its lease, and the container restarted
+    in a loop until Redis came back. Here a heartbeat or maintenance task that cannot reach
+    Redis is logged and skipped, so the monitor keeps waiting on the horse. RQ's own
+    bookkeeping after the horse exits is skipped the same way: the job's outcome is already
+    in PostgreSQL. The next dequeue then waits for Redis, as an idle worker's always did.
     """
 
     _last_horse: int = 0
+
+    def _redis_down(self, during: str, exc: Exception) -> None:
+        log.warning("worker_redis_unavailable", during=during, error=str(exc))
+
+    def heartbeat(self, timeout: int | None = None, pipeline: Any = None) -> None:
+        try:
+            super().heartbeat(timeout, pipeline=pipeline)
+        except REDIS_DOWN as exc:
+            self._redis_down("heartbeat", exc)
+
+    def maintain_heartbeats(self, job: Any, execution: Any) -> None:
+        # Called by the horse monitor while a job runs: an error here quit the worker.
+        try:
+            super().maintain_heartbeats(job, execution)
+        except REDIS_DOWN as exc:
+            self._redis_down("job_heartbeat", exc)
+
+    def run_maintenance_tasks(self) -> None:
+        try:
+            super().run_maintenance_tasks()  # type: ignore[no-untyped-call]
+        except REDIS_DOWN as exc:
+            self._redis_down("maintenance", exc)
 
     def fork_work_horse(self, job: Any, queue: Any) -> None:
         super().fork_work_horse(job, queue)  # the horse itself never returns (os._exit)
@@ -43,7 +78,14 @@ class QuantlabWorker(Worker):
 
     def execute_job(self, job: Any, queue: Any) -> None:
         try:
-            super().execute_job(job, queue)
+            try:
+                super().execute_job(job, queue)
+            except REDIS_DOWN as exc:
+                # Before the fork, or after the horse exited: the monitor waits on the horse
+                # through an outage (above). RQ's record of the job is incomplete then; its
+                # outcome is in PostgreSQL, and a job never started is redelivered by the
+                # reaper.
+                self._redis_down("job_bookkeeping", exc)
         finally:
             horse, self._last_horse = self._last_horse, 0
             if horse and os.environ.get("PROMETHEUS_MULTIPROC_DIR"):
