@@ -135,15 +135,24 @@ A worker, reaper or API host with a skewed clock no longer moves any job deadlin
   Redis error, and the worker restarts it only in maintenance, up to 600 s later. Until
   then such a retry is delivered by the reaper instead, about 2 minutes after its backoff
   ends (see "Jobs stuck in `queued`").
-* **A refused password is not an outage.** An authentication or authorization error
-  stops the worker, so a rotated `QUANTLAB_REDIS_PASSWORD` shows up at once, not as an
-  outage logged forever.
+* **A refused password** (a rotated `QUANTLAB_REDIS_PASSWORD`) is not treated as an
+  outage, but only a busy worker stops on it.
+  * **A busy worker** stops at the first authentication or authorization error during a
+    job, after waiting for the running job to finish.
+  * **An idle worker** doesn't stop. RQ's own dequeue retries every connection error,
+    these included, so it logs `invalid username-password pair` (or `NOPERM`) in a loop
+    and takes nothing.
+  * **To tell it from an outage:** `/api/v1/ready` reports 503 with `redis: error`, and
+    the API logs `ready_check_failed component=redis` with `AuthenticationError` in
+    `error`, where an outage logs `ConnectionError` or `TimeoutError`.
 * **A Redis that accepts connections but doesn't answer** (a hung server, a network that
   drops packets) is different from one that is down.
-  * The worker's connection (`jobs.redis_conn`, redis-py's default) has no socket timeout.
-  * So each call blocks until the operating system's TCP timeout gives up, which on Linux
-    defaults is minutes.
-  * Meanwhile the horse monitor is blocked too, and can't stop an overrunning job.
+  * A connection attempt gives up after 5 s (redis-py's default connect timeout).
+  * Once connected, a worker's call blocks for up to 415 s: RQ raises the connection's
+    socket timeout to its dequeue timeout plus 10 s (`worker_ttl` 420 − 15 + 10), so a
+    blocking dequeue isn't cut short. That is about 7 minutes per attempt.
+  * Meanwhile the horse monitor is blocked, and with it its backstop kill of a horse
+    that outlives its job timeout by 60 s. The horse's own job timeout still fires.
   * The job's lease and keepalive, in PostgreSQL, still run.
 
 ### Jobs stuck in `running`
