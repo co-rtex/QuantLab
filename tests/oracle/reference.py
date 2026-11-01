@@ -239,6 +239,11 @@ def run_reference(
 
     slip, comm = cfg["slippage_bps"] / 1e4, cfg["commission_bps"] / 1e4
     cmin, whole = cfg["commission_min"], not cfg["fractional_shares"]
+
+    def fee(value: float) -> float:
+        """A trade's commission: the larger of the minimum and the rate on its value."""
+        return max(cmin, value * comm) if value else 0.0
+
     res = Result()
     cash = float(cfg["initial_capital"])
     qty: dict[str, float] = {}
@@ -356,27 +361,46 @@ def run_reference(
                     why[o.iid] = "no_volume"
                 else:
                     ref[o.iid] = b.open if cfg["execution"] == "next_open" else b.close
+
+            # From METHODOLOGY step 4 (#195): a sell's proceeds are its value at the fill
+            # price with slippage, less its commission.
             after_sells = cash
             for o in pending:
                 if o.qty < 0 and o.iid in ref:
-                    sold = min(-o.qty, qty.get(o.iid, 0.0))
-                    after_sells += sold * ref[o.iid] * (1 - slip) * (1 - comm)
+                    value = min(-o.qty, qty.get(o.iid, 0.0)) * ref[o.iid] * (1 - slip)
+                    after_sells += value - fee(value)
             # With whole shares, a buy that reaches the fill (after any split restatement)
             # under one share has no lot to buy: it is rejected, and it neither counts toward
             # the need nor is scaled (#187).
             no_lot = {o.iid for o in pending if whole and 0 < o.qty < 1 - 1e-9}
             real = [o for o in pending if o.qty > 0 and o.iid not in no_lot]
-            need = sum(
-                o.qty * ref[o.iid] * (1 + slip) * (1 + comm) + cmin
+            worth = [
+                o.qty * ref[o.iid] * (1 + slip)
                 for o in real
                 if o.iid in ref and o.iid not in delisted
-            )
+            ]
+
+            def cost(factor: float, worth: list[float] = worth) -> float:
+                return sum(factor * v + fee(factor * v) for v in worth)
+
             # Cash of at most a billionth of the need is rounding dust: there is no cash for
-            # any buy, so none is scaled and none is bought (#184).
-            broke = need > 0 and after_sells <= need * 1e-9
-            if not broke and need > 0 and after_sells < need:
+            # any buy, so none is scaled and none is bought (#184). Nor is there when the
+            # minimum commissions alone take it all: every buy is then rejected.
+            broke = bool(worth) and (
+                after_sells <= cost(1.0) * 1e-9
+                or (cost(1.0) > after_sells and cmin > 0 and len(worth) * cmin >= after_sells)
+            )
+            if worth and not broke and cost(1.0) > after_sells:
+                # The largest common factor whose scaled buys fit the cash, by bisection
+                # (the engine solves it in closed form).
+                lo, hi = 0.0, 1.0
+                for _ in range(200):
+                    mid = (lo + hi) / 2
+                    if mid in (lo, hi):
+                        break
+                    lo, hi = (mid, hi) if cost(mid) <= after_sells else (lo, mid)
                 for o in real:
-                    o.qty *= after_sells / need
+                    o.qty *= lo
                     o.scaled = True
             for o in sorted(pending, key=lambda o: (o.qty > 0, o.iid)):
                 if o.qty > 0 and o.iid in delisted:
@@ -402,9 +426,8 @@ def run_reference(
                         reject(day, o, "insufficient_cash")
                         continue
                     px = r * (1 + slip)
-                    can = cash / (px * (1 + comm)) if px > 0 else 0.0
-                    if cmin:
-                        can = min(can, (cash - cmin) / px)
+                    # The most the cash can buy: q px (1 + bps) <= cash and q px + cmin <= cash.
+                    can = min(cash / (px * (1 + comm)), (cash - cmin) / px) if px > 0 else 0.0
                     if whole:
                         can = math.floor(can + 1e-9)
                     if can < q - 1e-9:

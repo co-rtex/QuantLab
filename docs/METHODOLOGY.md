@@ -298,6 +298,33 @@ Per session `k`:
    fill prices, every buy is scaled by the same factor (then rounded to whole shares
    unless fractional shares are enabled) and flagged `partial`, so no symbol is favoured
    by sort order. Orders without a price on the fill date are rejected (`no_price`).
+   **The factor** (#195, engine 1.5.0) is exact:
+   * **Cash after sells** is the cash plus each sell's proceeds at the fill price with
+     slippage, `v - max(commission_min, v x bps)`, where `v` is the sell's value.
+   * **The buys** are those with a fill price that can fill: not delisted, and at least
+     one share with whole shares. Each has a value `v_i = q_i x p_i x (1 + slippage)` at
+     its fill price, and costs `v_i + max(commission_min, v_i x bps)`.
+   * **When they cost more than the cash after sells,** the factor `s` is the largest
+     `s <= 1` with `sum_i [s v_i + max(commission_min, s v_i bps)] <= cash`. The total is
+     increasing and piecewise linear in `s` (buy `i` pays the minimum until
+     `s = commission_min / (v_i bps)`), so `s` is solved exactly on its segment.
+   * **Rounding is safe.** Rounding a scaled quantity down to whole shares stays within
+     the cash, because a smaller quantity never raises `max(commission_min, ...)`.
+   * **When even the minimum commissions exceed the cash** (`n x commission_min >=
+     cash`), no `s > 0` is feasible, and every buy is rejected `insufficient_cash`.
+     Dropping some buys instead would have to choose which, by an order this rule
+     avoids.
+
+   **Example.** Cash after sells 1,000; buys worth 900 and 300 at the fill price;
+   commission 10 bps with a minimum of 5.
+   * At full size they cost 905 + 305 = 1,210.
+   * Both buys pay the minimum for every `s <= 1`: their breakpoints are 5/0.9 and
+     5/0.3. So `1,200 s + 10 = 1,000`, `s = 0.825`. The buys become 742.5 and 247.5,
+     costing 747.5 + 252.5 = 1,000.
+   * Before 1.5.0 the factor was `cash / sum(v_i x (1 + bps) + commission_min)` =
+     1,000 / 1,211.2 = 0.82563. That needed 1,000.75, so the last buy by symbol was cut
+     to fit. The sells' proceeds also ignored the minimum.
+   * With no minimum commission, both factors and the proceeds are the same as before.
    **A buy the cash cuts to nothing is rejected `insufficient_cash`** (#184, engine
    1.4.1). The quantity recorded depends on the case:
    * **No cash.** Cash left after the sells of at most a billionth of the buys' need is

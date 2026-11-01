@@ -242,6 +242,20 @@ MUTATIONS = [
         '"reason": "insufficient_cash",',
         "a buy under one share logged as a shortfall of cash (#187)",
     ),
+    Mutation(
+        "M28",
+        ENG,
+        "cash += notional - max(cmin, notional * comm)",
+        "cash += notional * (1 - comm)",
+        "sell proceeds ignore the minimum commission (#195)",
+    ),
+    Mutation(
+        "M29",
+        ENG,
+        "        scale = buy_scale(values, comm, cmin, cash)",
+        "        scale = cash / sum(v * (1 + comm) + cmin for v in values)",
+        "the old pro-rata factor, which double-counts the minimum commission (#195)",
+    ),
 ]
 
 

@@ -332,6 +332,37 @@ def test_the_lot_check_uses_the_quantity_restated_across_a_split():
     assert diff(eng, ref, 1000.0) == []
 
 
+def test_the_pro_rata_factor_is_exact_with_a_minimum_commission():
+    # #195, METHODOLOGY's example. Fractional shares, capital 1000, 10 bps with a minimum
+    # of 5. The targets (0.6 and 0.2 at the close of 10) are 60 A and 20 B, filled at an
+    # open of 15: worth 900 and 300, costing 905 + 305 = 1210. Both pay the minimum for
+    # every s <= 1, so 1200 s + 10 = 1000 and s = 0.825: 49.5 A and 16.5 B, costing
+    # 747.5 + 252.5 = 1000. The old factor 1000 / 1211.2 needed 1000.75 and cut B.
+    bars = [
+        (s, d, o, c, 1e4)
+        for s in ("AAA", "BBB")
+        for d, o, c in ((DAYS[0], 10.0, 10.0), (DAYS[1], 15.0, 15.0), (DAYS[2], 15.0, 15.0))
+    ]
+    weights = _Fixed({DAYS[0]: {"AAA": 0.6, "BBB": 0.2}, DAYS[1]: {"AAA": 0.6, "BBB": 0.2}})
+    sc = _scenario(
+        bars,
+        [],
+        {
+            "fractional_shares": True,
+            "commission_bps": 10.0,
+            "commission_min": 5.0,
+            "rebalance": "monthly",
+        },
+    )
+    eng, ref = _both(sc, weights.engine(), weights)
+    fills = eng.trades[eng.trades["date"] == DAYS[1]]
+    assert fills["quantity"].tolist() == pytest.approx([49.5, 16.5], rel=1e-12)
+    assert fills["commission"].tolist() == [5.0, 5.0]
+    assert fills["partial"].all()
+    assert abs(eng.equity["cash"].iloc[1]) < 1e-9
+    assert diff(eng, ref, 1000.0) == []
+
+
 @pytest.mark.parametrize("seed", SEEDS)
 def test_engine_matches_reference(seed):
     assert compare(seed) == []

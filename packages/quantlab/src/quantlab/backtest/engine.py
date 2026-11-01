@@ -357,33 +357,47 @@ def run_backtest(
         )
 
     def prorate_buys(k: int, px_row: np.ndarray, orders: list[Order]) -> bool:
-        """Scale all buys by the same factor when the cash left after sells cannot fund
-        them, instead of filling whichever symbols sort first. A buy below one share takes
-        no part: it can never fill, so it must not scale the others down (#187). True when
-        there is no cash for any buy."""
+        """Scale all buys by one factor when the cash left after sells cannot fund them,
+        instead of filling whichever symbols sort first (see :func:`buy_scale`). A buy below
+        one share takes no part: it can never fill, so it must not scale the others down
+        (#187). True when there is no cash for any buy."""
+        cmin = config.commission_min
         cash = ledger.cash
-        for o in orders:
+        # Without a minimum commission the exact rule is the earlier formula, and it is
+        # computed exactly as before, so such runs stay bit-for-bit unchanged (#195).
+        for o in orders:  # each sell's proceeds net of its own commission (#195)
             if o.quantity < 0 and math.isfinite(px_row[col[o.symbol]]):
-                q = min(-o.quantity, ledger.quantity(o.symbol))
-                cash += q * px_row[col[o.symbol]] * (1 - slip) * (1 - comm)
+                notional = min(-o.quantity, ledger.quantity(o.symbol)) * px_row[col[o.symbol]]
+                notional *= 1 - slip
+                if not cmin:
+                    cash += notional * (1 - comm)
+                elif notional:
+                    cash += notional - max(cmin, notional * comm)
         buys = [o for o in orders if o.quantity > 0 and not below_one_share(o)]
-        need = sum(
-            o.quantity * px_row[col[o.symbol]] * (1 + slip) * (1 + comm) + config.commission_min
+        values = [
+            o.quantity * px_row[col[o.symbol]] * (1 + slip)
             for o in buys
             if math.isfinite(px_row[col[o.symbol]]) and o.symbol not in delisted
-        )
+        ]
+        if not values:  # no buy can fill here (no price, or delisted)
+            return False
+        if cmin:
+            need = sum(v + max(cmin, v * comm) for v in values)
+        else:
+            need = sum(v * (1 + comm) for v in values)
         # Cash up to a billionth of the need is rounding dust left by an earlier fill (#184):
         # no cash. The buys are neither scaled to dust quantities (whose record depended on
         # the dust's sign) nor filled with it: every one meets the shortfall as with zero.
-        if need <= 0:  # no buy can fill here (no price, or delisted)
-            return False
         if cash <= need * 1e-9:
             return True
-        if cash < need:
-            scale = cash / need
-            for o in buys:
-                o.quantity *= scale
-                o.scaled = True
+        if cash >= need:
+            return False
+        scale = buy_scale(values, comm, cmin, cash) if cmin else cash / need
+        if scale is None:  # the minimum commissions alone exceed the cash
+            return True
+        for o in buys:
+            o.quantity *= scale
+            o.scaled = True
         return False
 
     def fill(k: int, px_row: np.ndarray, orders: list[Order]) -> float:
@@ -731,6 +745,48 @@ def run_backtest(
         },
     )
     return result
+
+
+def buy_scale(values: list[float], bps: float, cmin: float, cash: float) -> float | None:
+    """The pro-rata factor (#195): the largest ``s`` <= 1 with
+
+        sum_i ( s * v_i + max(cmin, s * v_i * bps) ) <= cash,
+
+    where ``v_i`` is buy ``i``'s value at the fill price with slippage, ``bps`` the
+    commission rate and ``cmin`` the minimum commission. None when no ``s`` > 0 is
+    feasible, because the minimum commissions alone (``n * cmin``) take all the cash: the
+    buys are then all rejected, which favours none of them.
+
+    The left side is increasing and piecewise linear in ``s``. Buy ``i`` pays the minimum
+    up to ``s = cmin / (v_i * bps)`` and the rate above it, so between consecutive
+    breakpoints the total is ``s * (sum v + bps * sum_{rate} v) + cmin * n_{min}``, solved
+    exactly. Rounding a scaled quantity down (whole shares) stays within the cash: a
+    smaller quantity never raises ``max(cmin, .)``.
+    """
+    n = len(values)
+    if cmin > 0 and n * cmin >= cash:
+        return None
+    if cmin <= 0 or bps <= 0:  # one segment: the rate everywhere, or the minimum everywhere
+        return min(1.0, (cash - n * cmin) / (sum(values) * (1 + bps if cmin <= 0 else 1)))
+    # The largest buy leaves the minimum first: its breakpoint cmin / (v * bps) is lowest.
+    ordered = sorted(values, reverse=True)
+    breaks = [cmin / (v * bps) for v in ordered]
+    total = sum(values)
+    at_rate = 0.0  # sum of v over the buys paying the rate in the current segment
+    # Segments in increasing order: an earlier segment's formula undercounts the total past
+    # its own end (some buys there pay more than the minimum), so its solution overshoots
+    # that end. The first segment whose solution is within its end holds the answer.
+    for i, hi in enumerate([*breaks, math.inf]):
+        s = (cash - cmin * (n - i)) / (total + bps * at_rate)
+        if s <= hi:
+            s = min(s, 1.0)
+            # Float rounding must not leave the total a hair over the cash.
+            while s > 0 and sum(s * v + max(cmin, s * v * bps) for v in values) > cash:
+                s = math.nextafter(s, 0.0)
+            return s
+        if i < n:
+            at_rate += ordered[i]
+    raise AssertionError("the total is continuous and increasing: some segment holds s")
 
 
 def _sanitize(target: pd.Series, view: MarketView, config: BacktestConfig) -> pd.Series:
