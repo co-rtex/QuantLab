@@ -371,17 +371,22 @@ class RateLimiter:
     degraded mode because a shard may be shared by several principals. See DECISIONS.md
     (ADR-0007).
 
-    Breaker (#207): after a Redis error, degraded mode is used for ``BREAKER_SECONDS``
-    without asking Redis. A hung Redis cost every call a full reply timeout before the
-    fallback, serially: three per login, 15 s. Then one call tries Redis again while the
-    others still count locally, and a success closes the breaker. It only chooses when
-    degraded mode applies, so it never limits less than degraded mode does.
+    Breaker (#207): after Redis fails to answer (a connection error or a timeout), degraded
+    mode is used for ``BREAKER_SECONDS`` without asking Redis. A hung Redis cost every
+    call a full reply timeout before the fallback, serially: three per login, 15.21 s
+    live. Then one call tries Redis again while the others still count locally, and a
+    success closes the breaker. Any other error falls back for that call only, as before.
+
+    Degraded mode never starts below what Redis counted: each count Redis returns is kept
+    as a floor for the key's shard in this window, so falling back (by the breaker or an
+    outage) does not give a principal its attempts back in this process.
     """
 
     SHARDS = 4096
     BREAKER_SECONDS = 10.0
 
-    def __init__(self) -> None:
+    def __init__(self, name: str = "login") -> None:
+        self._name = name  # the breaker metric's label
         # window length -> (count per shard, window index each count belongs to)
         self._tables: dict[int, tuple[list[int], list[int]]] = {}
         # Keyed hash with a per-process secret: shard collisions cannot be precomputed.
@@ -405,16 +410,22 @@ class RateLimiter:
         return redis_conn()
 
     def _redis_failed(self, exc: Exception) -> None:
+        import redis
+
         from quantlab_api.observability import RATE_LIMITER_BREAKER_OPEN, log
 
+        # Unreachable or not answering: OSError covers the socket-level ones redis-py
+        # does not wrap. Anything else (a bad reply, say) is not an outage.
+        if not isinstance(
+            exc, (redis.exceptions.ConnectionError, redis.exceptions.TimeoutError, OSError)
+        ):
+            return
         with self._breaker:
             opening = not self._open_until
             self._open_until = time.monotonic() + self.BREAKER_SECONDS
         if opening:
-            RATE_LIMITER_BREAKER_OPEN.set(1)
-            log.warning(
-                "rate_limiter_breaker_open", seconds=self.BREAKER_SECONDS, error=str(exc)
-            )
+            RATE_LIMITER_BREAKER_OPEN.labels(self._name).set(1)
+            log.warning("rate_limiter_breaker_open", seconds=self.BREAKER_SECONDS, error=str(exc))
 
     def _redis_answered(self) -> None:
         if not self._open_until:  # closed already: the usual case, without the lock
@@ -424,7 +435,7 @@ class RateLimiter:
         with self._breaker:
             closing, self._open_until = bool(self._open_until), 0.0
         if closing:
-            RATE_LIMITER_BREAKER_OPEN.set(0)
+            RATE_LIMITER_BREAKER_OPEN.labels(self._name).set(0)
             log.info("rate_limiter_breaker_closed")
 
     def _table(self, window: int) -> tuple[list[int], list[int]]:
@@ -441,13 +452,23 @@ class RateLimiter:
         digest = hashlib.blake2b(key.encode(), key=self._salt, digest_size=8).digest()
         return int.from_bytes(digest) % self.SHARDS
 
-    def _local_reserve(self, key: str, limit: int, window: int) -> bool:
+    def _local_slot(self, key: str, window: int) -> tuple[list[int], int]:
+        """The key's shard counts and index, reset if they belong to an earlier window."""
         counts, windows = self._table(window)
         i, w = self._shard(key), int(time.time() // window)
         if windows[i] != w:
             windows[i], counts[i] = w, 0
+        return counts, i
+
+    def _local_reserve(self, key: str, limit: int, window: int) -> bool:
+        counts, i = self._local_slot(key, window)
         counts[i] += 1
         return counts[i] <= limit
+
+    def _local_floor(self, key: str, window: int, count: int) -> None:
+        # The larger of the two: a shared shard only ever counts more (stricter).
+        counts, i = self._local_slot(key, window)
+        counts[i] = max(counts[i], count)
 
     def reserve(self, key: str, limit: int, window: int = 60) -> bool:
         """Atomically count one attempt; False if it exceeds ``limit`` in this window."""
@@ -463,6 +484,7 @@ class RateLimiter:
             self._redis_failed(exc)
             return self._local_reserve(key, limit, window)
         self._redis_answered()
+        self._local_floor(key, window, count)
         return count <= limit
 
     def refund(self, key: str, window: int = 60) -> None:
