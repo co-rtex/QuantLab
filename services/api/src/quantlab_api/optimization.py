@@ -1,7 +1,7 @@
 """Portfolio construction research: compare allocators on point-in-time history.
 
-The computation is shared by the synchronous route and the ``optimize`` job (#224), so
-both give the same result for the same request.
+Computed by the ``optimize`` worker job (#224). The code is the API route's until then,
+moved unchanged, so a run's result is what that route answered for the same request.
 """
 
 from __future__ import annotations
@@ -50,8 +50,9 @@ class OptimizeIn(BaseModel):
 
 
 class OptimizeInputError(PermanentJobError):
-    """The request can't be computed on this version's data: the route's 422, the job's
-    permanent failure. ``str()`` is the message a job records."""
+    """The request can't be computed on this version's data: a permanent job failure,
+    with the message the synchronous route gave as its 422. ``str()`` is what the job
+    records."""
 
     def __init__(self, code: str, message: str, details: list[str] | None = None) -> None:
         self.code, self.message, self.details = code, message, details
