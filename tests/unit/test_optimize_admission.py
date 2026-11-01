@@ -6,6 +6,7 @@ import json
 from datetime import date
 from pathlib import Path
 
+import pandas as pd
 import pytest
 
 from quantlab_api.errors import ApiError
@@ -66,3 +67,13 @@ def test_within_the_measured_range_the_default_budget_never_refuses() -> None:
 def test_sessions_run_from_the_data_start_to_as_of(as_of: date | None, sessions: int) -> None:
     cost = optimize_cost(9, date(2020, 1, 2), date(2022, 12, 30), as_of)
     assert (cost.symbols, cost.sessions) == (9, sessions)
+
+
+def test_bar_dates_off_the_calendar_count_as_sessions() -> None:
+    # A version with weekend bars: more distinct dates than the exchange has sessions.
+    dates = pd.date_range("2020-01-01", "2022-12-31", freq="D")
+    start, end = date(2020, 1, 2), date(2022, 12, 30)
+    assert optimize_cost(9, start, end, None, dates).sessions == 1095  # up to the data's end
+    early = optimize_cost(9, start, end, date(2020, 1, 31), dates)
+    assert early.sessions == 31  # the bar dates up to as_of, still more than the calendar's
+    assert optimize_cost(9, start, end, None, dates[:10]).sessions == 756  # the calendar's

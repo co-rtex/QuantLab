@@ -265,12 +265,21 @@ class OptimizeCost:
 
 
 def optimize_cost(
-    symbols: int, data_start: date, data_end: date, as_of: date | None
+    symbols: int,
+    data_start: date,
+    data_end: date,
+    as_of: date | None,
+    bar_dates: pd.DatetimeIndex | None = None,
 ) -> OptimizeCost:
-    """The job's size from what is known at submission: the exchange sessions from the
-    data's first to ``as_of`` (or the data's last)."""
+    """The job's size from what is known at submission: the sessions from the data's first
+    to ``as_of`` (or the data's last). As for backtests, the larger of the exchange
+    calendar's count and the version's own distinct bar dates (``bar_dates``), which can
+    include days the calendar does not (#181)."""
     last = min(as_of, data_end) if as_of else data_end
-    return OptimizeCost(symbols, len(trading_days(data_start, last)))
+    sessions = len(trading_days(data_start, last))
+    if bar_dates is not None:
+        sessions = max(sessions, int((bar_dates <= pd.Timestamp(last)).sum()))
+    return OptimizeCost(symbols, sessions)
 
 
 def check_optimize_memory(cost: OptimizeCost, limit_mb: int) -> None:
