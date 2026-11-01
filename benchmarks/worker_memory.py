@@ -39,6 +39,7 @@ from load_and_scaling import wait
 
 API = os.environ.get("QUANTLAB_BENCH_API", "http://localhost:8000")
 COMPOSE = ["docker", "compose", "--profile", "app"]
+JOB_TIMEOUT_S = 900
 # A reaper cycle that requeued jobs, in JSON or key=value logs.
 REQUEUED = re.compile(r"requeued\W{1,3}([1-9]\d*)")
 
@@ -187,7 +188,12 @@ def one(
     t = time.time()
     since = datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
     sampler.start()
-    (job,) = wait(c, s["h"], [r.json()["job"]["id"]])
+    job_id = r.json()["job"]["id"]
+    try:
+        (job,) = wait(c, s["h"], [job_id], timeout=JOB_TIMEOUT_S)
+    except TimeoutError:  # keep its state and logs: a stuck job is a finding too
+        job = c.get(f"/api/v1/jobs/{job_id}", headers=s["h"]).json()
+        job["status"] = f"still {job['status']} after {JOB_TIMEOUT_S} s"
     anon = sampler.stop()
     assert _worker() == cid, "the worker container changed during the job"
     # Every attempt's story: the horse's deaths (worker) and lease recoveries (reaper).
