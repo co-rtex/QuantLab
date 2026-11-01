@@ -404,10 +404,8 @@ def test_an_idle_connection_does_not_block_a_scrape(
     # Long enough that a single-threaded server would visibly hold the scrape behind the
     # idle connection, short enough that the drop is seen within the test.
     monkeypatch.setattr(O._QuietHandler, "timeout", 3)
-    with socket.socket() as s:
-        s.bind(("127.0.0.1", 0))
-        port = s.getsockname()[1]
-    server = O.serve_worker_metrics(port, None)
+    server = O.serve_worker_metrics(0, None)  # any free port, bound by the server (#194)
+    port = server.server_port
     try:
         idle = socket.create_connection(("127.0.0.1", port))
         t = time.monotonic()
