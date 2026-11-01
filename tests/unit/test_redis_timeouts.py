@@ -76,14 +76,20 @@ def test_a_redis_that_never_answers_fails_one_call_in_about_the_timeout(
 def test_a_worker_keeps_rq_s_own_reply_timeout(monkeypatch: pytest.MonkeyPatch) -> None:
     """RQ raises a worker connection's reply timeout above its blocking dequeue's: an
     explicit 5 s must not cut that dequeue short (worker.py, docs/RUNBOOK.md)."""
+    import fakeredis
+
     from quantlab_api.worker import QuantlabWorker
 
-    conn = api_redis(monkeypatch, redis_url="redis://127.0.0.1:1/0")  # never contacted
+    # Building a worker talks to Redis, so it gets a fake one; RQ's own rule is then
+    # applied to the API's client, as the worker's __init__ applies it to its connection.
+    fake = fakeredis.FakeRedis()
     w = QuantlabWorker(
-        [Queue("q", connection=conn, **RQ_OPTIONS)],  # type: ignore[arg-type]
-        connection=conn,
+        [Queue("q", connection=fake, **RQ_OPTIONS)],  # type: ignore[arg-type]
+        connection=fake,
         name="w",
         **RQ_OPTIONS,  # type: ignore[arg-type]
     )
+    conn = api_redis(monkeypatch, redis_url="redis://127.0.0.1:1/0")  # never contacted
+    w._set_connection(conn)
     assert w.connection_timeout == 415  # dequeue timeout (worker_ttl 420 - 15) + 10
     assert _timeouts(conn) == (5.0, 415)

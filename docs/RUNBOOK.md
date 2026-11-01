@@ -155,8 +155,8 @@ A worker, reaper or API host with a skewed clock no longer moves any job deadlin
       they still limit;
     * bar reads skip the cache (`"cache": "bypass"`);
     * a submitted job stays `queued` until the reaper delivers it, once Redis answers.
-    A request that makes several calls waits for each. A login makes up to about five,
-    so it can take up to about 25 s while Redis hangs.
+    A request that makes several calls waits for each. A login makes three (two when the
+    password is wrong; measured), so it takes about 15 s while Redis hangs.
   * **A worker:** once connected, a call blocks for up to 415 s: RQ raises the connection's
     socket timeout to its dequeue timeout plus 10 s (`worker_ttl` 420 − 15 + 10), so a
     blocking dequeue isn't cut short. That is about 7 minutes per attempt.
