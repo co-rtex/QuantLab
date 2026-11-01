@@ -53,7 +53,7 @@ from quantlab.portfolio.ledger import EPS as LEDGER_EPS
 from quantlab.portfolio.ledger import InsufficientCash, Ledger, LedgerError
 from quantlab.strategies.base import MarketView, Strategy
 
-ENGINE_VERSION = "1.6.0"
+ENGINE_VERSION = "1.7.0"
 
 
 class BacktestConfig(BaseModel):

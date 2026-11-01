@@ -1,7 +1,8 @@
 """Long-only portfolio allocators with validated outputs.
 
 Every allocator returns weights that sum to 1 within ``tol`` and respect the bounds, or
-raises ``OptimizationError``. Solver output is never returned unchecked.
+raises ``OptimizationError``. Solver output is never returned unchecked. The SLSQP
+allocators also set solver residue at a lower bound of 0 to exactly 0 (``drop_dust``).
 """
 
 from __future__ import annotations
@@ -108,7 +109,26 @@ def _solve_qp(
     )
     if not res.success:
         raise OptimizationError(f"SLSQP failed: {res.message}")
-    return validate_weights(res.x, bounds)
+    return drop_dust(validate_weights(res.x, bounds), bounds)
+
+
+# SLSQP leaves weights at an active lower bound of 0 at about 1e-20 to 1e-14 instead of 0
+# (#227). On markets 3, 11 and 29 the largest such residue was 8.1e-15 and the smallest
+# real weight 2.3e-6, in both min_variance and mean_variance; nothing lay between. A
+# residue became an order from zero holdings in a large account, paying commission_min.
+# The threshold sits about four decades from each side. It depends on SLSQP's ftol and on
+# the O(1) objective scaling above: change either and measure again
+# (tests/unit/test_allocator_dust.py).
+DUST_WEIGHT = 1e-10
+
+
+def drop_dust(w: np.ndarray, bounds: Bounds) -> np.ndarray:
+    """Set weights under ``DUST_WEIGHT`` to 0 when 0 is allowed, without renormalizing: the
+    other weights keep their exact values, and the dropped mass (under n * DUST_WEIGHT)
+    stays in cash."""
+    if bounds.lower > 0:
+        return w
+    return np.where(w < DUST_WEIGHT, 0.0, w)
 
 
 def min_variance(cov: np.ndarray, bounds: Bounds | None = None) -> np.ndarray:
