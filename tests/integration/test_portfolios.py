@@ -131,6 +131,26 @@ def test_a_cash_only_ledger_never_reads_the_whole_dataset(client, seeded, monkey
     assert reads == []
 
 
+def test_a_benchmark_without_ledger_symbols_still_loads_it_filtered(client, seeded, monkeypatch):
+    """The cash-only path is only for no symbols at all: a benchmark is still loaded, by
+    symbol, as before #217."""
+    from quantlab.data.store import DatasetStore
+
+    asked: list[list[str] | None] = []
+    load_bars = DatasetStore.load_bars
+
+    def bars(self, dv, symbols=None, **kw):
+        asked.append(symbols)
+        return load_bars(self, dv, symbols=symbols, **kw)
+
+    monkeypatch.setattr(DatasetStore, "load_bars", bars)
+    pid = _create(client, seeded)  # benchmark SYNIDX, deposit only
+    r = client.get(f"/api/v1/portfolios/{pid}/valuation", headers=seeded["headers"])
+    assert r.status_code == 200, r.text
+    assert r.json()["series"]["benchmark"] is not None
+    assert asked == [["SYNIDX"], ["SYNIDX"]]  # creation, then valuation
+
+
 def test_a_cash_only_valuation_is_unchanged(client, seeded):
     """The same sessions and equity as when the ledger was valued against every bar."""
     import uuid
