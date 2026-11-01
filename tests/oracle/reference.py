@@ -7,6 +7,12 @@ by instrument itself, from the symbol history, so ticker reuse and renames go th
 independent path too. The differential tests in ``tests/unit/test_engine_oracle.py``
 compare it with the engine on generated universes (``tests.oracle.universes``).
 
+Known gap (#190 review): the fill step (sell proceeds, pro-rata, affordability) follows
+the engine's code closely rather than METHODOLOGY's text, so a defect shared there would
+not show. One did: sells pay ``max(commission_min, notional x bps)`` as METHODOLOGY says,
+but the pro-rata estimate of sell proceeds uses ``notional x bps`` (#195). #195 rewrites
+this step from the text.
+
 The rules, per session ``d`` of the window, in order:
 
 1. **Open.** Each held instrument's corporate actions placed on ``d`` are applied in
@@ -360,8 +366,10 @@ def run_reference(
                 for o in pending
                 if o.qty > 0 and o.iid in ref and o.iid not in delisted
             )
-            # Cash under a billionth of the need is rounding dust: treated as none (#184).
-            if need > 0 and after_sells > need * 1e-9 and need > after_sells:
+            # Cash of at most a billionth of the need is rounding dust: there is no cash for
+            # any buy, so none is scaled and none is bought (#184).
+            broke = need > 0 and after_sells <= need * 1e-9
+            if not broke and need > 0 and after_sells < need:
                 for o in pending:
                     if o.qty > 0:
                         o.qty *= after_sells / need
@@ -387,6 +395,9 @@ def run_reference(
                         # Under one share without any cash shortfall: a top-up of a holding
                         # a split left fractional. Neither filled nor rejected.
                         dropped.append((day, o.iid, o.qty, o.scaled))
+                        continue
+                    if broke:
+                        reject(day, o, "insufficient_cash")
                         continue
                     px = r * (1 + slip)
                     can = cash / (px * (1 + comm)) if px > 0 else 0.0

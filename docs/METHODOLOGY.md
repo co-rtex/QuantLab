@@ -298,18 +298,22 @@ Per session `k`:
    fill prices, every buy is scaled by the same factor (then rounded to whole shares
    unless fractional shares are enabled) and flagged `partial`, so no symbol is favoured
    by sort order. Orders without a price on the fill date are rejected (`no_price`).
-   A buy that the cash cuts to nothing is rejected `insufficient_cash`, with its scaled
-   quantity (#184, engine 1.4.1). That covers a buy scaled below one whole share, and
-   one whose affordable quantity is under the ledger's smallest (1e-9 shares). Before
-   1.4.1, a whole-share buy scaled below one share was dropped with no record.
-   Cash left after the sells below a billionth of the buys' need is rounding dust from
-   an earlier fill. It counts as no cash, so the buys are not scaled to dust quantities.
-   Before 1.4.1 the log then depended on the dust's sign: positive dust logged the buys as
-   `InvalidOrder` with quantities near 1e-17, and zero or negative dust as
-   `insufficient_cash`.
-   With whole shares, a buy under one share that no shortfall caused is not an order
-   the engine can fill and is not logged. Such a buy is the top-up of a holding a split
-   left fractional.
+   **A buy the cash cuts to nothing is rejected `insufficient_cash`** (#184, engine
+   1.4.1). The quantity recorded depends on the case:
+   * **No cash.** Cash left after the sells of at most a billionth of the buys' need is
+     rounding dust from an earlier fill, and counts as none. Every buy is then rejected
+     at its decided quantity: none is scaled, and none spends the dust. Before 1.4.1,
+     positive dust scaled every buy to dust quantities. Those were logged `InvalidOrder`
+     near 1e-17 shares, or in a large fractional account (where a billionth of the need
+     is dollars) bought at dust size by the first symbols in sort order. Zero or
+     negative dust logged the same buys `insufficient_cash`.
+   * **Scaled below one whole share** (whole shares): it is rejected at its scaled
+     quantity. Before 1.4.1 it was dropped with no record.
+   * **Affordable quantity under the ledger's smallest** (1e-9 shares, fractional
+     shares): it is rejected at the quantity it reached the fill with, after any scaling.
+   * **Known limitation of 1.4.1** (fixed in 1.5.0, #187): with whole shares, a buy under
+     one share that no shortfall caused is still dropped with no record. That is the
+     top-up of a holding a split left fractional, and it still counts toward the need.
    **A bar printed with zero volume is not tradable** (#149, engine 1.4.0): a vendor may
    repeat the last open and close with volume 0 through a halt, and nobody could trade at
    those prices.
@@ -444,11 +448,27 @@ names changed-input re-runs and leaves the check "not assessed" if they are the 
     gates.
   * 1.3.0 (#62): jobs keyed by permanent instrument id.
   * 1.4.0 (#149): no fills on zero-volume bars, plus stale-mark accounting.
-  * 1.4.1 (#184): the rejection log only. A buy the cash cuts to nothing is rejected
-    `insufficient_cash` instead of dropped or logged `InvalidOrder`, and rounding dust
-    does not count as cash. Equity, trades, positions, ledger and fingerprints are
-    identical to 1.4.0 in an A/B over 908 runs (`tests/oracle/ab.py`). Only the rejection
-    log differs, in 129 runs. The hand cases are in `tests/unit/test_engine_oracle.py`.
+  * 1.4.1 (#184): a buy the cash cuts to nothing is rejected `insufficient_cash` instead
+    of dropped or logged `InvalidOrder`, and rounding dust does not count as cash.
+    * **Economics.** 1.4.0 scaled buys to dust quantities when cash was dust. In a large
+      fractional account that bought dust positions. 1.4.1 buys nothing then. So trades
+      and fingerprints can change at dust level in large fractional accounts: the
+      #190 review found 3 of 2,748 runs, all with capital 3e9 and fractional shares,
+      the largest a $1,705 difference (3.5e-7 relative). Elsewhere the economics are
+      identical: equity, trades, positions, ledger and fingerprints match 1.4.0 in all
+      962 runs of `tests/oracle/ab.py`, including 54 with capital 3e9 and fractional
+      shares.
+    * **The rejection log** differs in 134 of those runs: 105 of the 800 differential
+      runs, and 29 of the library-strategy runs (not broken down: the reference does not
+      run those strategies).
+      * On 1.4.0, the 800 differential runs dropped 933 decided buys without a record,
+        in 141 runs. 461 of them (in 89 runs) were scaled below one whole share, and
+        1.4.1 rejects them. The other 472 (in 96 runs) were unscaled top-ups under one
+        share, which 1.4.1 still drops (#187).
+      * The 105 changed runs are those 89, plus 16 runs whose 1.4.0 log held dust:
+        `InvalidOrder` rows or quantities under 1e-9.
+    * The hand cases are in `tests/unit/test_engine_oracle.py`, including a 3e9 account
+      (`test_dust_cash_in_a_large_account_buys_nothing`).
 * A worker refuses a backtest stamped for another engine version (#152).
 * A validation run re-runs backtests on the worker's current engine, so it records that
   engine (`engine_version`) beside the experiment's (`experiment_engine_version`), plus

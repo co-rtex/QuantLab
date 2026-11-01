@@ -3,8 +3,13 @@
 ``tests/oracle/reference.py`` is written from the documented rules and imports nothing
 from ``quantlab``. The hand-computed cases pin both implementations to arithmetic done by
 hand. The differential tests then compare them on generated adversarial universes
-(``tests/oracle/universes.py``): equity, cash, trades, rejections, positions, decisions,
-the final ledger and the run's meta, to 1e-9 relative.
+(``tests/oracle/universes.py``): the equity record, trades, rejections, positions,
+decisions, the final ledger's cash and positions, and a list of meta counts, to 1e-9
+relative (see ``tests/oracle/differential.py``).
+
+Independence is not complete: the reference's fills, pro-rata and affordability follow
+the engine's code closely, so a defect shared there would not show (#190 review). #195
+rewrites them from METHODOLOGY's text.
 """
 
 from __future__ import annotations
@@ -21,7 +26,10 @@ from tests.oracle.differential import STRATEGIES, compare, diff, run_engine
 from tests.oracle.reference import run_reference
 from tests.oracle.universes import Scenario
 
-SEEDS = range(int(os.environ.get("QUANTLAB_ORACLE_SEEDS", "200")))
+# 50 seeds by default (CI runs the suite under coverage, which slows the engine about 3x);
+# QUANTLAB_ORACLE_SEEDS=200, or QUANTLAB_ORACLE_SLOW=1 for the rest, runs the full set.
+SEEDS = range(int(os.environ.get("QUANTLAB_ORACLE_SEEDS", "50")))
+ALL_SEEDS = 200
 DAYS = pd.bdate_range("2024-01-02", periods=6)
 
 
@@ -180,6 +188,36 @@ def test_cash_dust_leaves_a_shortfall_recorded_as_insufficient_cash():
     assert diff(eng, ref, 1000.0) == []
 
 
+def test_dust_cash_in_a_large_account_buys_nothing():
+    # #184 review (B1). The same case with capital 3e9: the dust after day 2 is 4.8e-7,
+    # under a billionth of B's need, so B's buy is rejected insufficient_cash at its
+    # decided size. Without the rule it was neither scaled nor refused: the first buy by
+    # sort order spent the dust on 1.9e-7 shares.
+    from quantlab.strategies.library import create_strategy
+
+    bars = [
+        ("AAA", DAYS[0], 3.0, 3.0, 1e4),
+        ("AAA", DAYS[1], 3.07, 3.5, 1e4),
+        ("AAA", DAYS[2], 3.5, 3.5, 0.0),
+        ("AAA", DAYS[3], 3.6, 3.6, 1e4),
+        ("BBB", DAYS[0], 3.0, 3.0, 1e4),
+        ("BBB", DAYS[1], 3.07, 2.5, 1e4),
+        ("BBB", DAYS[2], 2.5, 2.6, 1e4),
+        ("BBB", DAYS[3], 2.6, 2.6, 1e4),
+    ]
+    capital = 3e9
+    sc = _scenario(bars, [], {"fractional_shares": True, "initial_capital": capital})
+    eng, ref = _both(sc, create_strategy("equal_weight"), S.EqualWeightRef())
+    dust = eng.equity["cash"].iloc[1]
+    assert 0 < dust < 1e-6
+    assert len(eng.trades[eng.trades["date"] == DAYS[2]]) == 0  # nothing bought with it
+    rej = eng.rejections[eng.rejections["date"] == DAYS[2]].set_index("symbol")
+    assert rej.loc["BBB", "reason"] == "insufficient_cash"
+    held = 0.5 * capital / 3 * (capital / (capital / 3 * 3.07))
+    assert rej.loc["BBB", "quantity"] == pytest.approx(0.5 * held * 6.0 / 2.5 - held, rel=1e-9)
+    assert diff(eng, ref, capital) == []
+
+
 def test_whole_share_buys_scaled_below_one_share_are_rejected_not_dropped():
     # #184 F2. 50 shares of each at 10 are wanted; at the next open (1100) they need
     # 110,000 against 1000 cash, so each is scaled to 50 x 1000/110000 = 0.454545 shares,
@@ -204,6 +242,16 @@ def test_whole_share_buys_scaled_below_one_share_are_rejected_not_dropped():
 
 @pytest.mark.parametrize("seed", SEEDS)
 def test_engine_matches_reference(seed):
+    assert compare(seed) == []
+
+
+@pytest.mark.slow
+@pytest.mark.skipif(
+    not os.environ.get("QUANTLAB_ORACLE_SLOW"),
+    reason="slow: set QUANTLAB_ORACLE_SLOW=1 for the seeds beyond the default set",
+)
+@pytest.mark.parametrize("seed", range(len(SEEDS), ALL_SEEDS))
+def test_engine_matches_reference_on_every_seed(seed):
     assert compare(seed) == []
 
 

@@ -346,9 +346,10 @@ def run_backtest(
     slip = config.slippage_bps / 1e4
     comm = config.commission_bps / 1e4
 
-    def prorate_buys(k: int, px_row: np.ndarray, orders: list[Order]) -> None:
+    def prorate_buys(k: int, px_row: np.ndarray, orders: list[Order]) -> bool:
         """Scale all buys by the same factor when the cash left after sells cannot fund
-        them, instead of filling whichever symbols sort first."""
+        them, instead of filling whichever symbols sort first. True when there is no cash
+        for any buy."""
         cash = ledger.cash
         for o in orders:
             if o.quantity < 0 and math.isfinite(px_row[col[o.symbol]]):
@@ -359,20 +360,25 @@ def run_backtest(
             for o in orders
             if o.quantity > 0 and math.isfinite(px_row[col[o.symbol]]) and o.symbol not in delisted
         )
-        # Cash below a billionth of the need is rounding dust left by an earlier fill (#184):
-        # no cash, so the buys meet the shortfall as with zero, rather than being scaled to
-        # dust quantities whose record depends on the dust's sign.
-        if need > cash > need * 1e-9:
+        # Cash up to a billionth of the need is rounding dust left by an earlier fill (#184):
+        # no cash. The buys are neither scaled to dust quantities (whose record depended on
+        # the dust's sign) nor filled with it: every one meets the shortfall as with zero.
+        if need <= 0:  # no buy can fill here (no price, or delisted)
+            return False
+        if cash <= need * 1e-9:
+            return True
+        if cash < need:
             scale = cash / need
             for o in orders:
                 if o.quantity > 0:
                     o.quantity *= scale
                     o.scaled = True
+        return False
 
     def fill(k: int, px_row: np.ndarray, orders: list[Order]) -> float:
         d = dates[k]
         traded = 0.0
-        prorate_buys(k, px_row, orders)
+        no_cash = prorate_buys(k, px_row, orders)
         for o in sorted(orders, key=lambda o: (o.quantity > 0, o.symbol)):
             j = col[o.symbol]
             ref = px_row[j]
@@ -412,7 +418,7 @@ def run_backtest(
             partial = o.scaled
             if buy:
                 # Shrink buys to what the cash balance can fund, including commission.
-                affordable = ledger.cash / (px * (1 + comm)) if px > 0 else 0.0
+                affordable = ledger.cash / (px * (1 + comm)) if px > 0 and not no_cash else 0.0
                 if config.commission_min:
                     affordable = min(affordable, (ledger.cash - config.commission_min) / px)
                 if not config.fractional_shares:
