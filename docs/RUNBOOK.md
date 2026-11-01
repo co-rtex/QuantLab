@@ -243,8 +243,14 @@ experiment; results of failed jobs are never stored.
     `QUANTLAB_MAX_BACKTEST_MEMORY_MB`.
     * The estimate grows with symbols × sessions loaded and symbols × rebalances in the
       window.
-    * Sessions are the larger of the exchange calendar's count and the version's distinct
-      bar dates.
+    * Sessions, and rebalances in the window, are each the larger of the exchange
+      calendar's count and the version's distinct bar dates (the engine rebalances on its
+      bar dates, #181). On a 7-day-week dataset the daily cap for 2005–2023 is therefore
+      137 symbols, not 199.
+    * Symbols are the job's instruments: a universe's distinct tickers, or every
+      instrument of the version (a reused ticker once per holder).
+    * The estimate in a refusal is rounded up to 0.1 MB, so it is never shown equal to
+      the limit.
     * It ignores the strategy, so a strategy that holds few names is overestimated.
     * The default limit is 1228 MB, which is 80% of the compose worker's 1536 MB limit.
     * `details` give the estimate, the limit, and the symbols, sessions and rebalances.

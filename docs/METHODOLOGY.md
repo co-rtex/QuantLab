@@ -493,9 +493,21 @@ emulated the same cliff: a whole buy rejected for a shortfall of a fraction of a
     * Sessions are the larger of the exchange calendar's count and the dataset version's
       distinct bar dates, from the data's first bar to the end date. The engine loads that
       whole history whatever the start.
+    * Rebalances are counted with the engine's own rule (`rebalance_mask`) over the traded
+      window, also on whichever of the calendar or the bar dates gives more (#181). The
+      engine rebalances on its bar dates, so a version with bars on weekends rebalances
+      more often than the calendar says.
+    * Symbols are the instruments the job runs (#181). That is a universe's distinct
+      tickers, or without a universe every instrument of the version: a reused ticker
+      counts once per holder.
     * A long history of few symbols is inside the range.
   * For 2005–2023 the effective caps are 199 symbols daily and 400 weekly, monthly or
-    quarterly.
+    quarterly. On data with a bar every day (a 7-day-week CSV), the daily cap is 137.
+    Before #181 it was 172, because rebalances were counted on the calendar's 4,785
+    sessions while the engine made 6,935. At 172 symbols that admitted an estimated
+    1,439 MB under a 1,228 MB limit.
+  * A refusal shows the estimate rounded up to 0.1 MB, in the message and in
+    `details.estimated_mb`, so it never appears equal to the limit.
   * Details are in `docs/RUNBOOK.md` and `benchmarks/results/*-worker-memory-*.json`.
 
 **Reproduction.** The input hash covers the dataset version, strategy, parameters,
