@@ -64,9 +64,41 @@ account (failed attempts only, refunded on success, 3x threshold). In degraded m
 process uses a fixed table of 4096 counters indexed by a keyed hash (random per-process
 secret, so collisions cannot be precomputed): constant memory, O(1), never evicted;
 refunds are ignored because a shard may be shared.
-**Consequences.** During a Redis outage throttling is per-replica and may over-throttle on
-hash collisions, but cannot be reset by flooding. Production deployments should run Redis
-with persistence and monitoring (see docs/RUNBOOK.md).
+**Consequences.** During a Redis outage throttling is per API process (replicas × uvicorn
+workers; compose runs 4 workers, terraform `api_count` × `api_workers`) and may
+over-throttle on hash collisions, but cannot be reset by flooding. Production deployments
+should run Redis with persistence and monitoring (see docs/RUNBOOK.md).
+**Amendment (2026-11-01, #207 / #211): breaker and floor.**
+* A connection error, timeout or `OSError` on any limiter call opens that process's
+  breaker for 10 s. While it is open, attempts are counted in-process without contacting
+  Redis (still limiting, never failing open) and refunds are ignored. Other Redis errors
+  (`ResponseError`: OOM, READONLY) fall back for that call only.
+* After the window, one call per process probes Redis under a 10 s lease. Success closes
+  the breaker and failure reopens it. Local counts are neither discarded nor written back:
+  once closed, Redis is authoritative again and does not include attempts counted locally.
+* Floor: each count Redis returns to a process (refused attempts and reserves later
+  refunded included) raises that key's local shard to at least that value for the current
+  window, and a shard is only ever raised. Degraded counting resumes from the last count
+  that process saw, or from 0 for a key it has not seen this window.
+* A refund returns an attempt only where it was counted: Redis gets a `DECR` only for a
+  reserve Redis counted, in that reserve's bucket, and never leaves a bucket below 0.
+* Bound per key per window: limit (Redis) + Σ over processes of (limit − floor), at most
+  (P+1) × limit for P API processes, as before #207. A single connection error now gives
+  10 s of local counting instead of one call.
+* Shard tables are 2^16 entries per window length (`array('I')`, 256 KiB each) instead of
+  4096. Accepted over-throttling: floors are written during normal operation, so a client
+  that drives many keys over their limits (one `login:ip` per IPv6 /64, or
+  `assistant`/`invite:user` keys per account) can pre-fill shards, and one timeout then
+  refuses some legitimate first attempts in that process for the breaker window. Measured
+  share refused at 1000 / 4096 / 20000 attacker keys: 20.95 / 63.69 / 99.23 % with 4096
+  shards, 1.40 / 6.40 / 25.99 % with 2^16. A trusted-device key whose 3600 s shard is
+  saturated falls back to the account budget, so ADR-0008's #55 owner protection does not
+  hold while the breaker is open. A count-min sketch or a bounded per-key floor map is a
+  possible follow-up.
+* Observed through `quantlab_rate_limiter_breaker_open{limiter="login"}` (livemax over
+  API processes) and the `rate_limiter_breaker_open` / `rate_limiter_breaker_closed` logs,
+  one per transition. The API never calls `mark_process_dead`, so a uvicorn process that
+  dies with its breaker open leaves the gauge at 1 until the container restarts.
 
 ## ADR-0008 Client address handling behind the web proxy
 
