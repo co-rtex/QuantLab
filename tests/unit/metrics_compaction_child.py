@@ -72,11 +72,17 @@ def main() -> None:
 
         O.os.remove = slow_remove  # type: ignore[attr-defined]
     seen: list[float] = []
+    errors: list[str] = []
     stop = threading.Event()
 
     def scraper() -> None:
+        # A failed scrape is recorded, not fatal: without the lock, the collector can list
+        # a dead horse's file that a compaction then removes before reading it.
         while not stop.is_set():
-            seen.append(outcomes(scrape()))
+            try:
+                seen.append(outcomes(scrape()))
+            except Exception as exc:  # reported to the test
+                errors.append(repr(exc))
 
     thread = threading.Thread(target=scraper)
     thread.start()
@@ -91,6 +97,7 @@ def main() -> None:
         if compact:
             O.compact_dead_process(pid)
         after_each.append(outcomes(scrape()))
+    seen.append(outcomes(scrape()))  # one more after the last compaction, on its own
     stop.set()
     thread.join()
     text = scrape()
@@ -100,6 +107,7 @@ def main() -> None:
                 "files": sorted(os.listdir(os.environ["PROMETHEUS_MULTIPROC_DIR"])),
                 "after_each": after_each,
                 "seen": seen,
+                "errors": errors[:5],
                 "rows": value(text, "quantlab_dataset_rows"),
                 "run_count": value(text, "quantlab_job_run_seconds_count", kind="backtest"),
                 "run_sum": value(text, "quantlab_job_run_seconds_sum", kind="backtest"),

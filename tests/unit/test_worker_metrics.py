@@ -159,10 +159,13 @@ def test_compaction_keeps_the_directory_bounded_and_every_sample_exact(tmp_path:
 
 def test_a_scrape_during_compaction_never_sees_a_counter_go_down(tmp_path: Path) -> None:
     """With each compaction slowed, a scrape that did not wait for it would count a dead
-    horse twice (archive and its own file) and then once: up, then down."""
+    horse twice (archive and its own file) and then once: up, then down; or fail, having
+    listed a file the compaction removed before it was read."""
     got = horses(tmp_path, 30, "slow")
     seen = got["seen"]
+    assert got["errors"] == []
     assert len(seen) > 10, "the concurrent scraper barely ran"
+    assert seen[-1] == 30
     assert all(b >= a for a, b in itertools.pairwise(seen)), "a counter went down"
     assert max(seen) <= 30, "a horse was counted twice"
 
