@@ -45,7 +45,7 @@ from quantlab_api.models import (
     ExperimentResult,
     Instrument,
 )
-from quantlab_api.observability import DATASET_FRESHNESS_DAYS, DATASET_ROWS, INGEST_QUALITY
+from quantlab_api.observability import DATASET_FRESHNESS_DAYS, DATASET_ROWS, INGEST_QUALITY, log
 from quantlab_api.storage import version_lock
 
 
@@ -633,6 +633,25 @@ def _headline(a: dict[str, Any]) -> dict[str, Any]:
     return out
 
 
+def name_instruments(message: str, history: pd.DataFrame, start: pd.Timestamp | None) -> str:
+    """The engine names instruments by id; a user knows them by ticker (#237). Each id in
+    ``message`` becomes its display ticker as of ``start``, the date the universe was
+    resolved on (:func:`label_ids`): the ticker valid then; else the last one before (it
+    delisted); else the one it first listed under (it lists later, #243 review). An id
+    the history does not know stays as it is."""
+    import re
+
+    known = set(history["instrument_id"].astype(str))
+    token = re.compile(r"(?<![\w.-])[\w.-]+(?![\w.-])")
+    found = sorted({t for t in token.findall(message) if t in known})
+    if not found:
+        return message
+    when = start if start is not None else history["valid_from"].min()
+    labels = label_ids(history, found, when)
+    # One pass: a ticker written in is never read again as another instrument's id.
+    return token.sub(lambda m: labels.get(m.group(0), m.group(0)), message)
+
+
 @handler("research.validation")
 def validation_task(ctx: JobContext) -> Finalizer:
     from quantlab.research.suite import run_validation_suite
@@ -654,16 +673,27 @@ def validation_task(ctx: JobContext) -> Finalizer:
     def progress(f: float, msg: str) -> None:
         ctx.heartbeat(0.02 + 0.95 * f, msg)
 
-    result = run_validation_suite(
-        inputs.bars,
-        inputs.actions,
-        key,
-        params,
-        inputs.cfg,
-        on_progress=progress,
-        seed=int(ctx.payload.get("seed", 0)),
-        instruments=inputs.master,
-    )
+    from quantlab.backtest.engine import BacktestError
+
+    try:
+        result = run_validation_suite(
+            inputs.bars,
+            inputs.actions,
+            key,
+            params,
+            inputs.cfg,
+            on_progress=progress,
+            seed=int(ctx.payload.get("seed", 0)),
+            instruments=inputs.master,
+        )
+    except BacktestError as exc:  # a backtest in the suite could not run: say which tickers
+        message = str(exc)
+        if inputs.keyed:
+            try:
+                message = name_instruments(message, inputs.history, inputs.start)
+            except Exception:  # naming is a courtesy: never let it replace the real error
+                log.warning("validation_error_naming_failed", exc_info=True)
+        raise PermanentJobError(f"validation could not run: {message}") from exc
     # The suite re-runs backtests on this worker's engine, which can be newer than the one
     # that computed the experiment. Both are recorded so a mismatch is labelled, not
     # hidden behind the experiment's version (#155).
@@ -775,12 +805,25 @@ def _csv_finalizer(ctx: JobContext, staged: Any) -> Finalizer:
 
     from quantlab.data.schema import SchemaError, normalize_actions, normalize_bars
 
+    def read(path: Any) -> pd.DataFrame:
+        # One line per failure (#239): pandas' parser text names its C tokenizer and can
+        # end in a newline; keep only where the file is malformed.
+        try:
+            return pd.read_csv(path)
+        except pd.errors.EmptyDataError as exc:
+            raise SchemaError(f"{path.name} is empty") from exc
+        except UnicodeDecodeError as exc:
+            raise SchemaError(f"{path.name} is not UTF-8 text (byte {exc.start})") from exc
+        except pd.errors.ParserError as exc:
+            where = str(exc).strip().splitlines()[0].removeprefix("Error tokenizing data. ")
+            raise SchemaError(f"{path.name}: {where.removeprefix('C error: ')}") from exc
+
     p = ctx.payload
     try:
-        bars = normalize_bars(pd.read_csv(staged / "bars.csv"))
+        bars = normalize_bars(read(staged / "bars.csv"))
         actions_path = staged / "actions.csv"
-        actions = normalize_actions(pd.read_csv(actions_path) if actions_path.exists() else None)
-    except (SchemaError, ValueError, pd.errors.ParserError) as exc:
+        actions = normalize_actions(read(actions_path) if actions_path.exists() else None)
+    except (SchemaError, ValueError) as exc:
         raise PermanentJobError(f"invalid CSV: {exc}") from exc
     if bars["symbol"].nunique() > get_settings().max_dataset_assets:
         raise PermanentJobError("too many symbols")

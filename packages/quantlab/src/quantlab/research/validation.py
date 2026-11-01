@@ -453,15 +453,30 @@ def leakage_check(
     picks = sorted(rng.choice(len(candidates), size=min(samples, len(candidates)), replace=False))
     mismatches = []
     tested = []
+    skipped = []
     for i in picks:
         d = candidates[i]
         nxt = sessions[sessions.searchsorted(d) + 1]  # keep one session so orders can queue
         tb, ta = bars[bars["date"] <= nxt], actions[actions["ex_date"] <= nxt]
+        update: dict[str, Any] = {"end": nxt.date()}
+        if cfg.universe:
+            # A member first listed after the cut has no bars in the truncated data (#237).
+            # In the full run it has no bar at those dates either, so it is untradable there
+            # and the engine leaves it out, as it does for any member listed after a window
+            # without an explicit universe. The truncated run is therefore given only the
+            # members it can know at the cut. If a decision up to the cut depended on a later
+            # listing merely existing, the two runs differ and the check fails, as it should.
+            listed = set(tb["symbol"].str.upper())
+            known = [s for s in cfg.universe if s.upper() in listed]
+            if not known:
+                skipped.append(str(d.date()))  # nothing in the universe is listed yet
+                continue
+            update["universe"] = known
         trunc = run_backtest(
             tb,
             ta,
             create_strategy(strategy_key, params),
-            cfg.model_copy(update={"end": nxt.date()}),
+            cfg.model_copy(update=update),
             record_positions=False,
             instruments=instruments,
         )
@@ -475,9 +490,16 @@ def leakage_check(
         tested.append(str(d.date()))
         if not same:
             mismatches.append(str(d.date()))
+    if not tested:
+        return {
+            "status": "unassessed",
+            "reason": "no sampled cut date had a listed universe member",
+            "dates_skipped": skipped,
+        }
     return {
         "status": "verified" if not mismatches else "failed",
         "dates_tested": tested,
+        "dates_skipped": skipped,
         "mismatches": mismatches,
         "method": "engine decisions on full data vs data truncated after each cut date",
     }
