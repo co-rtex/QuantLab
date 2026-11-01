@@ -77,8 +77,9 @@ def test_a_refusal_names_the_estimate_and_the_limit():
         check_backtest_memory(cost, 1228)
     e = exc.value
     assert (e.status, e.code) == (422, "backtest_too_large")
-    assert "1228 MB limit" in e.message and f"{cost.memory_mb:.0f} MB" in e.message
-    assert e.details["estimated_mb"] == round(cost.memory_mb, 1) and e.details["limit_mb"] == 1228
+    shown = math.ceil(cost.memory_mb * 10) / 10  # rounded up: never shown as at the limit
+    assert "1228 MB limit" in e.message and f"{shown:.1f} MB" in e.message
+    assert e.details["estimated_mb"] == shown and e.details["limit_mb"] == 1228
     check_backtest_memory(cost, math.ceil(cost.memory_mb))  # at the estimate: admitted
 
 
@@ -162,18 +163,28 @@ def test_bar_dates_counts_distinct_dates_including_non_trading_days(tmp_path):
     days = [*trading_days("2024-01-02", "2024-01-31"), saturday]
     rows = [{"symbol": s, "date": d} for s in ("A", "B") for d in days]
     pd.DataFrame(rows).to_parquet(tmp_path / "bars.parquet", index=False)
-    assert bar_dates(tmp_path) == len(trading_days("2024-01-02", "2024-01-31")) + 1
-    assert (
-        bar_dates(tmp_path, date(2024, 1, 10)) == len(trading_days("2024-01-02", "2024-01-10")) + 1
+    expected = pd.DatetimeIndex(sorted(days))
+    assert bar_dates(tmp_path).equals(expected)  # sorted and distinct (#181: the dates)
+    assert len(bar_dates(tmp_path, date(2024, 1, 10))) == (
+        len(trading_days("2024-01-02", "2024-01-10")) + 1
     )
 
 
 def test_sessions_are_the_versions_bar_dates_when_there_are_more():
     # The engine steps through distinct bar dates; a bar on a non-trading day only warns.
+    import pandas as pd
+
+    calendar_days = trading_days(START, END)
+    saturdays = pd.DatetimeIndex(
+        ["2005-01-08", "2010-06-05", "2015-03-07", "2020-02-01", "2023-01-07"]
+    )
+    more = calendar_days.union(saturdays)
+    fewer_days = calendar_days[:4000]
     calendar = backtest_cost(100, START, END, START, None, "daily")
-    extra = backtest_cost(100, START, END, START, None, "daily", bar_dates=4790)
-    fewer = backtest_cost(100, START, END, START, None, "daily", bar_dates=4000)
+    extra = backtest_cost(100, START, END, START, None, "daily", bar_dates=more)
+    fewer = backtest_cost(100, START, END, START, None, "daily", bar_dates=fewer_days)
     assert (calendar.sessions, extra.sessions, fewer.sessions) == (4785, 4790, 4785)
+    assert (calendar.rebalances, extra.rebalances, fewer.rebalances) == (4785, 4790, 4785)
     # 400 symbols over those 4,790 sessions is just past the measured 400 x 4,785.
-    wide = backtest_cost(400, START, END, START, None, "monthly", bar_dates=4790)
+    wide = backtest_cost(400, START, END, START, None, "monthly", bar_dates=more)
     assert not _admitted(wide, 10_000)

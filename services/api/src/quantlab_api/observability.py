@@ -58,6 +58,15 @@ JOBS_RUNNING = Gauge(
     "quantlab_jobs_running", "Jobs currently executing", multiprocess_mode="livesum"
 )
 CACHE_EVENTS = Counter("quantlab_cache_events_total", "Cache lookups", ["cache", "result"])
+# 1 while any live API process's rate limiter counts locally after a Redis error (#207).
+# Labelled, so no process writes a sample (in multiprocess mode, a file) until a breaker
+# opens: an unlabelled gauge would add one to every work horse's directory.
+RATE_LIMITER_BREAKER_OPEN = Gauge(
+    "quantlab_rate_limiter_breaker_open",
+    "1 while the rate limiter skips Redis after an error and counts in the process",
+    ["limiter"],
+    multiprocess_mode="livemax",
+)
 DATASET_ROWS = Gauge(
     "quantlab_dataset_rows",
     "Rows in the most recently ingested dataset version",

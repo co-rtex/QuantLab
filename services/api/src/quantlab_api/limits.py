@@ -3,6 +3,8 @@ memory bound a backtest must fit at submission (#163)."""
 
 from __future__ import annotations
 
+import math
+from collections.abc import Iterable
 from dataclasses import dataclass
 from datetime import date
 from typing import Any
@@ -139,6 +141,21 @@ class BacktestCost:
         )
 
 
+def universe_width(catalog: Iterable[tuple[str, str | None]], universe: list[str] | None) -> int:
+    """How many instruments the job simulates, from the version's catalog rows
+    ``(ticker, instrument_id)`` (#181).
+
+    A universe names each ticker once, however often it is listed: the engine deduplicates
+    it. Without one, the job runs every instrument of the version, and a reused ticker has
+    a catalog row per holder, so instruments are counted, not tickers (a version without
+    identity data has one instrument per ticker). The benchmark is counted too, although
+    the engine leaves it out, which overestimates by one at most.
+    """
+    if universe:
+        return len({s.strip().upper() for s in universe})
+    return len({iid if iid is not None else symbol for symbol, iid in catalog})
+
+
 def backtest_cost(
     symbols: int,
     data_start: date,
@@ -146,20 +163,27 @@ def backtest_cost(
     start: date | None,
     end: date | None,
     rebalance: str,
-    bar_dates: int = 0,
+    bar_dates: pd.DatetimeIndex | None = None,
 ) -> BacktestCost:
     """The job's size from what is known at submission.
 
     Sessions run from the data's first session, since the job loads that history. The
-    engine steps through the version's distinct bar dates, which may include days the
-    exchange calendar does not (such bars only warn), so the larger count is used.
-    Rebalances count over the traded window, on the calendar.
+    engine steps through the version's distinct bar dates (``bar_dates``, up to the end),
+    which may include days the exchange calendar does not (such bars only warn), and it
+    rebalances on those dates too (#181). Sessions and rebalances (over the traded window,
+    from ``start``) are therefore each the larger count, on the calendar or on the dates.
     """
     last = min(end, data_end) if end else data_end
     loaded = trading_days(data_start, last)
-    traded = loaded[loaded >= pd.Timestamp(start)] if start else loaded
-    sessions = max(len(loaded), bar_dates)
-    return BacktestCost(symbols, sessions, int(rebalance_mask(traded, rebalance).sum()))
+    candidates = [loaded]
+    if bar_dates is not None:
+        candidates.append(bar_dates[bar_dates <= pd.Timestamp(last)])
+    sessions = max(len(days) for days in candidates)
+    rebalances = max(
+        int(rebalance_mask(days[days >= pd.Timestamp(start)] if start else days, rebalance).sum())
+        for days in candidates
+    )
+    return BacktestCost(symbols, sessions, rebalances)
 
 
 def check_backtest_memory(cost: BacktestCost, limit_mb: int) -> None:
@@ -189,14 +213,17 @@ def check_backtest_memory(cost: BacktestCost, limit_mb: int) -> None:
             },
         )
     if cost.memory_mb > limit_mb:
+        # Rounded up to 0.1 MB, so the figure shown is over the limit whenever the estimate
+        # is: 1228.04 MB showed as "1228 MB, over the 1228 MB limit" (#181).
+        shown = math.ceil(cost.memory_mb * 10) / 10
         raise ApiError(
             422,
             "backtest_too_large",
-            f"This backtest needs an estimated {cost.memory_mb:.0f} MB, over the "
+            f"This backtest needs an estimated {shown:.1f} MB, over the "
             f"{limit_mb} MB limit for one backtest. {ADVICE}",
             {
                 "reason": "estimated_memory",
-                "estimated_mb": round(cost.memory_mb, 1),
+                "estimated_mb": shown,
                 "limit_mb": limit_mb,
                 "symbols": cost.symbols,
                 "sessions": cost.sessions,

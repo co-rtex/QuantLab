@@ -121,6 +121,9 @@ A worker, reaper or API host with a skewed clock no longer moves any job deadlin
     quitting".
 * **New submissions** are still recorded, and readiness reports 503 (see "Jobs stuck in
   `queued`" for what is redelivered once Redis is back).
+* **Rate limits** (logins, registration, invitations, the assistant): each API process's
+  limiter breaker opens at its first connection error (#207): breaker open = counting
+  in-process, still limiting. See the hung-Redis entry below.
 * **RQ's own records** in Redis, of jobs that finished during the outage, stay incomplete
   (`rq info` may show them as started). RQ's registry cleanup marks them failed later.
   That changes nothing: a job's outcome is the one in PostgreSQL.
@@ -145,18 +148,30 @@ A worker, reaper or API host with a skewed clock no longer moves any job deadlin
   * **To tell it from an outage:** `/api/v1/ready` reports 503 with `redis: error`, and
     the API logs `ready_check_failed component=redis` with `AuthenticationError` in
     `error`, where an outage logs `ConnectionError` or `TimeoutError`.
+  * **The API's rate limiter** treats it like an outage: `AuthenticationError` is a
+    connection error, so its breaker opens (breaker open = counting in-process, still
+    limiting), and `rate_limiter_breaker_open` in the API's log shows the error.
 * **A Redis that accepts connections but doesn't answer** (a hung server, a network that
   drops packets) is different from one that is down.
   * A connection attempt gives up after 5 s (`QUANTLAB_REDIS_CONNECT_TIMEOUT_SECONDS`).
   * **The API:** each call gives up after 5 s (`QUANTLAB_REDIS_SOCKET_TIMEOUT_SECONDS`),
     once, without retries (#200). Then:
     * `/api/v1/ready` reports 503 with `redis: error`;
-    * the login and invitation rate limits are counted in each API process instead, so
-      they still limit;
+    * the rate limits (logins, registration, invitations, the assistant) are counted in
+      each API process instead. Breaker open = counting in-process, still limiting (#207):
+      a connection error or a timeout opens each process's limiter breaker, which skips
+      Redis for 10 s, then lets one call try it again. Any other Redis error (a bad
+      reply) falls back for that call only. `quantlab_rate_limiter_breaker_open` is 1
+      meanwhile, with `rate_limiter_breaker_open` and `rate_limiter_breaker_closed` in
+      the API's log;
     * bar reads skip the cache (`"cache": "bypass"`);
     * a submitted job stays `queued` until the reaper delivers it, once Redis answers.
-    A request that makes several calls waits for each. A login makes three (two when the
-    password is wrong; measured), so it takes about 15 s while Redis hangs.
+  * **How long requests wait.** Without the breaker, a login made three limiter calls (two
+    with a wrong password), each waiting a timeout: 15.21 s with Redis paused (#200's
+    probe). With it, at the onset every limiter call already in flight waits its own
+    timeout (up to as many as the API's thread pool runs at once). Then, per process, one
+    probe per 10 s waits up to connect + reply, and other limiter calls don't wait. The
+    bars cache, `/ready` and enqueue have no breaker: they still wait on every call.
   * **A worker:** once connected, a call blocks for up to 415 s: RQ raises the connection's
     socket timeout to its dequeue timeout plus 10 s (`worker_ttl` 420 − 15 + 10), so a
     blocking dequeue isn't cut short. That is about 7 minutes per attempt.
@@ -228,8 +243,14 @@ experiment; results of failed jobs are never stored.
     `QUANTLAB_MAX_BACKTEST_MEMORY_MB`.
     * The estimate grows with symbols × sessions loaded and symbols × rebalances in the
       window.
-    * Sessions are the larger of the exchange calendar's count and the version's distinct
-      bar dates.
+    * Sessions, and rebalances in the window, are each the larger of the exchange
+      calendar's count and the version's distinct bar dates (the engine rebalances on its
+      bar dates, #181). On a 7-day-week dataset the daily cap for 2005–2023 is therefore
+      137 symbols, not 199.
+    * Symbols are the job's instruments: a universe's distinct tickers, or every
+      instrument of the version (a reused ticker once per holder).
+    * The estimate in a refusal is rounded up to 0.1 MB, so it is never shown equal to
+      the limit.
     * It ignores the strategy, so a strategy that holds few names is overestimated.
     * The default limit is 1228 MB, which is 80% of the compose worker's 1536 MB limit.
     * `details` give the estimate, the limit, and the symbols, sessions and rebalances.
@@ -320,7 +341,10 @@ edge (local development) no address is forwarded and only the per-account limit 
 the Docker host replaces client source addresses (the address is a Docker gateway; see
 "Exposing a deployment", host requirement), or the API is not trusting the web tier (the
 address is the web container's; check that setting and that `web` resolves from the API). A 403 `edge_required` from the web tier means a request reached it without
-passing through the edge. During a Redis outage limits are per process (ADR-0007).
+passing through the edge. Limits are per API process (ADR-0007) during a Redis outage,
+and for 10 s after any connection error to Redis (the limiter's breaker, #207: breaker
+open = counting in-process, still limiting). Each key starts from the floor: the last
+count Redis returned to that process in this window, or 0 for a key it hasn't seen.
 
 ### Disk usage
 `$QUANTLAB_DATA_DIR/datasets` holds immutable dataset versions; `artifacts/` holds

@@ -219,6 +219,50 @@ def test_timeout_is_enforced(test_handlers):
         assert job.error["type"] == "JobTimeoutError"
 
 
+def _under_rq_timeout(jid: uuid.UUID, seconds: int = 1) -> str:
+    """Run the job as RQ's worker does, inside its job-timeout alarm (UnixSignalDeathPenalty,
+    set at timeout + 60 s in production; ``seconds`` here)."""
+    from rq.timeouts import JobTimeoutException, UnixSignalDeathPenalty
+
+    with UnixSignalDeathPenalty(seconds, JobTimeoutException, job_id=str(jid)):
+        return J.execute_job(str(jid))
+
+
+def _overrun(ctx):
+    time.sleep(5)  # a long phase without progress callbacks: no heartbeat, no ctx timeout
+    return lambda db: {"message": "should not finish"}
+
+
+def test_a_job_stopped_by_rq_s_own_timeout_is_timed_out_not_retried(test_handlers, monkeypatch):
+    """#212: RQ's alarm raised rq.timeouts.JobTimeoutException in the handler, which was
+    taken for a retryable error: the job ran its whole timeout again, up to max_attempts,
+    and was then reported failed."""
+    monkeypatch.setitem(J.HANDLERS, "t.overrun", _overrun)
+    jid = _make_job("t.overrun", timeout=10)
+    assert _under_rq_timeout(jid) == "timed_out"
+    with SessionLocal() as db:
+        job = db.get(Job, jid)
+        assert (job.status, job.attempts) == (JobStatus.timed_out, 1)
+        assert job.error["type"] == "JobTimeoutError"
+        assert job.message == "exceeded 10s"
+        assert job.lease_expires_at is None and job.not_before is None
+    assert J.execute_job(str(jid)) == "skipped"  # never claimed again
+
+
+def test_a_backtest_stopped_by_rq_s_timeout_marks_its_experiment_timed_out(
+    client, seeded, monkeypatch
+):
+    monkeypatch.setitem(J.HANDLERS, "backtest", _overrun)
+    exp_id = submit(client, seeded).json()["experiment"]["id"]
+    with SessionLocal() as db:
+        jid = _job(db, exp_id).id
+    assert _under_rq_timeout(jid) == "timed_out"
+    with SessionLocal() as db:
+        assert db.get(Job, jid).status == JobStatus.timed_out
+        assert db.get(Experiment, uuid.UUID(exp_id)).status == JobStatus.timed_out
+        assert _results(db) == 0
+
+
 def test_failed_backtest_leaves_no_partial_results(client, seeded, monkeypatch):
     exp_id = submit(client, seeded).json()["experiment"]["id"]
     from quantlab_api import tasks

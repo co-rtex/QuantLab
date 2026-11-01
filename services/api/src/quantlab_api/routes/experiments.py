@@ -21,7 +21,7 @@ from quantlab_api.jobs import (
     request_fingerprint,
     submit_job,
 )
-from quantlab_api.limits import backtest_cost, check_backtest_memory
+from quantlab_api.limits import backtest_cost, check_backtest_memory, universe_width
 from quantlab_api.marketdata import bar_dates
 from quantlab_api.models import (
     Experiment,
@@ -123,9 +123,15 @@ def create_experiment(
             "Invalid backtest configuration",
             [{"loc": list(e["loc"]), "msg": e["msg"]} for e in exc.errors()],
         ) from exc
-    symbols = set(
-        db.scalars(select(Instrument.symbol).where(Instrument.dataset_version_id == dv.id))
-    )
+    catalog = [
+        (symbol, iid)
+        for symbol, iid in db.execute(
+            select(Instrument.symbol, Instrument.instrument_id).where(
+                Instrument.dataset_version_id == dv.id
+            )
+        )
+    ]
+    symbols = {symbol for symbol, _ in catalog}
     wanted = [s.upper() for s in (cfg.universe or [])]
     missing = [
         s
@@ -134,7 +140,8 @@ def create_experiment(
     ]
     if missing:
         raise ApiError(422, "unknown_symbols", "Symbols not in dataset version", missing[:20])
-    n_univ = len(wanted) if wanted else len(symbols)
+    # The instruments the job will run: a reused ticker counts once per holder (#181).
+    n_univ = universe_width(catalog, wanted)
     if n_univ > get_settings().max_backtest_symbols:
         raise ApiError(422, "universe_too_large", "Universe exceeds the configured limit")
     # A job that cannot fit the worker's memory is refused here, not OOM-killed later (#163).
