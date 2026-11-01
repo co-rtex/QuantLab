@@ -112,6 +112,29 @@ Retryable errors are retried with the backoff above until `max_attempts`. Perman
 errors (invalid input, missing dataset) are not retried. Fix the input and submit a new
 experiment; results of failed jobs are never stored.
 
+### Backtests that don't fit the worker's memory (#163)
+* **At submission:** `422 backtest_too_large`. The API estimates a backtest's peak memory
+  from its size and refuses it when the estimate exceeds `QUANTLAB_MAX_BACKTEST_MEMORY_MB`.
+  * The size is symbols × sessions loaded, plus symbols × rebalances in the window.
+  * The default limit is 1228 MB, which is 80% of the compose worker's 1536 MB limit.
+  * The response's `details` give the estimate, the limit, and the symbols, sessions and
+    rebalances. The user can choose fewer symbols, a shorter period or a less frequent
+    rebalance.
+  * For example, with the default limit, 2005–2023 with equal weight admits 400 symbols
+    weekly but refuses 200 or more symbols daily.
+* **If a job still runs out of memory:** the kernel kills its work horse, and the job fails at
+  once as `ResourceExhausted` ("out of memory: the job was stopped after using N MB of the
+  worker's M MB limit"), not retryable. The evidence is a SIGKILL plus a rise in the
+  container's `memory.events` `oom_kill` count, or a peak at `memory.max`. Before #163 such
+  a job was retried twice into the same wall and then failed as `LeaseExpired`. A worker
+  lost for any other reason still recovers through the reaper as above.
+* **Raise the limit only together with the worker's memory.**
+  * Measure first with `benchmarks/worker_memory.py` on the new worker: it samples each job's
+    anonymous memory in the real container.
+  * Then set `QUANTLAB_MAX_BACKTEST_MEMORY_MB` to keep the same 20% headroom.
+  * The estimate's coefficients (`quantlab_api/limits.py`) come from the measured envelope
+    in `benchmarks/results/*-worker-memory-after-*.json`.
+
 ### ML runs fail with "submitted for pipeline version N"
 Deploy the API and the workers together, at the same release. The API stamps its
 `ML_PIPELINE_VERSION` into each ML run's config and input hash. A worker running a

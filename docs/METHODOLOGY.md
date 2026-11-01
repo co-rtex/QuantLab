@@ -381,6 +381,22 @@ replay); equity equals cash plus marked positions every day; cash never negative
 positions never negative; deterministic fingerprints for identical inputs; truncating
 data after a decision date leaves that decision unchanged (no look-ahead).
 
+**Memory and size limits (#163).**
+* **Storage:** the engine keeps trades, position rows and decisions by column while it
+  simulates (float columns in float64 arrays), instead of one Python dict per trade.
+  * The frames it returns are the same, with the same dtypes and column order, and so are
+    the ledger, the meta and the fingerprint (`ENGINE_VERSION` is unchanged).
+  * In the 1536 MB worker container, equal weight over 2005–2023 with 400 symbols at a daily
+    rebalance was killed for memory before. Now it completes, still near the limit.
+* **Admission:** a backtest is refused at submission (`422 backtest_too_large`) when its
+  estimated peak memory exceeds the configured limit.
+  * The estimate grows with symbols × sessions and symbols × rebalances.
+  * It is an envelope over the jobs measured in the real worker container; equal weight is
+    the worst case, so strategies holding fewer names are overestimated.
+  * It was measured only within 100–400 symbols over 2005–2023; larger backtests are
+    refused by a linear estimate, not measured.
+  * Details are in `docs/RUNBOOK.md` and `benchmarks/results/*-worker-memory-*.json`.
+
 **Reproduction.** The input hash covers the dataset version, strategy, parameters,
 config and `ENGINE_VERSION`. Re-running an experiment from an older engine therefore has
 different inputs even when nothing else changed. The reproducibility comparison lists

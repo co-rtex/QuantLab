@@ -42,6 +42,8 @@ COMPOSE = ["docker", "compose", "--profile", "app"]
 JOB_TIMEOUT_S = 900
 # A reaper cycle that requeued jobs, in JSON or key=value logs.
 REQUEUED = re.compile(r"requeued\W{1,3}([1-9]\d*)")
+# Development logs are coloured; the codes sit between a key and its value.
+ANSI = re.compile(r"\x1b\[[0-9;]*m")
 
 
 def _compose(*args: str) -> str:
@@ -212,7 +214,7 @@ def one(
         "message": job.get("message"),
         "horse_deaths_logged": worker_log.count("Work-horse terminated unexpectedly"),
         "oom_classified_logged": worker_log.count("job_out_of_memory"),
-        "reaper_requeues_logged": len(REQUEUED.findall(reaper_log)),
+        "reaper_requeues_logged": len(REQUEUED.findall(ANSI.sub("", reaper_log))),
         "container": cid[:12],
         "load": {"start": load_start, "end": harness.load_snapshot()},
         "wall_s": round(time.time() - t, 1),

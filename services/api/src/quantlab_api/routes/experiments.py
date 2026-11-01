@@ -21,6 +21,7 @@ from quantlab_api.jobs import (
     request_fingerprint,
     submit_job,
 )
+from quantlab_api.limits import backtest_cost, check_backtest_memory
 from quantlab_api.models import (
     Experiment,
     ExperimentResult,
@@ -134,6 +135,13 @@ def create_experiment(
     n_univ = len(wanted) if wanted else len(symbols)
     if n_univ > get_settings().max_backtest_symbols:
         raise ApiError(422, "universe_too_large", "Universe exceeds the configured limit")
+    # A job that cannot fit the worker's memory is refused here, not OOM-killed later (#163).
+    # A version without recorded dates has no window to estimate from.
+    if dv.start_date and dv.end_date:
+        check_backtest_memory(
+            backtest_cost(n_univ, dv.start_date, dv.end_date, cfg.start, cfg.end, cfg.rebalance),
+            get_settings().max_backtest_memory_mb,
+        )
     cfg_doc = cfg.model_dump(mode="json")
     exp = Experiment(
         workspace_id=workspace_id,
