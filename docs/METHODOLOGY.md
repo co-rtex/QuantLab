@@ -529,6 +529,31 @@ each differing input (`input_differences`, for example `engine_version 1.2.0 →
 The integrity report only uses same-input re-runs to verify or fail reproducibility; it
 names changed-input re-runs and leaves the check "not assessed" if they are the only ones.
 
+**An experiment recorded on an older engine, reproduced after an upgrade** (for example
+1.5.0 → 1.6.0):
+* **What runs.** *Reproduce* submits the experiment again with its stored dataset version,
+  strategy, parameters and config, on the deployment's current engine. The reproduction is
+  stamped 1.6.0 and gets a new input hash. There is no way to run the old engine again; the
+  original keeps its 1.5.0 results.
+* **What the API reports.** `/experiments/{id}/reproducibility` returns:
+  * `same_inputs: false`;
+  * `input_differences: [{"input": "engine_version", "original": "1.5.0",
+    "reproduction": "1.6.0"}]`;
+  * `fingerprint_match`: true when the outputs are identical, false when the engine change
+    altered them.
+* **Fingerprint differences.** Neither value is a reproducibility failure. Most runs match:
+  1.6.0 changed 2 of the 1,002 runs in its A/B. The reason a run moved is in the version
+  history below.
+* **The integrity report** leaves *Reproducibility* "not assessed", with the finding "1
+  re-run used different inputs (engine_version 1.5.0 → 1.6.0), so they do not test
+  reproducibility: only re-runs with the same inputs are assessed. Reproduce the re-run
+  itself to check it on the current engine; its own report then shows the result." A
+  same-input re-run, if one exists, still decides the status.
+* **A job queued before the upgrade** and stamped 1.5.0 is refused by a 1.6.0 worker
+  (#152), not run on the new rules. Submit or reproduce it again.
+* **A validation of the 1.5.0 experiment** runs on 1.6.0 and is flagged as not comparable
+  (`comparable_engine: false`, see *Engine versions*).
+
 Identical inputs give byte-identical outputs across processes (#182), with no tolerance
 needed. That covers the backtest frames and fingerprint, the analysis, the validation
 suite, the ML run and its predictions, the integrity report, and the HTML and Markdown
