@@ -11,8 +11,24 @@ from quantlab_api.observability import configure_logging, log
 
 
 def _reaper(interval: float) -> None:
+    import os
+
     from quantlab_api import tasks  # noqa: F401
+    from quantlab_api.config import get_settings
     from quantlab_api.jobs import reap
+    from quantlab_api.observability import serve_reaper_metrics
+
+    # Its retries and outcomes at :<port>/metrics when QUANTLAB_REAPER_METRICS_PORT is set
+    # (compose sets it, #179). Serving, it follows the API's rule: no production reaper
+    # without the metrics token. Without the port (the Terraform ECS task) it serves
+    # nothing and needs no token.
+    port = os.environ.get("QUANTLAB_REAPER_METRICS_PORT")
+    if port:
+        settings = get_settings()
+        settings.require_metrics_token()
+        token = settings.metrics_token.get_secret_value() if settings.metrics_token else None
+        serve_reaper_metrics(int(port), token)
+        log.info("reaper_metrics", port=int(port))
 
     stop = False
 

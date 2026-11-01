@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import os
 import re
-import socket
 import subprocess
 import sys
 import uuid
@@ -39,18 +38,14 @@ def _job(payload: dict) -> uuid.UUID:
         return job.id
 
 
-def _port() -> int:
-    with socket.socket() as s:
-        s.bind(("127.0.0.1", 0))
-        return s.getsockname()[1]
-
-
 def _worker(
     directory: Path, kind: str, job: uuid.UUID | None = None
 ) -> subprocess.CompletedProcess[str]:
     directory.mkdir(parents=True, exist_ok=True)
     env = {**os.environ, "PROMETHEUS_MULTIPROC_DIR": str(directory), "PYTHONPATH": str(ROOT)}
-    args = [str(_port()), TOKEN, kind, *([str(job)] if job else [])]
+    # Port 0: the child's server takes a free port itself (#194). Picking one here and
+    # binding it in the child raced other processes for it ("Address already in use").
+    args = ["0", TOKEN, kind, *([str(job)] if job else [])]
     return subprocess.run(
         [sys.executable, "-m", "tests.integration.worker_metrics_child", *args],
         cwd=ROOT,

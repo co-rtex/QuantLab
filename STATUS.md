@@ -1,6 +1,6 @@
 # Status (authoritative handoff)
 
-_Last updated: 2026-10-31 (lead integration cycle 2: 112 PRs merged before this update, per `gh pr list --state merged`; main `6eaf2d9`)_
+_Last updated: 2026-10-31 (lead integration cycle 2: 115 PRs merged before this update, per `gh pr list --state merged`; main `e7cf4fd`)_
 
 ## Where things stand
 All roadmap phases 0–10 are implemented. An independent audit on 2026-10-30
@@ -301,12 +301,15 @@ a separate clone.
 1. **Release blockers fixed:** #162 (in #170) and #163 (in #174). Also merged: #164 (in
    #172), #167 (in #171, migration M5) and #160 (in #176). See
    docs/RELEASE_READINESS.md, "Status update".
-2. **Agent 2:** #165 (worker metrics), then #175 (Docker VM vs container limits), then
-   #166 (CSP).
-3. **Lead:** after #165, an independent confirmation of job recovery on merged main, then
-   the private release-candidate decision.
-3. **Lead:** integrate.
-4. **User decisions (2026-10-31):**
+2. **Verified on merged main:** the independent job-recovery confirmation (`6fcdd07`) and
+   the lead's integrated gate (`e7cf4fd`). See docs/RELEASE_READINESS.md.
+3. **Agent 2:** #175 (Docker VM vs container limits, experiment running), then #179
+   (reaper metrics), #185 (Redis outage), #186 (reaper double delivery), #166 (CSP).
+4. **Agent 3:** #180/#184 (reference backtester and rejection-log fix, engine 1.4.1), then
+   #187 (phantom top-ups, engine 1.5.0), #181 (admission edge cases) and #182
+   (reproducibility).
+5. **Lead:** integrate; private release-candidate decision after #184, #187 and #181.
+6. **User decisions (2026-10-31):**
    * Public deployment and paid infrastructure **stay blocked** (#39 gate, any
      `terraform apply`).
    * #55 option A (uniform registration with email verification) is **deferred**
@@ -322,7 +325,7 @@ a separate clone.
    * Then an independent release-candidate assessment and a classified list of release
      blockers, not new feature work.
    * Paid market-data services and hosted LLM usage stay blocked.
-5. **Blocked on the user:**
+7. **Blocked on the user:**
    * #39 (a host that preserves client addresses, a second machine, and a real NLB; the
      Caddyfiles pass local checks only, #158);
    * #11 and #12 live (vendor, licence and key);

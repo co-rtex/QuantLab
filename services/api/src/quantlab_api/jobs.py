@@ -743,18 +743,21 @@ def _run_claimed(job: Job, jid: uuid.UUID, wid: str) -> str:
             _mirror_status(db, locked, JobStatus.completed)
             db.commit()
         outcome = "completed"
+    # Each outcome below is this attempt's only if its write wins the row (#179): the reaper
+    # may have decided the job first (a stalled worker's lease ran out), and counted it.
+    # A fenced write is "lease_lost", never a second terminal outcome.
     except JobCancelledError:
-        outcome = "cancelled"
-        _finish(jid, ctx.attempt, JobStatus.cancelled, message="cancelled by user")
+        won = _finish(jid, ctx.attempt, JobStatus.cancelled, message="cancelled by user")
+        outcome = "cancelled" if won else "lease_lost"
     except JobTimeoutError as exc:
-        outcome = "timed_out"
-        _finish(
+        won = _finish(
             jid,
             ctx.attempt,
             JobStatus.timed_out,
             message=str(exc),
             error={"type": "JobTimeoutError", "message": str(exc)},
         )
+        outcome = "timed_out" if won else "lease_lost"
     except LeaseLostError as exc:
         outcome = "lease_lost"
         bound.warning("job_lease_lost", error=str(exc))
@@ -770,10 +773,9 @@ def _run_claimed(job: Job, jid: uuid.UUID, wid: str) -> str:
         }
         cancelled = _cancel_requested(jid)
         if cancelled:
-            outcome = "cancelled"
-            _finish(jid, ctx.attempt, JobStatus.cancelled, message="cancelled by user")
+            won = _finish(jid, ctx.attempt, JobStatus.cancelled, message="cancelled by user")
+            outcome = "cancelled" if won else "lease_lost"
         elif not permanent and ctx.attempt < job.max_attempts:
-            outcome = "retry"
             delay = min(60.0, 2.0**ctx.attempt)
             with SessionLocal() as db:
                 res = db.execute(
@@ -793,17 +795,18 @@ def _run_claimed(job: Job, jid: uuid.UUID, wid: str) -> str:
                     _mirror_status(db, job, JobStatus.queued)
                 db.commit()
                 again = db.get(Job, jid)
+            outcome = "retry" if res.rowcount else "lease_lost"  # type: ignore[attr-defined]
             if res.rowcount and again is not None:  # type: ignore[attr-defined]
                 JOB_RETRIES.labels(job.kind, type(exc).__name__).inc()
                 enqueue(again, delay_seconds=delay)
         else:
-            outcome = "failed"
             public = (
                 str(exc)[:500]
                 if type(exc).__name__ in SAFE_ERROR_TYPES
                 else f"failed: {type(exc).__name__} (details in server logs)"
             )
-            _finish(jid, ctx.attempt, JobStatus.failed, message=public, error=err)
+            won = _finish(jid, ctx.attempt, JobStatus.failed, message=public, error=err)
+            outcome = "failed" if won else "lease_lost"
         bound.error("job_error", error=str(exc), outcome=outcome)
     finally:
         JOBS_RUNNING.dec()
@@ -979,6 +982,14 @@ def _classify_horse_death(rq_job: RQJob, retpid: int, ret_val: int, rusage: Any)
     log.warning("job_out_of_memory", job_id=args[0], peak_mb=round(peak), limit_mb=limit)
 
 
+def _count(decided: list[tuple[str, str]], requeued: list[str]) -> None:
+    """The reaper's decisions in the job metrics, as the worker counts its own (#179)."""
+    for kind, outcome in decided:
+        JOB_OUTCOMES.labels(kind, outcome).inc()
+    for kind in requeued:
+        JOB_RETRIES.labels(kind, "lease_expired").inc()
+
+
 def reap(redeliver_after_seconds: int = 120) -> dict[str, int]:
     """Recover jobs whose worker died and re-deliver queued jobs that were never picked up."""
     stats = {"requeued": 0, "failed": 0, "timed_out": 0, "redelivered": 0, "uploads_swept": 0}
@@ -993,6 +1004,8 @@ def reap(redeliver_after_seconds: int = 120) -> dict[str, int]:
             .where(Job.status == JobStatus.running, Job.lease_expires_at < t)
             .with_for_update(skip_locked=True)
         ).all()
+        decided: list[tuple[str, str]] = []  # (kind, outcome) of jobs it finished
+        requeued: list[str] = []  # kinds it requeued after a lost worker
         for job in stale:
             # How long this attempt ran: from its claim until its lease ran out (#167).
             # Waiting for a worker between attempts does not count, and neither does the
@@ -1009,11 +1022,13 @@ def reap(redeliver_after_seconds: int = 120) -> dict[str, int]:
                 job.message = "cancelled (worker stopped before observing the request)"
                 job.finished_at = t
                 stats["cancelled"] = stats.get("cancelled", 0) + 1
+                decided.append((job.kind, JobStatus.cancelled.value))
             elif ran.total_seconds() > job.timeout_seconds:
                 job.status = JobStatus.timed_out
                 job.message = "exceeded timeout (worker unresponsive)"
                 job.finished_at = t
                 stats["timed_out"] += 1
+                decided.append((job.kind, JobStatus.timed_out.value))
             elif job.attempts >= job.max_attempts:
                 job.status = JobStatus.failed
                 job.error = {
@@ -1024,17 +1039,24 @@ def reap(redeliver_after_seconds: int = 120) -> dict[str, int]:
                 job.message = "failed: worker lost and attempts exhausted"
                 job.finished_at = t
                 stats["failed"] += 1
+                decided.append((job.kind, JobStatus.failed.value))
             else:
                 job.status = JobStatus.queued
                 job.message = "requeued after worker loss"
                 job.lease_expires_at = None
                 stats["requeued"] += 1
-                JOB_RETRIES.labels(job.kind, "lease_expired").inc()
+                requeued.append(job.kind)
             _mirror_status(db, job, job.status)
         db.commit()
+        # Counted once committed (#179): a failed commit decided nothing, and the next pass
+        # decides again, so counting first would count it twice.
+        _count(decided, requeued)
         for job in stale:
-            if job.status == JobStatus.queued:
-                enqueue(job)
+            if job.status == JobStatus.queued and enqueue(job):
+                # Record the requeue's delivery, as the redelivery pass below records its own:
+                # without it that pass, in this same cycle, delivered the job again (#186).
+                # A failed enqueue is not recorded, so the job is still redelivered.
+                job.heartbeat_at = t
         cutoff = t - timedelta(seconds=redeliver_after_seconds)
         orphaned = db.scalars(
             select(Job)
@@ -1049,6 +1071,7 @@ def reap(redeliver_after_seconds: int = 120) -> dict[str, int]:
         if orphaned:
             stats["cancelled"] = stats.get("cancelled", 0) + len(orphaned)
             db.commit()
+            _count([(job.kind, JobStatus.cancelled.value) for job in orphaned], [])
         waiting = db.scalars(
             select(Job)
             .where(
