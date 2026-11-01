@@ -28,7 +28,7 @@ from quantlab_api.errors import ApiError
 from quantlab_api.limits import heavy_slot
 from quantlab_api.routes.datasets import load_version
 from quantlab_api.schemas import BoundedDate
-from quantlab_api.security import DB, CurrentUser, login_limiter
+from quantlab_api.security import DB, CurrentUser, login_limiter, rate_limited
 from quantlab_api.tasks import dataset_store
 
 router = APIRouter(tags=["optimization"])
@@ -63,7 +63,7 @@ def optimize(version_id: uuid.UUID, body: OptimizeIn, user: CurrentUser, db: DB)
         f"optimize:user:{user.id}", get_settings().rate_limit_optimize_per_minute
     )
     if not receipt:
-        raise ApiError(429, "rate_limited", "Too many attempts; try again later")
+        raise rate_limited(60, "Too many optimizations")
     try:
         with heavy_slot("optimize"):
             return _optimize(dv, ds, body)

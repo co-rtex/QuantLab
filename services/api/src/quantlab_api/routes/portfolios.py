@@ -192,7 +192,13 @@ def _create_portfolio(
         target_id=p.id,
     )
     db.commit()
-    return {"id": str(p.id), "name": p.name, "benchmark": p.benchmark}
+    return {
+        "id": str(p.id),
+        "name": p.name,
+        "benchmark": p.benchmark,
+        # As GET, the list and the valuation say (#239): synthetic data is always labelled.
+        "is_synthetic": provenance.is_synthetic(db, dv.id),
+    }
 
 
 @router.get("/workspaces/{workspace_id}/portfolios")

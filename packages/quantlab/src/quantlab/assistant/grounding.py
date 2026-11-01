@@ -1052,8 +1052,12 @@ def _supported(
                 return True
             if loss and gain and x >= 0:
                 continue  # "Since falling, total return rose 15.2%": which is it?
-            negative = x < 0 or loss
+            # The sign as written: "-0.00" parses to -0.0, which `x < 0` called positive, so
+            # an answer on a Sharpe of -0.0041 flagged its own "-0.00" (#238).
+            negative = math.copysign(1.0, x) < 0 or loss
+            if x == 0 and not negative:
+                return True  # an unsigned rounded zero: at that precision no sign shows
             if signed != 0 and negative != (signed < 0):
-                continue  # "lost 15.2%" for +15.2%, "15.2%" for -15.2%
+                continue  # "lost 15.2%" for +15.2%, "15.2%" for -15.2%, "-0.00" for +0.0041
             return True
     return False

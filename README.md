@@ -80,9 +80,20 @@ Open http://localhost:3000, create an account, generate a synthetic dataset unde
 The ports above are the main checkout's. In a linked worktree, `make` gives the checkout
 its own Compose project, volumes and port block (`make stack-env` prints them; override
 with `QUANTLAB_SLOT=<1-89>`), so `make up`, `make app-up`, `make api-dev`, `make web-dev`
-and `make e2e` never touch another checkout's containers. Integration tests use a
+and `make e2e` never touch another checkout's containers. In a linked worktree, `make`
+(through `scripts/stack-env.sh`) also writes a gitignored `docker-compose.override.yml`
+naming that project, so a bare `docker compose` there never reaches the main checkout's
+`quantlab` stack (#233). Two exceptions: before a worktree's first `make`, and with an
+explicit `-f` list, which skips override files; pass `-p` then. Integration tests use a
 per-worktree database (`quantlab_test_<hash>`) and a session advisory lock, so concurrent
 runs that do share a database wait for each other instead of truncating each other's tables.
+
+Full-stack runs (`make e2e-serial`, or any command under `scripts/fullstack-lock.sh run`)
+take a lock in git's common directory, which every linked worktree of one clone shares. A
+**separate clone** has its own git directory, and so its own lock: it does not wait for
+this clone's runs. Stop its stacks before running one here, or run from a worktree of the
+same clone. A separate clone also defaults to slot 0, the `quantlab` project; give it its
+own `QUANTLAB_SLOT` (#233).
 
 ## Testing
 

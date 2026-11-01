@@ -462,8 +462,15 @@ Deleting a workspace removes its files after the database commit (#21,
 
 ## Backup and restore
 
-* PostgreSQL: `docker compose exec postgres pg_dump -U quantlab -Fc quantlab > quantlab.dump`;
-  restore with `pg_restore -c -d quantlab quantlab.dump`. **Stop the worker and reaper
+* PostgreSQL, through the container (no host PostgreSQL tools needed):
+  * **Dump:** `docker compose exec -T postgres pg_dump -U quantlab -Fc quantlab > quantlab.dump`.
+  * **Restore:** `docker compose exec -T postgres pg_restore -U quantlab -c -d quantlab < quantlab.dump`.
+  * **`-T`** keeps a TTY off the binary stream.
+  * **These `docker compose` commands act on the current shell's project.** In a linked
+    worktree, run `eval "$(scripts/stack-env.sh)"` first, or add
+    `-p quantlab-<worktree>`, or they reach the main checkout's database (#233).
+
+  **Stop the worker and reaper
   first** (`docker compose stop worker reaper`), or set `QUANTLAB_STORAGE_SWEEP=false`, and start
   them again after the restore. While tables are dropped and reloaded the database has
   no rows for the files on disk; the sweep refuses to act on that, but don't rely on it.
@@ -553,10 +560,9 @@ the same host) replace it with a gateway address. Every user would then share on
 and ten failed logins would lock everyone out. Step 3 checks this.
 
 1. Start the stack with the edge overlay, which publishes only the edge and runs the API
-   in production mode. Its default is `QUANTLAB_ENVIRONMENT=production`
-   (`infra/edge/compose.yml`), so an exported or `.env` value overrides it: leave
-   `QUANTLAB_ENVIRONMENT` unset, or set it to `production`. Under `development`, the API
-   docs are served and none of the production guards run.
+   in production mode. The overlay pins `QUANTLAB_ENVIRONMENT=production` for the API,
+   worker and reaper (`infra/edge/compose.yml`, #235), so an exported or `.env` value,
+   such as `.env.example`'s `development`, cannot turn off the production guards.
    ```
    export QUANTLAB_EDGE_SECRET=$(openssl rand -hex 32)   # store it like the JWT secret
    export QUANTLAB_JWT_SECRET=$(openssl rand -hex 32) QUANTLAB_METRICS_TOKEN=$(openssl rand -hex 24)

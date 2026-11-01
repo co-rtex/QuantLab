@@ -104,14 +104,40 @@ def test_roles_enforced(client):
 
 def test_login_rate_limit(client, monkeypatch):
     monkeypatch.setattr(get_settings(), "rate_limit_login_per_minute", 3)
-    codes = [
-        client.post(
-            "/api/v1/auth/login", json={"email": "x@example.com", "password": "Whatever-1"}
-        ).status_code
+    out = [
+        client.post("/api/v1/auth/login", json={"email": "x@example.com", "password": "Whatever-1"})
         for _ in range(5)
     ]
+    codes = [r.status_code for r in out]
     assert codes[:3] == [401, 401, 401]
     assert codes[3:] == [429, 429]
+    # #239: Retry-After (the limiter clock is mid-minute), and wording that isn't login's own.
+    assert out[3].headers["retry-after"] == "30"
+    assert out[3].json()["error"]["message"] == "Too many requests; try again in 30 s."
+
+
+def test_an_account_s_failed_logins_say_when_to_try_again(monkeypatch):
+    """#239: the account budget's 429 had no Retry-After. Each attempt from its own address,
+    so only the account's budget (3 × the per-address limit) is spent."""
+    from fastapi.testclient import TestClient
+
+    from quantlab_api.main import app
+
+    monkeypatch.setattr(get_settings(), "trusted_proxies", ["10.0.0.5"])
+    monkeypatch.setattr(get_settings(), "rate_limit_login_per_minute", 1)
+    wrong = {"email": "x@example.com", "password": "Whatever-1"}
+    with TestClient(app, client=("10.0.0.5", 4000)) as web:
+        out = [
+            web.post(
+                "/api/v1/auth/login", json=wrong, headers={"X-Forwarded-For": f"203.0.113.{i}"}
+            )
+            for i in range(4)
+        ]
+    assert [r.status_code for r in out] == [401, 401, 401, 429]
+    assert out[3].headers["retry-after"] == "30"
+    assert out[3].json()["error"]["message"] == (
+        "Too many failed sign-in attempts for this account; try again in 30 s."
+    )
 
 
 def test_sql_injection_like_inputs_are_inert(client, seeded):
