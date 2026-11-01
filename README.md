@@ -101,5 +101,6 @@ See [docs/TEST_MATRIX.md](docs/TEST_MATRIX.md) for what each layer covers.
 No licensed market-data feed or LLM credentials are configured in this environment. All
 bundled data is **synthetic** and labelled as such in the API (`is_synthetic`) and in the
 UI. A CSV provider is available for user-supplied data whose licence permits local
-research use. See [docs/METHODOLOGY.md](docs/METHODOLOGY.md#known-limitations) and
+research use. A CSV upload takes up to 50 MiB per file and 110 MiB per request, with no row
+limit; see [docs/RUNBOOK.md](docs/RUNBOOK.md#csv-imports-limits-and-failures-239). See [docs/METHODOLOGY.md](docs/METHODOLOGY.md#known-limitations) and
 [docs/BLOCKERS.md](docs/BLOCKERS.md).

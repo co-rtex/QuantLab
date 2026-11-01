@@ -158,7 +158,7 @@ class _Reader:
         if p.size > p.limit:
             if p.is_file:
                 mb = p.limit // 2**20
-                raise ApiError(413, "upload_too_large", f"Uploads are limited to {mb} MB")
+                raise ApiError(413, "upload_too_large", f"Uploads are limited to {mb} MiB")
             raise invalid(p.name, "Value is too long", "string_too_long")
         if p.is_file:
             self.ops.append(("write", p, data[start:end]))
