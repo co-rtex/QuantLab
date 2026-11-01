@@ -106,6 +106,11 @@ stack, ports and named volumes. Use `QUANTLAB_SLOT=n make up|app-up|down`, or
 `eval "$(scripts/stack-env.sh | sed 's/^/export /')"` first, and check
 `echo $COMPOSE_PROJECT_NAME` before any `down`.
 
+**Docker Desktop Resource Saver** stops an idle VM once every container is stopped, and
+starts it again with the next command. Worktree slots (restart policy `no`, #170) do not
+come back afterwards, so run `QUANTLAB_SLOT=n make up` again. The VM's kernel log starts
+at that boot, so read OOM evidence promptly (#175).
+
 **Incident (2026-10-31): E2E data written into the main checkout's volumes.** Two of Agent
 2's targeted E2E runs (for #144 and #151) used a wrapper that set `QUANTLAB_SLOT=21` but
 didn't load `scripts/stack-env.sh`. So they ran as project `quantlab`, on ports
