@@ -912,8 +912,9 @@ def horse_killed(rq_job: RQJob, retpid: int, ret_val: int, rusage: Any) -> None:
     args = getattr(rq_job, "args", None) or []
     if len(args) != 1 or not isinstance(args[0], str) or not _is_uuid(args[0]):
         return
-    # The attempt that died: before #162 the horse claimed as host:<its pid>; since then
-    # it inherits the worker's identity. A job another worker has reclaimed is left alone.
+    # The attempt that died: since #170 the horse inherits the worker's fixed name, so the
+    # worker's own identity matches; host:<its pid> is what a horse claimed as before. A
+    # job another worker has reclaimed is left alone.
     horse = {worker_identity(), f"{socket.gethostname()}:{retpid}"}
     limit_text = f" of the worker's {limit:.0f} MB limit" if limit else ""
     with SessionLocal() as db:

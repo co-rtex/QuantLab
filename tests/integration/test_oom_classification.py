@@ -81,6 +81,20 @@ def test_an_oom_killed_horse_fails_its_job_as_resource_exhausted(client, seeded,
     assert run_pending_jobs() == []  # not retried into the same wall
 
 
+def test_the_attempt_is_matched_by_the_workers_own_name_since_162(client, seeded, cgroup):
+    # Since #170 the horse inherits the worker's fixed name (<host>-<pid>-<hex>), so the
+    # match no longer depends on the horse's pid.
+    from quantlab_api.jobs import claim, worker_identity
+
+    job_id = uuid.UUID(submit(client, seeded).json()["job"]["id"])
+    name = worker_identity()
+    assert ":" not in name and name.count("-") >= 2
+    assert claim(job_id, name) is not None
+    cgroup["kills"] = 1
+    _killed(job_id, pid=999_999)  # not the claiming pid: only the name can match
+    assert _job(job_id).error["type"] == "ResourceExhausted"
+
+
 def test_a_peak_at_the_memory_limit_counts_without_an_oom_kill_count(client, seeded, cgroup):
     job_id, pid, _ = _running(client, seeded)
     _killed(job_id, pid, peak_kb=LIMIT // 2**10)  # no oom_kill rise, but at the limit
