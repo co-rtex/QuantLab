@@ -112,7 +112,7 @@ MUTATIONS = [
     Mutation(
         "M9",
         ENG,
-        "if need > cash > 0:",
+        "if need > cash > need * 1e-9:",
         "if False:",
         "buys not scaled when cash is short (sort order decides)",
     ),
@@ -133,7 +133,7 @@ MUTATIONS = [
     Mutation(
         "M12",
         ENG,
-        "px = ref * (1 + slip) if qty > 0 else ref * (1 - slip)",
+        "px = ref * (1 + slip) if buy else ref * (1 - slip)",
         "px = ref * (1 + slip)",
         "sells pay slippage in the wrong direction",
     ),
