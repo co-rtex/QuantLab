@@ -1,5 +1,44 @@
 # Release-candidate readiness (2026-10-31)
 
+## Status update (later on 2026-10-31, main `6eaf2d9`)
+**Both code-defect release blockers are fixed and merged.** Each had an independent
+review, a trial on current main (full pytest and serial Playwright) and green CI.
+
+**Fixed:**
+* **#162 (private-use blocker), in #170.** A worker gets a unique name per start
+  (`<host>-<pid>-<hex>`) and a restart policy. Worktree dev slots default to no restart,
+  so they don't come back with Docker Desktop. The main checkout and the edge overlay
+  keep `unless-stopped`. Crash probe: workers rejoined in 4.7–6.3 s, and the job
+  completed on attempt 2.
+* **#163, in #174.**
+  * Engine memory down 23–26%, with results bit-for-bit identical in an independent
+    24-scenario A/B (no engine version bump).
+  * OOM kills are classified as `ResourceExhausted`, not retried.
+  * Admission is bounded to the measured range. The cost: for 2005–2023 the effective
+    caps are about 199 symbols daily and 400 otherwise, where the documented limit was
+    1500.
+* **#164, in #172:** the adjuster look-ahead test. The suite now catches all 8 injected
+  financial defects.
+* **#167, in #171:** the job timeout is per attempt (migration M5).
+* **#160, in #176:** the benchmark contended check.
+
+**Remaining before a private release candidate:**
+* An independent confirmation of the job-recovery area (crash, OOM, cancel, Redis outage)
+  on merged main. It will run after #165 (worker metrics), which changes the worker.
+
+**Still blocking public deployment** (unchanged; none of these are code defects):
+* #39: external infrastructure;
+* #168: a product decision on account lifecycle;
+* AWS credentials and cost, if AWS is the target.
+
+**Open, non-blocking:**
+* #165: worker metrics, in progress.
+* #166: CSP.
+* #175: container memory limits against the Docker VM size.
+* Large, xl and load benchmarks need a quiet window under the new rule.
+
+The assessment below is unchanged, as written at `da8767a`.
+
 **Verdict.** QuantLab at `0939811` is **not yet a release candidate**.
 * **Private, self-hosted use:** ready once one code defect is fixed. Workers can't rejoin for
   about seven minutes after an unclean exit, and nothing restarts them (#162).
