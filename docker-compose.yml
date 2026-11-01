@@ -60,7 +60,8 @@ services:
     environment:
       <<: *app-env
       PROMETHEUS_MULTIPROC_DIR: /tmp/prometheus
-      # Heavy request-time work (optimize, the portfolio ledger) per API process (#223).
+      # Heavy request-time work (the portfolio ledger) per API process (#223), and
+      # optimization submissions per user and minute (a worker job since #224).
       QUANTLAB_HEAVY_REQUESTS_PER_PROCESS: ${QUANTLAB_HEAVY_REQUESTS_PER_PROCESS:-1}
       QUANTLAB_RATE_LIMIT_OPTIMIZE_PER_MINUTE: ${QUANTLAB_RATE_LIMIT_OPTIMIZE_PER_MINUTE:-10}
     command: ["sh", "-c", "alembic -c services/api/alembic.ini upgrade head && rm -rf \"$$PROMETHEUS_MULTIPROC_DIR\" && mkdir -p \"$$PROMETHEUS_MULTIPROC_DIR\" && uvicorn quantlab_api.main:app --host 0.0.0.0 --port 8000 --proxy-headers --workers ${QUANTLAB_API_WORKERS:-2}"]

@@ -82,16 +82,26 @@ function Optimizer() {
   const run = useApi<OptimizationRun>(runId ? `/optimizations/${runId}` : null, { poll: pollRun });
   const res = run.data?.status === "completed" ? (run.data.result ?? undefined) : undefined;
   const active = run.data?.status === "queued" || run.data?.status === "running";
-  const [err, setErr] = useState<ApiError>();
-  const [submitting, setSubmitting] = useState(false);
+  // An error belongs to the run it came from: none is carried to another ?run=.
+  const [failure, setFailure] = useState<{ run: string | null; error: ApiError }>();
+  const err = failure && failure.run === runId ? failure.error : undefined;
+  const setErr = (error: ApiError) => setFailure({ run: runId, error });
+  // A submission is pending from its click until the URL leaves the run it was made from
+  // (null: none). The button then stays disabled through the new run's first load, and no
+  // second click queues a second job; opening any other run ends the wait.
+  const [submittedFrom, setSubmittedFrom] = useState<string | null>();
+  // Ended once the URL has moved on (React's adjust-state-while-rendering pattern), so
+  // going back to that run later doesn't disable the button again.
+  if (submittedFrom !== undefined && submittedFrom !== runId) setSubmittedFrom(undefined);
+  const pending = submittedFrom !== undefined || run.loading || active;
 
   async function submit(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();
     const f = new FormData(e.currentTarget);
     const text = String(f.get("symbols") ?? "").trim();
     const symbols = text ? text.split(/[\s,]+/).filter(Boolean) : assets.slice(0, 12).map((a) => a.symbol);
-    setSubmitting(true);
-    setErr(undefined);
+    setSubmittedFrom(runId);
+    setFailure(undefined);
     try {
       const queued = await api<OptimizationRun>(`/dataset-versions/${dvId}/optimizations`, {
         method: "POST",
@@ -108,8 +118,8 @@ function Optimizer() {
       router.replace(`/optimize?run=${queued.id}`);
     } catch (x) {
       setErr(x as ApiError);
+      setSubmittedFrom(undefined);
     }
-    setSubmitting(false);
   }
 
   async function cancel() {
@@ -166,28 +176,35 @@ function Optimizer() {
             </label>
           </div>
           <ErrorNote error={err} />
-          {/* Disabled while a submission or a run is pending, and before the instruments load:
-              the default symbols are their first 12, and a click before then sent
-              "symbols": [] and got 422 "Request validation failed" (seen in #232's CI). Viewers
-              read results only: a run writes a job and its result (#224). */}
-          <button className="btn btn-primary" disabled={!canEdit || submitting || active || !dvId || !inst.data}>
-            {submitting || active ? "Optimizing…" : "Compare allocations"}
+          {/* Disabled while a submission or a run is pending (a new run's first load
+              included, or a second click queued a second job), and before the instruments
+              load: the default symbols are their first 12, and a click before then sent
+              "symbols": [] and got 422 "Request validation failed" (seen in #232's CI).
+              Viewers read results only: a run writes a job and its result (#224). */}
+          <button
+            className="btn btn-primary"
+            disabled={!canEdit || pending || !dvId || !inst.data}
+            aria-describedby={workspace && !canEdit ? "optimize-viewer-reason" : undefined}
+          >
+            {pending ? "Optimizing…" : "Compare allocations"}
           </button>
           {workspace && !canEdit && (
-            <p className="text-xs text-ink-2">Viewers can read optimization results. Running one needs the editor role; ask a workspace owner.</p>
+            <p id="optimize-viewer-reason" className="text-xs text-ink-2">
+              Viewers can read optimization results. Running one needs the editor role; ask a workspace owner.
+            </p>
           )}
         </form>
       </Panel>
       <Panel title="Allocations" aside={res ? `${res.window_start} to ${res.as_of}, ${res.observations} sessions` : undefined}>
         <QueryError q={run} what="the optimization" />
+        {/* Its progress, and a failed run's message (JobProgress shows the job's error). */}
         {run.data?.job && run.data.status !== "completed" && (
-          <div className="mb-4 space-y-2">
+          <div className="mb-4">
             <JobProgress job={run.data.job} onCancel={canEdit ? cancel : undefined} />
-            {run.data.job.error && <p className="text-sm text-loss">{run.data.job.error.message}</p>}
           </div>
         )}
         {!res ? (
-          !run.data && <p className="text-sm text-ink-2">Choose assets and a date to compare equal weight, minimum variance, mean-variance and risk parity.</p>
+          !runId && <p className="text-sm text-ink-2">Choose assets and a date to compare equal weight, minimum variance, mean-variance and risk parity.</p>
         ) : (
           <div className="space-y-4">
             {res.is_synthetic && <SyntheticTag />}

@@ -20,16 +20,21 @@ test("a viewer reads an optimization but cannot run one", async ({ browser }: { 
   const ws = (await (await owner.request.get("/api/v1/workspaces")).json())[0].id as string;
   const job = await (
     await owner.request.post(`/api/v1/workspaces/${ws}/datasets/synthetic`, {
-      data: { slug: `optimize-${stamp}`, name: "Optimize data", n_assets: 6, start: "2020-01-02", end: "2021-12-31" },
+      data: { slug: `optimize-${stamp}`, name: "Optimize data", n_assets: 8, start: "2020-01-02", end: "2021-12-31" },
     })
   ).json();
   await expect.poll(async () => (await (await owner.request.get(`/api/v1/jobs/${job.id}`)).json()).status, { timeout: 60_000 }).toBe("completed");
   const dv = (await (await owner.request.get(`/api/v1/workspaces/${ws}/dataset-versions`)).json())[0].id as string;
-  const body = { symbols: ["SYN001", "SYN002", "SYN003"], lookback: 120 };
+  // Every asset, as the page's default does: synthetic names can list late or delist, and
+  // a run needs two with enough history.
+  const body = { symbols: Array.from({ length: 8 }, (_, i) => `SYN00${i + 1}`), lookback: 120 };
   const submitted = await owner.request.post(`/api/v1/dataset-versions/${dv}/optimizations`, { data: body });
   expect(submitted.status()).toBe(202);
   const run = await submitted.json();
-  await expect.poll(async () => (await (await owner.request.get(`/api/v1/optimizations/${run.id}`)).json()).status, { timeout: 60_000 }).toBe("completed");
+  const settled = async () => (await owner.request.get(`/api/v1/optimizations/${run.id}`)).json();
+  await expect.poll(async () => (await settled()).status, { timeout: 60_000 }).not.toMatch(/queued|running/);
+  const done = await settled();
+  expect(done.status, JSON.stringify(done.job?.error)).toBe("completed");
 
   const email = `optimize-v-${stamp}@example.com`;
   const created = await (await owner.request.post(`/api/v1/workspaces/${ws}/invitations`, { data: { email, role: "viewer" } })).json();
