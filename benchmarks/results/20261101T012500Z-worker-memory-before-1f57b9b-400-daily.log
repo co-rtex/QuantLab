@@ -1,0 +1,16 @@
+===== worker e6407e78e2aa
+2026-11-01T01:30:20.684805305Z [2m2026-11-01T01:30:20.684624Z[0m [[32m[1minfo     [0m] [1mworker_start                  [0m [36mname[0m=[35me6407e78e2aa-1-80d3aeb2[0m [36mqueue[0m=[35mquantlab[0m
+2026-11-01T01:30:20.796816888Z [2m2026-11-01T01:30:20.796635Z[0m [[32m[1minfo     [0m] [1mjob_start                     [0m [36mattempt[0m=[35m1[0m [36mjob_id[0m=[35mcbf8246e-2240-4ab1-9cc6-8a5c5bc5642b[0m [36mkind[0m=[35mbacktest[0m [36mrequest_id[0m=[35mc330fb4103414733b58a570d86e4db1b[0m
+2026-11-01T01:31:50.753838680Z Worker e6407e78e2aa-1-80d3aeb2: job 27ed09d1-5dcd-457d-babd-b82e12d7ed7e failed (Work-horse terminated unexpectedly; waitpid returned 9 (signal 9); )
+2026-11-01T01:31:50.755877263Z Work horse killed for job 27ed09d1-5dcd-457d-babd-b82e12d7ed7e: retpid=35, ret_val=9
+2026-11-01T01:32:40.729943300Z [2m2026-11-01T01:32:40.728221Z[0m [[32m[1minfo     [0m] [1mjob_start                     [0m [36mattempt[0m=[35m2[0m [36mjob_id[0m=[35mcbf8246e-2240-4ab1-9cc6-8a5c5bc5642b[0m [36mkind[0m=[35mbacktest[0m [36mrequest_id[0m=[35mc330fb4103414733b58a570d86e4db1b[0m
+2026-11-01T01:34:00.789728545Z Worker e6407e78e2aa-1-80d3aeb2: job 607265ce-4cdb-45a5-8e3c-128bbc5d31b0 failed (Work-horse terminated unexpectedly; waitpid returned 9 (signal 9); )
+2026-11-01T01:34:00.790828920Z Work horse killed for job 607265ce-4cdb-45a5-8e3c-128bbc5d31b0: retpid=798, ret_val=9
+2026-11-01T01:35:16.542662178Z [2m2026-11-01T01:35:16.541374Z[0m [[32m[1minfo     [0m] [1mjob_start                     [0m [36mattempt[0m=[35m3[0m [36mjob_id[0m=[35mcbf8246e-2240-4ab1-9cc6-8a5c5bc5642b[0m [36mkind[0m=[35mbacktest[0m [36mrequest_id[0m=[35mc330fb4103414733b58a570d86e4db1b[0m
+2026-11-01T01:36:31.134340212Z Worker e6407e78e2aa-1-80d3aeb2: job c3f6cc95-7b9c-494f-966a-f57af245c8ef failed (Work-horse terminated unexpectedly; waitpid returned 9 (signal 9); )
+2026-11-01T01:36:31.135117920Z Work horse killed for job c3f6cc95-7b9c-494f-966a-f57af245c8ef: retpid=1639, ret_val=9
+
+===== reaper 636b8ee89e63
+2026-11-01T01:32:39.892196841Z [2m2026-11-01T01:32:39.888395Z[0m [[32m[1minfo     [0m] [1mreaper_cycle                  [0m [36mfailed[0m=[35m0[0m [36morphans_swept[0m=[35m0[0m [36mredelivered[0m=[35m0[0m [36mrequeued[0m=[35m1[0m [36mtimed_out[0m=[35m0[0m [36mtrash_purged[0m=[35m0[0m [36muploads_swept[0m=[35m0[0m
+2026-11-01T01:35:15.700675886Z [2m2026-11-01T01:35:15.699258Z[0m [[32m[1minfo     [0m] [1mreaper_cycle                  [0m [36mfailed[0m=[35m0[0m [36morphans_swept[0m=[35m0[0m [36mredelivered[0m=[35m0[0m [36mrequeued[0m=[35m1[0m [36mtimed_out[0m=[35m0[0m [36mtrash_purged[0m=[35m0[0m [36muploads_swept[0m=[35m0[0m
+2026-11-01T01:37:35.885154339Z [2m2026-11-01T01:37:35.883351Z[0m [[32m[1minfo     [0m] [1mreaper_cycle                  [0m [36mfailed[0m=[35m1[0m [36morphans_swept[0m=[35m0[0m [36mredelivered[0m=[35m0[0m [36mrequeued[0m=[35m0[0m [36mtimed_out[0m=[35m0[0m [36mtrash_purged[0m=[35m0[0m [36muploads_swept[0m=[35m0[0m

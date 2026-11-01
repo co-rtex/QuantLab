@@ -11,7 +11,7 @@ from rq import Worker
 
 from quantlab_api import tasks  # noqa: F401 - registers job handlers
 from quantlab_api.config import get_settings
-from quantlab_api.jobs import RQ_OPTIONS, get_queue, redis_conn, worker_identity
+from quantlab_api.jobs import RQ_OPTIONS, get_queue, horse_killed, redis_conn, worker_identity
 from quantlab_api.observability import configure_logging, log
 from quantlab_api.tracing import setup_tracing
 
@@ -22,7 +22,13 @@ def main() -> None:
     # A new name per start unless QUANTLAB_WORKER_NAME fixes one (#162): see worker_identity.
     name = worker_identity()
     # JSON only, trusted jobs only (#115): a worker without these unpickles the queue.
-    worker = Worker([get_queue()], connection=redis_conn(), name=name, **RQ_OPTIONS)
+    worker = Worker(
+        [get_queue()],
+        connection=redis_conn(),
+        name=name,
+        work_horse_killed_handler=horse_killed,  # out-of-memory kills (#163)
+        **RQ_OPTIONS,
+    )
     log.info("worker_start", name=name, queue=get_settings().queue_name)
     worker.work(with_scheduler=True, logging_level="WARNING")
 

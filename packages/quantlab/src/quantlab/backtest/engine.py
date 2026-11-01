@@ -34,6 +34,7 @@ from __future__ import annotations
 
 import hashlib
 import math
+from array import array
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import date
@@ -133,6 +134,55 @@ class BacktestResult:
             h.update(self.trades["symbol"].str.cat(sep="|").encode())
             h.update(np.round(self.trades[["quantity", "price"]].to_numpy(), 6).tobytes())
         return h.hexdigest()
+
+
+class _Rows:
+    """Result rows kept by column while the simulation runs (#163).
+
+    A list of one dict per trade cost about 830 bytes a row: about 1 GB for 400 names
+    rebalanced daily over 19 years, which is what exhausted a 1.5 GB worker. Float columns
+    are C arrays of float64 (the values the frame would hold anyway). The others stay in
+    lists, so pandas infers their dtypes exactly as it did from the rows.
+    """
+
+    def __init__(self, columns: tuple[str, ...], floats: frozenset[str]) -> None:
+        self.columns = columns
+        self._cols: list[Any] = [array("d") if c in floats else [] for c in columns]
+        self.n = 0
+
+    def append(self, *values: Any) -> None:
+        for col, v in zip(self._cols, values, strict=True):
+            col.append(v)
+        self.n += 1
+
+    def frame(self) -> pd.DataFrame:
+        """The rows as a frame. The columns are released, so call this once, at the end."""
+        cols, self._cols = self._cols, []
+        if not self.n:  # as an empty row list gave: object columns
+            return pd.DataFrame(columns=list(self.columns))
+        return pd.DataFrame(
+            {
+                name: np.frombuffer(col, dtype=np.float64) if isinstance(col, array) else col
+                for name, col in zip(self.columns, cols, strict=True)
+            }
+        )
+
+
+TRADE_COLUMNS = (
+    "date",
+    "decision_date",
+    "symbol",
+    "side",
+    "quantity",
+    "reference_price",
+    "price",
+    "notional",
+    "commission",
+    "slippage_cost",
+    "partial",
+    "note",
+)
+_TRADE_FLOATS = frozenset({"reference_price", "price", "notional", "commission", "slippage_cost"})
 
 
 def rebalance_mask(dates: pd.DatetimeIndex, freq: str) -> np.ndarray:
@@ -279,10 +329,10 @@ def run_backtest(
     last_px = np.full(len(universe), np.nan)
     pending: list[Order] = []
     records: list[dict[str, Any]] = []
-    trades: list[dict[str, Any]] = []
+    trades = _Rows(TRADE_COLUMNS, _TRADE_FLOATS)
     rejects: list[dict[str, Any]] = []
-    pos_rows: list[tuple[pd.Timestamp, str, float, float]] = []
-    decisions: list[tuple[pd.Timestamp, str, float]] = []
+    pos_rows = _Rows(("date", "symbol", "quantity", "price"), frozenset({"price"}))
+    decisions = _Rows(("date", "symbol", "weight"), frozenset({"weight"}))
     cum = {"commission": 0.0, "slippage": 0.0, "dividends": 0.0}
     # Held positions marked at a stale price: a zero-volume close, or the last close when
     # the session has no bar. Equity on stale marks is not realisable.
@@ -395,19 +445,18 @@ def run_backtest(
             cum["slippage"] += slip_cost
             traded += notional
             trades.append(
-                {
-                    "date": d,
-                    "decision_date": o.decision_date,
-                    "symbol": o.symbol,
-                    "side": "buy" if qty > 0 else "sell",
-                    "quantity": qty,
-                    "reference_price": ref,
-                    "price": px,
-                    "notional": notional,
-                    "commission": commission,
-                    "slippage_cost": slip_cost,
-                    "partial": partial,
-                }
+                d,
+                o.decision_date,
+                o.symbol,
+                "buy" if qty > 0 else "sell",
+                qty,
+                ref,
+                px,
+                notional,
+                commission,
+                slip_cost,
+                partial,
+                None,
             )
         return traded
 
@@ -459,20 +508,18 @@ def run_backtest(
             else:
                 delist_counts["with_return" if has_ret else "return_unknown"] += 1
             trades.append(
-                {
-                    "date": d,
-                    "decision_date": d,
-                    "symbol": sym,
-                    "side": "sell",
-                    "quantity": -q,
-                    "reference_price": last_px[j],
-                    "price": max(value, 0.0),
-                    "notional": abs(q) * max(value, 0.0),
-                    "commission": 0.0,
-                    "slippage_cost": 0.0,
-                    "partial": False,
-                    "note": f"delisting: {note}",
-                }
+                d,
+                d,
+                sym,
+                "sell",
+                -q,
+                last_px[j],
+                max(value, 0.0),
+                abs(q) * max(value, 0.0),
+                0.0,
+                0.0,
+                False,
+                f"delisting: {note}",
             )
             traded += abs(q) * max(value, 0.0)
         for sym in list(ledger.positions):
@@ -484,20 +531,18 @@ def run_backtest(
                 q = ledger.quantity(sym)
                 ledger.trade(d, sym, -q, last_px[j], note="delisted: liquidated at last close")
                 trades.append(
-                    {
-                        "date": d,
-                        "decision_date": d,
-                        "symbol": sym,
-                        "side": "sell",
-                        "quantity": -q,
-                        "reference_price": last_px[j],
-                        "price": last_px[j],
-                        "notional": abs(q) * last_px[j],
-                        "commission": 0.0,
-                        "slippage_cost": 0.0,
-                        "partial": False,
-                        "note": "delisting",
-                    }
+                    d,
+                    d,
+                    sym,
+                    "sell",
+                    -q,
+                    last_px[j],
+                    last_px[j],
+                    abs(q) * last_px[j],
+                    0.0,
+                    0.0,
+                    False,
+                    "delisting",
                 )
                 traded += abs(q) * last_px[j]
         # 2/3. execute orders queued at the previous decision
@@ -533,7 +578,7 @@ def run_backtest(
         )
         if record_positions:
             for s, q in ledger.positions.items():
-                pos_rows.append((d, s, q, prices[s]))
+                pos_rows.append(d, s, q, prices[s])
         # 5. decision at the close
         if rebal[step] and k + 1 < len(dates) and k + 1 >= warmup:
             scale = adjuster.scale_as_of(k)
@@ -560,7 +605,7 @@ def run_backtest(
             if target is not None:
                 target = _sanitize(target, view, config)
                 for s, w in target.items():
-                    decisions.append((d, s, float(w)))
+                    decisions.append(d, s, float(w))
                 pending = _orders(d, target, ledger, row, last_px, col, equity, config)
         if on_progress is not None and (step % 25 == 0 or step == n_steps - 1):
             on_progress((step + 1) / n_steps)
@@ -578,13 +623,15 @@ def run_backtest(
     eq = pd.DataFrame(records).set_index("date")
     eq["gross_equity"] = eq["equity"] + eq["cum_commission"] + eq["cum_slippage"]
     eq["turnover"] = eq["traded_notional"] / eq["equity"].shift(1).fillna(config.initial_capital)
-    trades_df = pd.DataFrame(trades)
-    if len(trades_df) and "note" not in trades_df:
-        trades_df["note"] = None
+    # As built from row dicts before: no columns without trades, and a fill's missing
+    # note is NaN when some trade has a note, None when none does.
+    trades_df = trades.frame() if trades.n else pd.DataFrame()
+    if len(trades_df) and trades_df["note"].notna().any():
+        trades_df["note"] = trades_df["note"].where(trades_df["note"].notna(), np.nan)
     rej_df = pd.DataFrame(
         rejects, columns=["date", "decision_date", "symbol", "quantity", "reason"]
     )
-    pos_df = pd.DataFrame(pos_rows, columns=["date", "symbol", "quantity", "price"])
+    pos_df = pos_rows.frame()
     if len(pos_df):
         pos_df["value"] = pos_df["quantity"] * pos_df["price"]
         pos_df["weight"] = pos_df["value"] / pos_df["date"].map(eq["equity"])
@@ -609,7 +656,7 @@ def run_backtest(
         trades=trades_df,
         rejections=rej_df,
         positions=pos_df,
-        weights_target=pd.DataFrame(decisions, columns=["date", "symbol", "weight"]),
+        weights_target=decisions.frame(),
         benchmark=bench_series,
         ledger=ledger,
         meta={

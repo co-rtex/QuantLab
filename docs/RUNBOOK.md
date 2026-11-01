@@ -127,6 +127,63 @@ Retryable errors are retried with the backoff above until `max_attempts`. Perman
 errors (invalid input, missing dataset) are not retried. Fix the input and submit a new
 experiment; results of failed jobs are never stored.
 
+### Backtests that don't fit the worker's memory (#163)
+* **At submission:** `422 backtest_too_large`, for either of two reasons, given in
+  `details.reason`.
+  * **`estimated_memory`:** the estimated peak memory exceeds
+    `QUANTLAB_MAX_BACKTEST_MEMORY_MB`.
+    * The estimate grows with symbols × sessions loaded and symbols × rebalances in the
+      window.
+    * Sessions are the larger of the exchange calendar's count and the version's distinct
+      bar dates.
+    * It ignores the strategy, so a strategy that holds few names is overestimated.
+    * The default limit is 1228 MB, which is 80% of the compose worker's 1536 MB limit.
+    * `details` give the estimate, the limit, and the symbols, sessions and rebalances.
+  * **`outside_measured_range`:** the backtest has more than 400 symbols, or symbols ×
+    sessions or symbols × rebalances above 400 × 4,785. Those products are what was
+    measured, so larger backtests are refused rather than estimated.
+    * A long history of few symbols stays inside: per-session costs that don't scale with
+      symbols are about 1 KB a session.
+    * A new measurement (below) can widen the range.
+* **What reduces a backtest's memory:** fewer symbols, a less frequent rebalance or an
+  earlier end date. The job loads the data from its first bar up to the end date, whatever
+  the start. So a later start doesn't reduce what is loaded, and helps only by cutting
+  rebalances.
+* **Effective caps for 2005–2023** (4,785 sessions) under the defaults, of the 1,500-symbol
+  universe limit:
+
+  | Rebalance | Most symbols | What decides it |
+  |---|---|---|
+  | daily | 199 | the estimate |
+  | weekly | 400 | the measured range (the estimate alone would allow 407) |
+  | monthly | 400 | the measured range (the estimate alone would allow 514) |
+  | quarterly | 400 | the measured range (the estimate alone would allow 542) |
+
+  An earlier end date allows more, as does a dataset with less history.
+* **Older experiments:** reproducing one that is larger than these now returns the same
+  422, although it ran before #163.
+* **If a job still runs out of memory:** the kernel kills its work horse, and the job fails at
+  once as `ResourceExhausted` ("out of memory: the job was stopped after using N MB of the
+  worker's M MB limit"), not retryable.
+  * **The evidence:** a SIGKILL, plus either a rise in the container's `memory.events`
+    `oom_kill` count, or the horse's peak resident set (`ru_maxrss`) at 95% or more of
+    `memory.max`.
+  * **It needs cgroup v2** (`/sys/fs/cgroup/memory.events`, as in the compose workers). On a
+    host with cgroup v1, possibly AWS Fargate, those files don't exist, and the
+    classification silently never fires: such jobs fail as `LeaseExpired` after their
+    retries, as before. Check before relying on it there.
+  * **Before #163,** such a job was retried twice into the same wall and then failed as
+    `LeaseExpired`.
+  * A worker lost for any other reason still recovers through the reaper as above.
+* **Raise the limit only together with the worker's memory.**
+  * Measure first with `benchmarks/worker_memory.py` on the new worker: it samples each job's
+    anonymous memory in the real container.
+  * Then set `QUANTLAB_MAX_BACKTEST_MEMORY_MB` to keep the same 20% headroom.
+  * Widening the measured range (`MEASURED_MAX_SYMBOLS`, `MEASURED_MAX_SESSIONS`) also
+    needs measured jobs out there, with sessions varied as well as symbols. Then refit.
+  * The estimate's coefficients (`quantlab_api/limits.py`) come from the measured envelope
+    in `benchmarks/results/*-worker-memory-after-*.json`.
+
 ### ML runs fail with "submitted for pipeline version N"
 Deploy the API and the workers together, at the same release. The API stamps its
 `ML_PIPELINE_VERSION` into each ML run's config and input hash. A worker running a

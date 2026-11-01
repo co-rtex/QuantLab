@@ -7,6 +7,8 @@ a holder of q shares ends with q x last_close x (1 + r). Synthetic data only.
 
 from __future__ import annotations
 
+import dataclasses
+
 import numpy as np
 import pandas as pd
 import pytest
@@ -143,7 +145,7 @@ def test_ledger_delisting_transaction_replays_and_is_verified():
     assert led.quantity("B") == 0 and led.cash == pytest.approx(500)
     led.check_invariants()
     tampered = list(led.transactions)
-    bad = tampered[-1].__class__(**{**tampered[-1].__dict__, "cash_delta": 100.0})
+    bad = dataclasses.replace(tampered[-1], cash_delta=100.0)
     with pytest.raises(LedgerError):
         replay([*tampered[:-1], bad])
     with pytest.raises(LedgerError):

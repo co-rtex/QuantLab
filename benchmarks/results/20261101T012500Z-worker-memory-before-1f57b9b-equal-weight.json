@@ -1,0 +1,466 @@
+{
+  "mode": "worker_memory",
+  "stack_commit": "1f57b9b",
+  "environment": {
+    "timestamp": "2026-11-01T01:38:27.340895+00:00",
+    "platform": "macOS-26.6.2-arm64-arm-64bit",
+    "machine": "arm64",
+    "cpu_count": 8,
+    "memory_gb": 8.0,
+    "docker_vm_memory_gb": 3.83,
+    "python": "3.12.16",
+    "git_sha": null,
+    "git_dirty": null
+  },
+  "data_is_synthetic": true,
+  "dataset": {
+    "assets": 400,
+    "start": "2005-01-03",
+    "end": "2023-12-29",
+    "rows": 1804361,
+    "symbols": 401
+  },
+  "rows": [
+    {
+      "universe": 100,
+      "rebalance": "daily",
+      "strategy": "equal_weight",
+      "status": "completed",
+      "attempts": 1,
+      "error": null,
+      "message": "completed; Sharpe -0.07",
+      "horse_deaths_logged": 0,
+      "oom_classified_logged": 0,
+      "reaper_requeues_logged": 0,
+      "container": "d97c44d8d4ed",
+      "load": {
+        "start": {
+          "load_1m": 2.42,
+          "load_5m": 2.87,
+          "load_15m": 3.2,
+          "uptime": "20:25  up 7 days,  5:31, 5 users, load averages: 2.42 2.87 3.20",
+          "contended": false
+        },
+        "end": {
+          "load_1m": 2.34,
+          "load_5m": 2.81,
+          "load_15m": 3.17,
+          "uptime": "20:26  up 7 days,  5:31, 5 users, load averages: 2.34 2.81 3.17",
+          "contended": false
+        }
+      },
+      "wall_s": 24.0,
+      "anon_peak_mb": 1043.8,
+      "anon_samples": 21,
+      "memory_peak_mb": 1199.5,
+      "memory_max_mb": 1536.0,
+      "oom_kills": 0
+    },
+    {
+      "universe": 100,
+      "rebalance": "weekly",
+      "strategy": "equal_weight",
+      "status": "completed",
+      "attempts": 1,
+      "error": null,
+      "message": "completed; Sharpe -0.06",
+      "horse_deaths_logged": 0,
+      "oom_classified_logged": 0,
+      "reaper_requeues_logged": 0,
+      "container": "15886477871c",
+      "load": {
+        "start": {
+          "load_1m": 2.34,
+          "load_5m": 2.81,
+          "load_15m": 3.17,
+          "uptime": "20:26  up 7 days,  5:31, 5 users, load averages: 2.34 2.81 3.17",
+          "contended": false
+        },
+        "end": {
+          "load_1m": 2.51,
+          "load_5m": 2.84,
+          "load_15m": 3.17,
+          "uptime": "20:26  up 7 days,  5:32, 5 users, load averages: 2.51 2.84 3.17",
+          "contended": false
+        }
+      },
+      "wall_s": 10.6,
+      "anon_peak_mb": 567.6,
+      "anon_samples": 9,
+      "memory_peak_mb": 785.0,
+      "memory_max_mb": 1536.0,
+      "oom_kills": 0
+    },
+    {
+      "universe": 100,
+      "rebalance": "monthly",
+      "strategy": "equal_weight",
+      "status": "completed",
+      "attempts": 1,
+      "error": null,
+      "message": "completed; Sharpe -0.05",
+      "horse_deaths_logged": 0,
+      "oom_classified_logged": 0,
+      "reaper_requeues_logged": 0,
+      "container": "0f35cb8bf10e",
+      "load": {
+        "start": {
+          "load_1m": 2.55,
+          "load_5m": 2.84,
+          "load_15m": 3.17,
+          "uptime": "20:26  up 7 days,  5:32, 5 users, load averages: 2.55 2.84 3.17",
+          "contended": false
+        },
+        "end": {
+          "load_1m": 2.43,
+          "load_5m": 2.81,
+          "load_15m": 3.16,
+          "uptime": "20:26  up 7 days,  5:32, 5 users, load averages: 2.43 2.81 3.16",
+          "contended": false
+        }
+      },
+      "wall_s": 6.6,
+      "anon_peak_mb": 535.1,
+      "anon_samples": 6,
+      "memory_peak_mb": 604.7,
+      "memory_max_mb": 1536.0,
+      "oom_kills": 0
+    },
+    {
+      "universe": 200,
+      "rebalance": "daily",
+      "strategy": "equal_weight",
+      "status": "completed",
+      "attempts": 1,
+      "error": null,
+      "message": "completed; Sharpe -0.11",
+      "horse_deaths_logged": 0,
+      "oom_classified_logged": 0,
+      "reaper_requeues_logged": 0,
+      "container": "a8a34deb93a0",
+      "load": {
+        "start": {
+          "load_1m": 2.43,
+          "load_5m": 2.81,
+          "load_15m": 3.16,
+          "uptime": "20:26  up 7 days,  5:32, 5 users, load averages: 2.43 2.81 3.16",
+          "contended": false
+        },
+        "end": {
+          "load_1m": 2.43,
+          "load_5m": 2.73,
+          "load_15m": 3.11,
+          "uptime": "20:27  up 7 days,  5:33, 5 users, load averages: 2.43 2.73 3.11",
+          "contended": false
+        }
+      },
+      "wall_s": 44.6,
+      "anon_peak_mb": 1494.4,
+      "anon_samples": 39,
+      "memory_peak_mb": 1536.0,
+      "memory_max_mb": 1536.0,
+      "oom_kills": 0
+    },
+    {
+      "universe": 200,
+      "rebalance": "weekly",
+      "strategy": "equal_weight",
+      "status": "completed",
+      "attempts": 1,
+      "error": null,
+      "message": "completed; Sharpe -0.11",
+      "horse_deaths_logged": 0,
+      "oom_classified_logged": 0,
+      "reaper_requeues_logged": 0,
+      "container": "a47933e7fc5e",
+      "load": {
+        "start": {
+          "load_1m": 2.4,
+          "load_5m": 2.72,
+          "load_15m": 3.1,
+          "uptime": "20:27  up 7 days,  5:33, 5 users, load averages: 2.40 2.72 3.10",
+          "contended": false
+        },
+        "end": {
+          "load_1m": 2.44,
+          "load_5m": 2.71,
+          "load_15m": 3.09,
+          "uptime": "20:27  up 7 days,  5:33, 5 users, load averages: 2.44 2.71 3.09",
+          "contended": false
+        }
+      },
+      "wall_s": 16.4,
+      "anon_peak_mb": 895.0,
+      "anon_samples": 14,
+      "memory_peak_mb": 1220.2,
+      "memory_max_mb": 1536.0,
+      "oom_kills": 0
+    },
+    {
+      "universe": 200,
+      "rebalance": "monthly",
+      "strategy": "equal_weight",
+      "status": "completed",
+      "attempts": 1,
+      "error": null,
+      "message": "completed; Sharpe -0.10",
+      "horse_deaths_logged": 0,
+      "oom_classified_logged": 0,
+      "reaper_requeues_logged": 0,
+      "container": "0599ead09973",
+      "load": {
+        "start": {
+          "load_1m": 2.33,
+          "load_5m": 2.69,
+          "load_15m": 3.08,
+          "uptime": "20:27  up 7 days,  5:33, 5 users, load averages: 2.33 2.69 3.08",
+          "contended": false
+        },
+        "end": {
+          "load_1m": 2.35,
+          "load_5m": 2.68,
+          "load_15m": 3.07,
+          "uptime": "20:28  up 7 days,  5:33, 5 users, load averages: 2.35 2.68 3.07",
+          "contended": false
+        }
+      },
+      "wall_s": 11.4,
+      "anon_peak_mb": 746.1,
+      "anon_samples": 9,
+      "memory_peak_mb": 829.9,
+      "memory_max_mb": 1536.0,
+      "oom_kills": 0
+    },
+    {
+      "universe": 300,
+      "rebalance": "daily",
+      "strategy": "equal_weight",
+      "status": "completed",
+      "attempts": 1,
+      "error": null,
+      "message": "completed; Sharpe -0.15",
+      "horse_deaths_logged": 0,
+      "oom_classified_logged": 0,
+      "reaper_requeues_logged": 0,
+      "container": "da951aaa1c02",
+      "load": {
+        "start": {
+          "load_1m": 2.35,
+          "load_5m": 2.68,
+          "load_15m": 3.07,
+          "uptime": "20:28  up 7 days,  5:33, 5 users, load averages: 2.35 2.68 3.07",
+          "contended": false
+        },
+        "end": {
+          "load_1m": 3.31,
+          "load_5m": 2.87,
+          "load_15m": 3.1,
+          "uptime": "20:29  up 7 days,  5:35, 5 users, load averages: 3.31 2.87 3.10",
+          "contended": false
+        }
+      },
+      "wall_s": 90.5,
+      "anon_peak_mb": 1518.1,
+      "anon_samples": 79,
+      "memory_peak_mb": 1536.0,
+      "memory_max_mb": 1536.0,
+      "oom_kills": 0
+    },
+    {
+      "universe": 300,
+      "rebalance": "weekly",
+      "strategy": "equal_weight",
+      "status": "completed",
+      "attempts": 1,
+      "error": null,
+      "message": "completed; Sharpe -0.14",
+      "horse_deaths_logged": 0,
+      "oom_classified_logged": 0,
+      "reaper_requeues_logged": 0,
+      "container": "46bc111707fe",
+      "load": {
+        "start": {
+          "load_1m": 3.31,
+          "load_5m": 2.87,
+          "load_15m": 3.1,
+          "uptime": "20:29  up 7 days,  5:35, 5 users, load averages: 3.31 2.87 3.10",
+          "contended": false
+        },
+        "end": {
+          "load_1m": 3.09,
+          "load_5m": 2.85,
+          "load_15m": 3.09,
+          "uptime": "20:30  up 7 days,  5:35, 5 users, load averages: 3.09 2.85 3.09",
+          "contended": false
+        }
+      },
+      "wall_s": 23.8,
+      "anon_peak_mb": 1142.0,
+      "anon_samples": 20,
+      "memory_peak_mb": 1412.6,
+      "memory_max_mb": 1536.0,
+      "oom_kills": 0
+    },
+    {
+      "universe": 300,
+      "rebalance": "monthly",
+      "strategy": "equal_weight",
+      "status": "completed",
+      "attempts": 1,
+      "error": null,
+      "message": "completed; Sharpe -0.13",
+      "horse_deaths_logged": 0,
+      "oom_classified_logged": 0,
+      "reaper_requeues_logged": 0,
+      "container": "fe12dad10f2f",
+      "load": {
+        "start": {
+          "load_1m": 3.09,
+          "load_5m": 2.85,
+          "load_15m": 3.09,
+          "uptime": "20:30  up 7 days,  5:35, 5 users, load averages: 3.09 2.85 3.09",
+          "contended": false
+        },
+        "end": {
+          "load_1m": 3.54,
+          "load_5m": 2.97,
+          "load_15m": 3.12,
+          "uptime": "20:30  up 7 days,  5:35, 5 users, load averages: 3.54 2.97 3.12",
+          "contended": false
+        }
+      },
+      "wall_s": 13.0,
+      "anon_peak_mb": 954.9,
+      "anon_samples": 11,
+      "memory_peak_mb": 1076.5,
+      "memory_max_mb": 1536.0,
+      "oom_kills": 0
+    },
+    {
+      "universe": 400,
+      "rebalance": "daily",
+      "strategy": "equal_weight",
+      "status": "failed",
+      "attempts": 3,
+      "error": {
+        "type": "LeaseExpired",
+        "message": "worker stopped heartbeating",
+        "retryable": false
+      },
+      "message": "failed: worker lost and attempts exhausted",
+      "horse_deaths_logged": 3,
+      "oom_classified_logged": 0,
+      "reaper_requeues_logged": 0,
+      "container": "e6407e78e2aa",
+      "load": {
+        "start": {
+          "load_1m": 3.54,
+          "load_5m": 2.97,
+          "load_15m": 3.12,
+          "uptime": "20:30  up 7 days,  5:35, 5 users, load averages: 3.54 2.97 3.12",
+          "contended": false
+        },
+        "end": {
+          "load_1m": 2.16,
+          "load_5m": 2.65,
+          "load_15m": 2.94,
+          "uptime": "20:37  up 7 days,  5:43, 5 users, load averages: 2.16 2.65 2.94",
+          "contended": false
+        }
+      },
+      "wall_s": 437.1,
+      "anon_peak_mb": 1519.8,
+      "anon_samples": 391,
+      "memory_peak_mb": 1536.0,
+      "memory_max_mb": 1536.0,
+      "oom_kills": 3
+    },
+    {
+      "universe": 400,
+      "rebalance": "weekly",
+      "strategy": "equal_weight",
+      "status": "completed",
+      "attempts": 1,
+      "error": null,
+      "message": "completed; Sharpe -0.13",
+      "horse_deaths_logged": 0,
+      "oom_classified_logged": 0,
+      "reaper_requeues_logged": 0,
+      "container": "9d8a732512bd",
+      "load": {
+        "start": {
+          "load_1m": 2.06,
+          "load_5m": 2.62,
+          "load_15m": 2.93,
+          "uptime": "20:37  up 7 days,  5:43, 5 users, load averages: 2.06 2.62 2.93",
+          "contended": false
+        },
+        "end": {
+          "load_1m": 2.64,
+          "load_5m": 2.71,
+          "load_15m": 2.94,
+          "uptime": "20:38  up 7 days,  5:43, 5 users, load averages: 2.64 2.71 2.94",
+          "contended": false
+        }
+      },
+      "wall_s": 26.8,
+      "anon_peak_mb": 1427.5,
+      "anon_samples": 23,
+      "memory_peak_mb": 1536.0,
+      "memory_max_mb": 1536.0,
+      "oom_kills": 0
+    },
+    {
+      "universe": 400,
+      "rebalance": "monthly",
+      "strategy": "equal_weight",
+      "status": "completed",
+      "attempts": 1,
+      "error": null,
+      "message": "completed; Sharpe -0.13",
+      "horse_deaths_logged": 0,
+      "oom_classified_logged": 0,
+      "reaper_requeues_logged": 0,
+      "container": "22dcba318abe",
+      "load": {
+        "start": {
+          "load_1m": 2.64,
+          "load_5m": 2.71,
+          "load_15m": 2.94,
+          "uptime": "20:38  up 7 days,  5:43, 5 users, load averages: 2.64 2.71 2.94",
+          "contended": false
+        },
+        "end": {
+          "load_1m": 3.05,
+          "load_5m": 2.8,
+          "load_15m": 2.97,
+          "uptime": "20:38  up 7 days,  5:44, 5 users, load averages: 3.05 2.80 2.97",
+          "contended": false
+        }
+      },
+      "wall_s": 16.4,
+      "anon_peak_mb": 1086.7,
+      "anon_samples": 14,
+      "memory_peak_mb": 1307.2,
+      "memory_max_mb": 1536.0,
+      "oom_kills": 0
+    }
+  ],
+  "load": {
+    "start": {
+      "load_1m": 2.42,
+      "load_5m": 2.87,
+      "load_15m": 3.2,
+      "uptime": "20:25  up 7 days,  5:31, 5 users, load averages: 2.42 2.87 3.20",
+      "contended": false
+    },
+    "end": {
+      "load_1m": 2.89,
+      "load_5m": 2.77,
+      "load_15m": 2.96,
+      "uptime": "20:38  up 7 days,  5:44, 5 users, load averages: 2.89 2.77 2.96",
+      "contended": false
+    }
+  },
+  "contended": false
+}

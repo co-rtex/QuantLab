@@ -48,7 +48,8 @@ class InvalidOrder(LedgerError):
     pass
 
 
-@dataclass(frozen=True)
+# Slots: a long daily backtest keeps a million of these for the whole job (#163).
+@dataclass(frozen=True, slots=True)
 class Transaction:
     seq: int
     date: pd.Timestamp

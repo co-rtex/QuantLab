@@ -103,6 +103,10 @@ class Settings(BaseSettings):
     job_default_timeout_seconds: int = Field(900, ge=10)
     job_max_attempts: int = Field(3, ge=1, le=10)
     max_backtest_symbols: int = Field(1500, ge=1)
+    # Estimated peak memory one backtest may need (#163, limits.backtest_cost): 80% of the
+    # compose worker's 1536 MB memory limit, i.e. 20% headroom over the measured envelope.
+    # Raise it together with the worker's limit, never alone.
+    max_backtest_memory_mb: int = Field(1228, ge=64)
     max_dataset_assets: int = Field(2000, ge=1)
     rate_limit_login_per_minute: int = Field(10, ge=1)
     # Peers allowed to state the client address in X-Forwarded-For: IPs, CIDRs or hostnames
