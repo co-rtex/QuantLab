@@ -70,7 +70,11 @@ $QUANTLAB_DATA_DIR/
 Prometheus scrapes three kinds of process, all behind the same bearer token
 (`QUANTLAB_METRICS_TOKEN`, required in production by each process that serves metrics):
 * **The API**, at `api:8000/metrics`: HTTP latency by route template and DB statement
-  latency, aggregated over its uvicorn processes.
+  latency, aggregated over its uvicorn processes. Also
+  `quantlab_rate_limiter_breaker_open{limiter="login"}` (#207, `livemax`): 1 while any
+  live API process's rate limiter counts in-process after a Redis error, still limiting.
+  The API never marks a dead uvicorn process, so a process that died with its breaker
+  open leaves 1 until the container restarts.
 * **Each worker replica**, at `<replica>:9101/metrics` (#165): queue wait, job run time and
   outcomes, retries, running jobs, DB statement latency, cache hit/miss, latest dataset rows
   and freshness, ingestion quality.
