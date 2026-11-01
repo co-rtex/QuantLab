@@ -322,11 +322,16 @@ a separate clone.
    * Verification: reproducibility across processes, hash seeds, threads and restarts
      (#193, #182), a multiple-dividends-per-ex-date warning (#222, #210), deterministic
      limiter tests (#236), and the RC docs audits (#229, #234).
-3. **Agent 2 (post-RC):** #225 (load_bars memory, PR #248 in trial), #224 (optimize as a
-   job), #218, #231.
-4. **Agent 3 (post-RC):** #227 (min_variance dust weights, engine 1.7.0, ε = 1e-10 from a
-   measured gap), #247 (leakage check and the instrument master), large/xl benchmarks in a
-   quiet window (#24).
+   * After rc.2 (on main, untagged): load_bars streams pruned row groups (#248, #225:
+     about 574 → 190 MiB per optimize, outputs byte-identical); **optimize runs as a job**
+     (#250 API, worker and migration M6 `aec87540a0ac`; #255 web; #224). Submitting needs
+     the editor role (ADR-0013).
+3. **Agent 2 (post-RC):** #218 (a transaction cap per portfolio, default from
+   measurement), #231.
+4. **Agent 3 (post-RC):** #251 (#227, min_variance dust, engine 1.7.0; reviewed; a
+   Linux-only test fix pending), #247 (leakage check and the instrument master), #253
+   (mean_variance SLSQP failure at API defaults), #252, #254, large/xl benchmarks in a quiet
+   window (#24).
 5. **Lead:** integrate; keep RELEASE_READINESS current; #17 needs branch-protection approval
    to become a required check.
 6. **User decisions (2026-10-31), unchanged:**

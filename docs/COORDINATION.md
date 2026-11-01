@@ -76,6 +76,7 @@ Alembic revisions form one linear chain, so only one migration may be in flight 
 | M3 | Agent 3 | #66 revision `b5e1d7c3a924` → `9a4c6e2f1b37`: instruments key `(dataset_version_id, symbol, instrument_id)` `NULLS NOT DISTINCT` | **merged** (#87, `52508ed`) |
 | M4 | Agent 2 | #123 revision `4d2b8e6f0c15` → `b5e1d7c3a924`: nullable `jobs.not_before` | **merged** (#129, `db005e4`) |
 | M5 | Agent 2 | #167 revision `18869f6a1dae` → `4d2b8e6f0c15`: nullable `jobs.attempt_started_at` | **merged** (#171, `ad2d8b6`) |
+| M6 | Agent 2 | #224 revision `aec87540a0ac` → `18869f6a1dae`: `CREATE TABLE optimization_runs` | **merged** (#250, `2f98429`) |
 
 Rules: request the slot on the issue before running `alembic revision`; set `down_revision`
 to the current head on `main` at the time; include a working `downgrade`; the migration
