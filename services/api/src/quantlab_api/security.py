@@ -8,6 +8,7 @@ import hashlib
 import hmac
 import ipaddress
 import json
+import math
 import os
 import secrets
 import socket
@@ -565,11 +566,24 @@ class RateLimiter:
 
     def check(self, key: str, limit: int, window: int = 60) -> None:
         if not self.reserve(key, limit, window):
-            raise ApiError(429, "rate_limited", "Too many attempts; try again later")
+            raise rate_limited(window)
 
     def reset(self) -> None:
         self._tables = {}
         self._open_until = 0.0
+
+
+def rate_limited(window: int, message: str = "Too many requests") -> ApiError:
+    """429 rate_limited, with Retry-After: the seconds until this fixed window ends, when
+    the count starts over (#239). The same in the body, as 503 server_busy does."""
+    wait = max(1, math.ceil(window - time.time() % window))
+    return ApiError(
+        429,
+        "rate_limited",
+        f"{message}; try again in {wait} s.",
+        {"retry_after_seconds": wait},
+        headers={"Retry-After": str(wait)},
+    )
 
 
 login_limiter = RateLimiter()
