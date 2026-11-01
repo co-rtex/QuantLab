@@ -103,6 +103,26 @@ A worker, reaper or API host with a skewed clock no longer moves any job deadlin
    claimable: one still in its backoff, one cancelled, or one another worker holds a live
    lease on.
 
+### Redis is down (#185)
+* **Running jobs carry on.** A job's state, lease and keepalive are in PostgreSQL, so a job
+  that was running when Redis went away completes on the same attempt.
+* **Workers stay up.** Each one logs `worker_redis_unavailable` (with `during=`: the job's
+  heartbeat, the worker's state, maintenance and so on), and waits for Redis before taking
+  the next job.
+  * **Before #185,** a busy worker quit at its first heartbeat in an outage of about 25 s
+    or more. Its container restarted in a loop, the running job died with it and lost an
+    attempt, and it waited out its lease.
+  * **Measured on 2026-11-01** (slot 21, two workers, restart policy `unless-stopped`): Redis
+    was stopped for about 63 s during a running ML job. The job stayed on attempt 1 and
+    completed on attempt 1, 45 s after Redis returned. Both workers' restart counts stayed
+    0, and they logged 8 `worker_redis_unavailable` lines and no "unhandled exception,
+    quitting".
+* **New submissions** are still recorded, and readiness reports 503 (see "Jobs stuck in
+  `queued`" for what is redelivered once Redis is back).
+* **RQ's own records** in Redis, of jobs that finished during the outage, stay incomplete
+  (`rq info` may show them as started). RQ's registry cleanup marks them failed later.
+  That changes nothing: a job's outcome is the one in PostgreSQL.
+
 ### Jobs stuck in `running`
 A worker died mid-job. Its lease (default 60 s, `QUANTLAB_JOB_LEASE_SECONDS`) expires in
 database time. The reaper then does one of four things:
