@@ -65,7 +65,8 @@ process uses a fixed table of 4096 counters indexed by a keyed hash (random per-
 secret, so collisions cannot be precomputed): constant memory, O(1), never evicted;
 refunds are ignored because a shard may be shared.
 **Consequences.** During a Redis outage throttling is per API process (replicas × uvicorn
-workers; compose runs 4 workers, terraform `api_count` × `api_workers`) and may
+workers; compose runs 2 by default (`QUANTLAB_API_WORKERS`, #228), terraform
+`api_count` × `api_workers`) and may
 over-throttle on hash collisions, but cannot be reset by flooding. Production deployments
 should run Redis with persistence and monitoring (see docs/RUNBOOK.md).
 **Amendment (2026-11-01, #207 / #211): breaker and floor.**
@@ -128,9 +129,11 @@ reaches the web tier choose its address. The earlier claim here that such a clie
 lock anyone else out" was wrong: it could send a victim's address to exhaust the victim's
 bucket, and rotate addresses to spend a victim account's failed-login budget, because the
 account limit is reserved before the password is checked.
-**Consequences.** Public exposure requires three things (docs/RUNBOOK.md, "Exposing a
-deployment"): the edge, `infra/edge/verify.sh` passing, and a Docker host that preserves
-client source addresses. Docker Desktop, rootless Docker and docker-proxy replace them with
+**Consequences.** Public exposure is prohibited until #39 closes (docs/RUNBOOK.md,
+"Exposing a deployment"). #39 requires: the edge; `infra/edge/verify.sh` passing,
+including `--check-remote-probe` run from a **second machine**; a Docker host that preserves
+client source addresses; the lead's independent rerun; and, on AWS, a real NLB with PROXY
+protocol v2. Docker Desktop, rootless Docker and docker-proxy replace them with
 a gateway address. The remote probe in `verify.sh` checks this. IPv6 clients are throttled
 per /64. Without the edge, development has no
 per-address login throttling, which is acceptable only on 127.0.0.1.

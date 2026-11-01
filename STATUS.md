@@ -1,6 +1,6 @@
 # Status (authoritative handoff)
 
-_Last updated: 2026-10-31 (lead integration cycle 2: 122 PRs merged before this update, per `gh pr list --state merged`; main `5896cb3`)_
+_Last updated: 2026-11-01 (lead integration cycle 3: 142 PRs merged, per `gh pr list --state merged`; release-candidate main `7fc89ee`)_
 
 ## Where things stand
 All roadmap phases 0–10 are implemented. An independent audit on 2026-10-30
@@ -25,7 +25,7 @@ leases and migration slots: [docs/COORDINATION.md](docs/COORDINATION.md).
 | Area | State |
 |---|---|
 | Market data | Synthetic and CSV providers, NYSE calendar, PIT adjustment, quality checks, content-addressed Parquet versions, DuckDB + Redis retrieval, resumable ingestion |
-| Simulation | Event-driven engine v1.4.1 (next-session fills, no fills on zero-volume bars, costs, pro-rata partial fills, PIT delisting), 9 strategies, ledger with replay invariants |
+| Simulation | Event-driven engine v1.6.0 (next-session fills, no fills on zero-volume bars, costs, pro-rata partial fills, PIT delisting), 9 strategies, ledger with replay invariants |
 | Analytics | Performance (undefined-aware), VaR/ES, drawdowns, attribution, factor exposures (Newey-West), Monte Carlo, stress, optimizers |
 | Research | Walk-forward, sensitivity, cost sweeps, bootstrap CIs, PSR/DSR, regimes, engine-level leakage check, Research Integrity Report, ML pipeline with purged CV |
 | Product | Auth, workspaces and roles, experiments, comparison, reproduction, portfolios, construction, ML, grounded assistant, HTML/Markdown reports |
@@ -205,6 +205,10 @@ leases and migration slots: [docs/COORDINATION.md](docs/COORDINATION.md).
   tracked in #8, #51, #52 and #55 (Agent 2), #39 (gate), and #41, #50 and #54 (Agent 3).
 
 ## Last verified (2026-10-31, main `0939811`)
+_Superseded for the release candidate by docs/RELEASE_READINESS.md ("Private release
+candidate, 2026-11-01"): the lead's integrated gate on `7fc89ee` and the independent
+assessment. The cycle-2 record below is kept as history._
+
 Each merge was verified on a trial merge with current main, with pytest output written to a
 file rather than piped:
 * #28, #32, #36, #29, #30, #31: tree identical to main afterwards; 314 passed;
@@ -298,43 +302,56 @@ lives in the repository's git directory, so it covers every worktree of this clo
 a separate clone.
 
 ## Next steps (issues carry owners and acceptance criteria)
-1. **Release blockers fixed:** #162 (in #170) and #163 (in #174). Also merged: #164 (in
-   #172), #167 (in #171, migration M5) and #160 (in #176). See
-   docs/RELEASE_READINESS.md, "Status update".
-2. **Verified on merged main:** the independent job-recovery confirmation (`6fcdd07`) and
-   the lead's integrated gate (`e7cf4fd`). See docs/RELEASE_READINESS.md.
-3. **Merged this cycle:** #183, #189, #190 (engine 1.4.1), #191, #197, #198 and #199. See
-   docs/RELEASE_READINESS.md.
-4. **Agent 2:** #201 (P1, Swagger same-origin), #202 (P1, console logger), then #200.
-5. **Agent 3:** engine 1.5.0 (#187, #195, #196 in one PR), then #192 (#181), then #193
-   (#182, its stack test needs a lead-scheduled window).
-6. **Lead:** integrate; the private release-candidate decision after engine 1.5.0, #192,
-   #201 and #202, then a final integrated gate.
-7. **User decisions (2026-10-31):**
+1. **Private release candidate `v0.1.0-rc.1` on `7fc89ee`: READY, with caveats.** The
+   lead's integrated gate and an independent fresh-clone assessment both pass; no release
+   blocker for private use. Evidence, requirements and known limitations are in
+   docs/RELEASE_READINESS.md ("Private release candidate, 2026-11-01"). rc.2: #237 (P1,
+   Agent 3), #238 (P2, Agent 2), #239 (P3). Public deployment stays prohibited (#39).
+2. **Merged this cycle (cycle 3, 2026-11-01), each with an independent review where it
+   changed behaviour, a lead trial on current main and green CI:**
+   * Engine **1.5.0** (#209: #187, #195, #196) and **1.6.0** (#226: #215, float-noise
+     orders); admission fail-open cases (#192, #181).
+   * Jobs and ops: RQ timeout classification (#213, #212), backstop kills never classed as
+     OOM (#216, #214), explicit API Redis timeouts (#208, #200), console logging (#205,
+     #202), CI python timeout 30 min (#206).
+   * Security and limits: API docs off outside development (#204, #201), rate-limiter
+     breaker and floor (#211, #207; ADR-0007 amended in #221), cash-only portfolios no
+     longer load the whole dataset (#219, #217), a per-process bound on heavy requests plus
+     an API memory limit (#228, #223, #220), synthetic labels on every surface including the
+     assistant (#232, #230).
+   * Verification: reproducibility across processes, hash seeds, threads and restarts
+     (#193, #182), a multiple-dividends-per-ex-date warning (#222, #210), deterministic
+     limiter tests (#236), and the RC docs audits (#229, #234).
+3. **Agent 2 (post-RC):** #233 (bare-compose guard), #235 (edge forces production), #225
+   (load_bars memory), #224 (optimize as a job), #218, #231.
+4. **Agent 3 (post-RC):** #227 (min_variance dust weights), large/xl benchmarks in a quiet
+   window (#24).
+5. **Lead:** integrate; keep RELEASE_READINESS current; #17 needs branch-protection approval
+   to become a required check.
+6. **User decisions (2026-10-31), unchanged:**
    * Public deployment and paid infrastructure **stay blocked** (#39 gate, any
      `terraform apply`).
    * #55 option A (uniform registration with email verification) is **deferred**
      (ADR-0010).
    * The weekly scheduled dependency audit (#137) is **deferred**. Audits run on every push
      and PR (#139).
-   * #17 Playwright in CI is **approved, with Actions usage controlled**. The lead is
-     building it.
-   * Local Caddyfile validation is **approved** and **done** (#158, the pinned local
-     `caddy:2.10.2-alpine` image). It does **not** clear the #39 gate.
-   * A quiet benchmark window for #24 is **approved**, coordinated with both workers.
-     Only measured figures are published.
-   * Then an independent release-candidate assessment and a classified list of release
-     blockers, not new feature work.
    * Paid market-data services and hosted LLM usage stay blocked.
-8. **Blocked on the user:**
+7. **Blocked on the user:**
    * #39 (a host that preserves client addresses, a second machine, and a real NLB; the
      Caddyfiles pass local checks only, #158);
+   * #168 (account-lifecycle product decision, before any public release);
    * #11 and #12 live (vendor, licence and key);
    * #15 hosted eval (LLM key);
    * #20 (load host);
-   * any `terraform apply` (cloud account, cost).
+   * any `terraform apply` (cloud account, cost);
+   * #17 as a required check (branch-protection change);
+   * the Docker VM on this Mac is 3918 MiB, below the 5120 MiB minimum the default stack
+     now documents (#228): raise it in Docker Desktop to run within the documented
+     requirement.
 
 ## Incidents
+* **2026-11-01:** a VM-wide OOM during the #223 measurement (slot 21 only; fixed by #228),
+  and a bare-compose near-miss denied before it ran (#233). See docs/COORDINATION.md.
 * **2026-10-31:** E2E test data was written into the main checkout's Docker volumes by a
   run that bypassed `scripts/stack-env.sh`. Root cause, effect and fix are in
   [docs/COORDINATION.md](docs/COORDINATION.md) ("Incident"). **User decision: leave it all
@@ -345,7 +362,7 @@ No LLM API key, market-data API key or cloud credentials (docs/BLOCKERS.md).
 
 ## Local run notes
 * `make up` starts Postgres (5433) and Redis (6380). `make app-up` starts the full stack:
-  web on :3000, API on :8000 (4 uvicorn workers), 2 workers and the reaper. In a linked
+  web on :3000, API on :8000 (2 uvicorn workers by default, `QUANTLAB_API_WORKERS`; 1880 MiB container limit, #228), 2 workers and the reaper. In a linked
   git worktree the Makefile uses a separate compose project and port block
   (`make stack-env`); see README.
 * Dev processes log to `logs/` (gitignored). On macOS the RQ worker needs
