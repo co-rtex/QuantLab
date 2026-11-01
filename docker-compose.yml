@@ -68,7 +68,7 @@ services:
     # VM into a global OOM, in which the kernel may kill any container, Postgres included
     # (#223). With it, an OOM kills an API process inside this container only. 1880M is the
     # measured peak of 2 API processes at 1 heavy request each (1566 MiB anonymous) plus
-    # 20%; 4 processes need QUANTLAB_API_MEMORY=2280M. docs/RUNBOOK.md, "Resources".
+    # 20%; 4 processes need QUANTLAB_API_MEMORY=2560M. docs/RUNBOOK.md, "Resources".
     deploy:
       resources:
         limits: { memory: "${QUANTLAB_API_MEMORY:-1880M}" }
