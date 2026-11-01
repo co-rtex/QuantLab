@@ -49,9 +49,10 @@ CI does not run these yet; that waits on the user's approval of Actions minutes 
       server.
 - [x] **JWT secret only where it is needed** (#117): only the API task receives
       `QUANTLAB_JWT_SECRET` and `QUANTLAB_METRICS_TOKEN`. Worker, reaper and migrate run
-      without them. The worker task sets no `PROMETHEUS_MULTIPROC_DIR`, so it serves no job
-      metrics and needs no token (#165). Exporting worker metrics on ECS would need that
-      directory, the token, and a scrape target for port 9101.
+      without them. The worker task sets no `PROMETHEUS_MULTIPROC_DIR` and the reaper task no
+      `QUANTLAB_REAPER_METRICS_PORT`, so neither serves metrics, and neither needs the token
+      (#165, #179). Exporting their metrics on ECS would need those settings, the token,
+      and scrape targets for ports 9101 and 9102.
 - [ ] Real values for `acm_certificate_arn` and `image_tag`. Neither has a default, and the
       example's placeholders fail validation.
 - [ ] The user's approval of the account, the plan and the cost.

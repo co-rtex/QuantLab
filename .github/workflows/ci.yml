@@ -71,6 +71,8 @@ jobs:
       - run: npm ci
       - run: npm run lint
       - run: npm run typecheck
+      # Unit tests for the proxy and edge helpers (src/**/*.test.mts; Node's built-in runner).
+      - run: npm test
       - run: npm run build
       - name: npm audit (runtime, blocking)
         run: npm audit --omit=dev --audit-level=low

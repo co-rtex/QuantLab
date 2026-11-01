@@ -56,6 +56,7 @@ def scrape(port: int, token: str) -> str:
 def main() -> None:
     port, token, kind = int(sys.argv[1]), sys.argv[2], sys.argv[3]
     server = serve_worker_metrics(port, token)
+    port = server.server_port  # the one it bound (0 asks for any free port)
     if kind != "none":
         conn = fakeredis.FakeRedis()
         J.set_redis(conn)

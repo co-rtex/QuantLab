@@ -98,7 +98,12 @@ services:
   reaper:
     build: { context: ., dockerfile: services/api/Dockerfile }
     restart: ${QUANTLAB_RESTART_POLICY:-unless-stopped}
-    environment: *app-env
+    environment:
+      <<: *app-env
+      # Its lease-loss retries and the outcomes it decides, at :9102/metrics (#179). One
+      # process that never forks, so no multiprocess directory: unlike the workers, its
+      # samples stay in its own registry.
+      QUANTLAB_REAPER_METRICS_PORT: "9102"
     command: ["quantlab-cli", "reaper", "--interval", "15"]
     # The reaper sweeps uploads, orphaned versions and the trash in the data directory, so
     # it must see the same volume as the API and workers (it ran against an empty /data).
