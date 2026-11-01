@@ -17,7 +17,11 @@ from prometheus_client import REGISTRY
 from quantlab_api import jobs, observability
 from quantlab_api.errors import ApiError
 from quantlab_api.security import RateLimiter
+from tests.limiter_clock import limiter_clock  # noqa: F401 - the fixture below
 from tests.unit.test_redis_timeouts import api_redis, silent_redis
+
+# Fixed-window limits: counted against a frozen clock, never across a window boundary.
+pytestmark = pytest.mark.usefixtures("limiter_clock")
 
 
 class Flaky:
@@ -185,6 +189,17 @@ def test_the_gauge_follows_the_breaker_under_concurrent_transitions(flaky: Flaky
     assert _gauge() == (1.0 if lim._open_until else 0.0)
     lim._redis_answered()
     assert _gauge() == 0.0
+
+
+def test_a_new_window_starts_a_local_count_over(flaky: Flaky, limiter_clock) -> None:  # noqa: F811
+    """Intended (fixed windows, ADR-0007), and the reason every test that counts within a
+    window freezes the clock: #232's CI run straddled a minute and saw `True is False`."""
+    lim = RateLimiter()
+    assert [lim.reserve("victim", 2) for _ in range(3)] == [True, True, False]
+    limiter_clock.advance(29)  # still this minute (the clock starts mid-minute)
+    assert lim.reserve("victim", 2) is False
+    limiter_clock.advance(1)  # the next minute's window
+    assert lim.reserve("victim", 2) is True
 
 
 def test_in_degraded_mode_the_limit_is_per_process(flaky: Flaky) -> None:

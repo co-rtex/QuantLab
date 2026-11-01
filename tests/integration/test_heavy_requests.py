@@ -10,6 +10,10 @@ import pytest
 from quantlab_api import limits
 from quantlab_api.config import get_settings
 from tests.integration.test_portfolios import _create
+from tests.limiter_clock import limiter_clock  # noqa: F401 - the fixture below
+
+# Fixed-window limits: counted against a frozen clock, never across a window boundary.
+pytestmark = pytest.mark.usefixtures("limiter_clock")
 
 OPTIMIZE = {"symbols": ["SYN001", "SYN002", "SYN003"], "lookback": 60}
 
