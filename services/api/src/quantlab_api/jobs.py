@@ -36,6 +36,7 @@ from redis import Redis
 from rq import Queue, get_current_job
 from rq.job import Job as RQJob
 from rq.serializers import JSONSerializer
+from rq.timeouts import JobTimeoutException as RQJobTimeoutException
 from sqlalchemy import create_engine, func, or_, select, text, update
 from sqlalchemy.engine import Engine
 from sqlalchemy.exc import OperationalError
@@ -759,13 +760,20 @@ def _run_claimed(job: Job, jid: uuid.UUID, wid: str) -> str:
     except JobCancelledError:
         won = _finish(jid, ctx.attempt, JobStatus.cancelled, message="cancelled by user")
         outcome = "cancelled" if won else "lease_lost"
-    except JobTimeoutError as exc:
+    except (JobTimeoutError, RQJobTimeoutException) as exc:
+        # Ours, from a heartbeat past the timeout; or RQ's, from its alarm at timeout + 60 s
+        # (enqueue's job_timeout), which stops a long phase that never heartbeats. Either
+        # way this attempt timed out. RQ's was taken for a retryable error: the job ran its
+        # whole timeout again, up to max_attempts, and was then reported failed (#212).
+        message = (
+            str(exc) if isinstance(exc, JobTimeoutError) else f"exceeded {job.timeout_seconds}s"
+        )
         won = _finish(
             jid,
             ctx.attempt,
             JobStatus.timed_out,
-            message=str(exc),
-            error={"type": "JobTimeoutError", "message": str(exc)},
+            message=message,
+            error={"type": "JobTimeoutError", "message": message},
         )
         outcome = "timed_out" if won else "lease_lost"
     except LeaseLostError as exc:

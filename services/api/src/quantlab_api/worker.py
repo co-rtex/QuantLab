@@ -8,6 +8,7 @@ crashing or runaway job cannot take the worker down.
 from __future__ import annotations
 
 import os
+import signal
 from typing import Any
 
 import redis
@@ -59,6 +60,9 @@ class QuantlabWorker(Worker):
     # first, so in an outage it never gets that far.
     _horse_exit: tuple[Any, Any, Any] | None = None
     _horse_kill_handled: bool = False
+    # Whether this worker killed the horse itself (#214): RQ's monitor past the job timeout
+    # + 60 s, a cold shutdown or a stop command. Never an out-of-memory kill.
+    _horse_killed_by_us: bool = False
 
     def _redis_down(self, during: str, exc: Exception) -> None:
         if isinstance(exc, REDIS_REFUSED):
@@ -80,6 +84,10 @@ class QuantlabWorker(Worker):
         if result[0]:
             self._horse_exit = result
         return result
+
+    def kill_horse(self, sig: Any = signal.SIGKILL) -> None:
+        self._horse_killed_by_us = True
+        super().kill_horse(sig)
 
     def handle_work_horse_killed(self, job: Any, retpid: Any, ret_val: Any, rusage: Any) -> None:
         self._horse_kill_handled = True
@@ -134,6 +142,7 @@ class QuantlabWorker(Worker):
 
     def execute_job(self, job: Any, queue: Any) -> None:
         self._horse_exit, self._horse_kill_handled = None, False
+        self._horse_killed_by_us = False
         try:
             try:
                 super().execute_job(job, queue)
@@ -179,8 +188,10 @@ class QuantlabWorker(Worker):
             self._horse_pid = 0
         # A horse killed (OOM, signal) whose death RQ never handed over: RQ reads the job's
         # status from Redis before its killed-horse handler, so in an outage that read
-        # failed first. The handler (jobs.horse_killed) needs only PostgreSQL.
-        if self._horse_exit and not self._horse_kill_handled:
+        # failed first. The handler (jobs.horse_killed) needs only PostgreSQL. A horse this
+        # worker killed itself is left out, as RQ leaves it out (ret_val None, #214): its
+        # SIGKILL is no evidence of memory, and the reaper times the attempt out.
+        if self._horse_exit and not self._horse_kill_handled and not self._horse_killed_by_us:
             retpid, ret_val, rusage = self._horse_exit
             if ret_val:  # 0: the horse exited normally
                 self.handle_work_horse_killed(job, retpid, ret_val, rusage)

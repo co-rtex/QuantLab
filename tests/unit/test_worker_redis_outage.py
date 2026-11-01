@@ -193,6 +193,30 @@ def _killed_in_an_outage(
     return handled
 
 
+def test_a_horse_the_monitor_killed_during_an_outage_is_not_classified(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """#214: RQ's monitor SIGKILLs a horse that outlives its job timeout + 60 s, and gives
+    its killed-horse handler ret_val None. In an outage this worker handed the recorded
+    SIGKILL over instead, and one near its memory limit read as out of memory. A kill of
+    our own is never an OOM: the reaper times the attempt out from its lease."""
+    handled: list[tuple] = []
+
+    def backstop(self: QuantlabWorker, job: Any, queue: Any) -> None:
+        self.kill_horse()  # as monitor_work_horse does past timeout + 60 s
+        self.wait_for_horse()
+        raise redis.exceptions.ConnectionError("refused")  # RQ's status read, Redis down
+
+    monkeypatch.setattr(Worker, "execute_job", backstop)
+    monkeypatch.setattr(Worker, "kill_horse", lambda self, sig=signal.SIGKILL: None)
+    monkeypatch.setattr(Worker, "wait_for_horse", lambda self: (4242, signal.SIGKILL, "rusage"))
+    w = worker(work_horse_killed_handler=lambda *a: handled.append(a))
+    w.execute_job(JOB, None)
+    assert handled == []
+    # The next job's horse is classified as usual: the mark is per job.
+    assert _killed_in_an_outage(monkeypatch, signal.SIGKILL, rq_handled=False) != []
+
+
 def test_a_horse_killed_during_an_outage_is_still_classified(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
