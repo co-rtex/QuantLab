@@ -1052,8 +1052,11 @@ def reap(redeliver_after_seconds: int = 120) -> dict[str, int]:
         # decides again, so counting first would count it twice.
         _count(decided, requeued)
         for job in stale:
-            if job.status == JobStatus.queued:
-                enqueue(job)
+            if job.status == JobStatus.queued and enqueue(job):
+                # Record the requeue's delivery, as the redelivery pass below records its own:
+                # without it that pass, in this same cycle, delivered the job again (#186).
+                # A failed enqueue is not recorded, so the job is still redelivered.
+                job.heartbeat_at = t
         cutoff = t - timedelta(seconds=redeliver_after_seconds)
         orphaned = db.scalars(
             select(Job)
