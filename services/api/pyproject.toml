@@ -12,7 +12,14 @@ dependencies = [
   "alembic>=1.14",
   "psycopg[binary]>=3.2",
   "redis>=5.2",
-  "rq>=2.0",
+  # 3.0.x only: QuantlabWorker (worker.py) overrides rq.Worker internals, heartbeat,
+  # maintain_heartbeats, run_maintenance_tasks, check_for_suspension, set_state,
+  # register_death, fork_work_horse and execute_job (#165, #185), and relies on
+  # monitor_work_horse resetting _horse_pid and on the work loop's error handling;
+  # TrustedJob (jobs.py, #115) overrides Job.func and the callback properties. Re-check
+  # those, with tests/unit/test_worker_redis_outage.py, test_worker_metrics.py and
+  # test_rq_trusted.py, before raising the bound.
+  "rq>=3.0,<3.1",
   "duckdb>=1.1",
   "pyjwt>=2.10",
   "pwdlib[argon2]>=0.2",
