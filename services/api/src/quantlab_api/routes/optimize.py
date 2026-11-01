@@ -1,8 +1,8 @@
 """Portfolio construction research: compare allocators on point-in-time history.
 
-``POST .../optimizations`` submits the computation as a worker job (#224) and ``GET
-/optimizations/{id}`` reads it back. The synchronous ``POST .../optimize`` computes in this
-process and stays until the web app has moved to the job (#224, part 2).
+``POST .../optimizations`` submits the computation as a worker job and ``GET
+/optimizations/{id}`` reads it back (#224). It used to run in the API process
+(``POST .../optimize``, bounded per process by #223), competing with every other request.
 """
 
 from __future__ import annotations
@@ -22,10 +22,10 @@ from quantlab_api.jobs import (
     request_fingerprint,
     submit_job,
 )
-from quantlab_api.limits import check_optimize_memory, heavy_slot, optimize_cost
+from quantlab_api.limits import check_optimize_memory, optimize_cost
 from quantlab_api.marketdata import bar_dates
 from quantlab_api.models import Instrument, Job, OptimizationRun, Role
-from quantlab_api.optimization import OptimizeIn, OptimizeInputError, compute
+from quantlab_api.optimization import OptimizeIn
 from quantlab_api.routes.datasets import load_version
 from quantlab_api.schemas import JobOut
 from quantlab_api.security import (
@@ -41,32 +41,6 @@ from quantlab_api.tasks import dataset_store
 router = APIRouter(tags=["optimization"])
 # Seconds per attempt; the largest request measured runs in a few seconds (#224).
 OPTIMIZE_TIMEOUT_SECONDS = 300
-
-
-@router.post("/dataset-versions/{version_id}/optimize")
-def optimize(version_id: uuid.UUID, body: OptimizeIn, user: CurrentUser, db: DB) -> dict[str, Any]:
-    """Allocations from returns dated on or before ``as_of`` only (no look-ahead).
-
-    Computed in this process over each symbol's full history, so bounded (#223): per user
-    and minute (429, the login limiter's fail-safe breaker included), and per process at
-    once (503 server_busy with Retry-After, never queued)."""
-    dv, ds = load_version(db, user, version_id)
-    receipt = login_limiter.reserve_receipt(
-        f"optimize:user:{user.id}", get_settings().rate_limit_optimize_per_minute
-    )
-    if not receipt:
-        raise rate_limited(60, "Too many optimizations")
-    try:
-        with heavy_slot("optimize"):
-            store = dataset_store()
-            try:
-                return compute(store, store.open(ds.slug, dv.version_hash), body, dv.is_synthetic)
-            except OptimizeInputError as exc:
-                raise ApiError(422, exc.code, exc.message, exc.details) from exc
-    except ApiError as exc:
-        if exc.code == "server_busy":  # refused before any work: not one of the user's 10
-            login_limiter.refund(receipt)
-        raise
 
 
 def _run_out(db: DB, run: OptimizationRun) -> dict[str, Any]:

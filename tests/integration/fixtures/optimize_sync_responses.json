@@ -1,0 +1,531 @@
+{
+  "about": "Responses of the synchronous POST /dataset-versions/{id}/optimize, removed in #224 part 2, for test_optimize_job.BODIES on the integration 'seeded' version (synthetic: 12 assets, 2020-01-02 to 2022-12-30, seed 5). Synthetic data.",
+  "captured_from": "c4b87d7",
+  "captures": [
+    {
+      "body": {
+        "as_of": "2021-12-31",
+        "benchmark": "SYNIDX",
+        "max_weight": 0.3,
+        "symbols": [
+          "SYN001",
+          "SYN002",
+          "SYN003",
+          "SYN004",
+          "SYN005",
+          "SYN006",
+          "SYN007",
+          "SYN008"
+        ]
+      },
+      "response": {
+        "as_of": "2021-12-31",
+        "covariance": "ledoit_wolf",
+        "excluded_for_history": [],
+        "is_synthetic": true,
+        "max_weight": 0.3,
+        "notes": [
+          "Inputs use only returns dated on or before as_of.",
+          "Expected volatility is in-sample; out-of-sample risk is usually higher.",
+          "Mean-variance weights are sensitive to estimated means, which are noisy."
+        ],
+        "observations": 228,
+        "results": [
+          {
+            "beta": 0.8922432717749628,
+            "concentration": {
+              "effective_n": 8.0,
+              "hhi": 0.125,
+              "top1": 0.125,
+              "top10": 1.0,
+              "top5": 0.625
+            },
+            "expected_volatility": 0.17109625763877057,
+            "historical_mean_return": 0.14024334036486036,
+            "method": "equal_weight",
+            "risk_share": {
+              "SYN001": 0.10663511501960347,
+              "SYN002": 0.13564729775746243,
+              "SYN003": 0.13120318172039208,
+              "SYN004": 0.11781635507869083,
+              "SYN005": 0.12249840360775695,
+              "SYN006": 0.1535453447787782,
+              "SYN007": 0.08910849542068543,
+              "SYN008": 0.14354580661663055
+            },
+            "weights": {
+              "SYN001": 0.125,
+              "SYN002": 0.125,
+              "SYN003": 0.125,
+              "SYN004": 0.125,
+              "SYN005": 0.125,
+              "SYN006": 0.125,
+              "SYN007": 0.125,
+              "SYN008": 0.125
+            }
+          },
+          {
+            "beta": 0.8615239570244531,
+            "concentration": {
+              "effective_n": 7.306516065859364,
+              "hhi": 0.13686413483337545,
+              "top1": 0.20471578665274637,
+              "top10": 1.0,
+              "top5": 0.729833649067746
+            },
+            "expected_volatility": 0.16703540026606484,
+            "historical_mean_return": 0.16221981496700005,
+            "method": "min_variance",
+            "risk_share": {
+              "SYN001": 0.14840873698802265,
+              "SYN002": 0.10790196623922865,
+              "SYN003": 0.11211089508178174,
+              "SYN004": 0.13430915260017975,
+              "SYN005": 0.1302890854691449,
+              "SYN006": 0.06470532726908941,
+              "SYN007": 0.20471578115949748,
+              "SYN008": 0.09755905519305545
+            },
+            "weights": {
+              "SYN001": 0.14840873332877647,
+              "SYN002": 0.10790196765302318,
+              "SYN003": 0.11211089283231318,
+              "SYN004": 0.13430915253234862,
+              "SYN005": 0.13028908372156123,
+              "SYN006": 0.06470532867430699,
+              "SYN007": 0.20471578665274637,
+              "SYN008": 0.09755905460492396
+            }
+          },
+          {
+            "beta": 0.841506773715308,
+            "concentration": {
+              "effective_n": 3.5785130438209793,
+              "hhi": 0.27944567694861433,
+              "top1": 0.30000000000000004,
+              "top10": 0.9999999999999998,
+              "top5": 0.9999999999999996
+            },
+            "expected_volatility": 0.20513461447985637,
+            "historical_mean_return": 0.545779610920385,
+            "method": "mean_variance",
+            "risk_share": {
+              "SYN001": 0.3469171544417697,
+              "SYN002": 4.519820335404389e-17,
+              "SYN003": 0.05576419967937907,
+              "SYN004": 5.630050476311003e-17,
+              "SYN005": 0.0,
+              "SYN006": 0.0015105806187029266,
+              "SYN007": 0.2537034265844044,
+              "SYN008": 0.3421046386757436
+            },
+            "weights": {
+              "SYN001": 0.2999999999999999,
+              "SYN002": 1.5145728353047904e-16,
+              "SYN003": 0.09714698796643657,
+              "SYN004": 1.6398034826759343e-16,
+              "SYN005": 0.0,
+              "SYN006": 0.0028530120335635224,
+              "SYN007": 0.2999999999999996,
+              "SYN008": 0.30000000000000004
+            }
+          },
+          {
+            "beta": 0.8821640325266038,
+            "concentration": {
+              "effective_n": 7.909522310571574,
+              "hhi": 0.12642988548922066,
+              "top1": 0.1524678214063537,
+              "top10": 1.0,
+              "top5": 0.6623294003662241
+            },
+            "expected_volatility": 0.16876637511409465,
+            "historical_mean_return": 0.1502305914339646,
+            "method": "risk_parity",
+            "risk_share": {
+              "SYN001": 0.1249999572666222,
+              "SYN002": 0.1250000458609527,
+              "SYN003": 0.12500007519113926,
+              "SYN004": 0.12499973099695419,
+              "SYN005": 0.12500021606697553,
+              "SYN006": 0.1250000812506445,
+              "SYN007": 0.12499987045218341,
+              "SYN008": 0.12500002291452808
+            },
+            "weights": {
+              "SYN001": 0.13540222492080872,
+              "SYN002": 0.11771699862197674,
+              "SYN003": 0.11996809549158328,
+              "SYN004": 0.12861116308341114,
+              "SYN005": 0.12588009546406728,
+              "SYN006": 0.1065396717526983,
+              "SYN007": 0.1524678214063537,
+              "SYN008": 0.11341392925910083
+            }
+          }
+        ],
+        "symbols": [
+          "SYN001",
+          "SYN002",
+          "SYN003",
+          "SYN004",
+          "SYN005",
+          "SYN006",
+          "SYN007",
+          "SYN008"
+        ],
+        "window_start": "2021-02-08"
+      }
+    },
+    {
+      "body": {
+        "as_of": "2021-06-30",
+        "symbols": [
+          "SYN001",
+          "SYN002",
+          "SYN003",
+          "SYN004",
+          "SYN005",
+          "SYN006",
+          "SYN007",
+          "SYN008"
+        ]
+      },
+      "response": {
+        "as_of": "2021-06-30",
+        "covariance": "ledoit_wolf",
+        "excluded_for_history": [
+          "SYN005"
+        ],
+        "is_synthetic": true,
+        "max_weight": 0.4,
+        "notes": [
+          "Inputs use only returns dated on or before as_of.",
+          "Expected volatility is in-sample; out-of-sample risk is usually higher.",
+          "Mean-variance weights are sensitive to estimated means, which are noisy."
+        ],
+        "observations": 252,
+        "results": [
+          {
+            "beta": null,
+            "concentration": {
+              "effective_n": 6.999999999999997,
+              "hhi": 0.1428571428571429,
+              "top1": 0.14285714285714288,
+              "top10": 1.0000000000000002,
+              "top5": 0.7142857142857144
+            },
+            "expected_volatility": 0.19234794121935428,
+            "historical_mean_return": 0.5572758249533172,
+            "method": "equal_weight",
+            "risk_share": {
+              "SYN001": 0.14981559566101738,
+              "SYN002": 0.1376028894723345,
+              "SYN003": 0.13894778809510644,
+              "SYN004": 0.14299597848640197,
+              "SYN006": 0.19737061056082633,
+              "SYN007": 0.09722351761652494,
+              "SYN008": 0.13604362010778848
+            },
+            "weights": {
+              "SYN001": 0.14285714285714285,
+              "SYN002": 0.14285714285714285,
+              "SYN003": 0.14285714285714285,
+              "SYN004": 0.14285714285714285,
+              "SYN006": 0.14285714285714285,
+              "SYN007": 0.14285714285714285,
+              "SYN008": 0.14285714285714285
+            }
+          },
+          {
+            "beta": null,
+            "concentration": {
+              "effective_n": 5.5893814486400455,
+              "hhi": 0.17891067360294588,
+              "top1": 0.274786358824194,
+              "top10": 1.0,
+              "top5": 0.8701689020907893
+            },
+            "expected_volatility": 0.183017908328708,
+            "historical_mean_return": 0.5461629750963565,
+            "method": "min_variance",
+            "risk_share": {
+              "SYN001": 0.11668524164273567,
+              "SYN002": 0.1516458147425527,
+              "SYN003": 0.15692754399870978,
+              "SYN004": 0.12263911304286419,
+              "SYN006": 0.01314585715907088,
+              "SYN007": 0.2747863609641119,
+              "SYN008": 0.16417006844995496
+            },
+            "weights": {
+              "SYN001": 0.11668524070719775,
+              "SYN002": 0.1516458161985015,
+              "SYN003": 0.15692754618484375,
+              "SYN004": 0.1226391118166523,
+              "SYN006": 0.013145857202012909,
+              "SYN007": 0.274786358824194,
+              "SYN008": 0.16417006906659776
+            }
+          },
+          {
+            "beta": null,
+            "concentration": {
+              "effective_n": 2.8987617342035423,
+              "hhi": 0.3449748864146497,
+              "top1": 0.39999999999999986,
+              "top10": 1.0,
+              "top5": 0.9999999999999994
+            },
+            "expected_volatility": 0.23554924946403077,
+            "historical_mean_return": 0.8785710126554742,
+            "method": "mean_variance",
+            "risk_share": {
+              "SYN001": 0.4758155104747503,
+              "SYN002": 5.3252251435543004e-17,
+              "SYN003": 0.020444961134727546,
+              "SYN004": 1.4163694649456587e-16,
+              "SYN006": 0.0001832836879099594,
+              "SYN007": 0.06227677374069619,
+              "SYN008": 0.4412794709619156
+            },
+            "weights": {
+              "SYN001": 0.39999999999999986,
+              "SYN002": 1.779064539572323e-16,
+              "SYN003": 0.049667179951647066,
+              "SYN004": 3.348901820261174e-16,
+              "SYN006": 0.0003062762463922537,
+              "SYN007": 0.15002654380196057,
+              "SYN008": 0.39999999999999974
+            }
+          },
+          {
+            "beta": null,
+            "concentration": {
+              "effective_n": 6.866803064539382,
+              "hhi": 0.14562817523689664,
+              "top1": 0.18179980674889407,
+              "top10": 1.0,
+              "top5": 0.7559695040778187
+            },
+            "expected_volatility": 0.18797649836498054,
+            "historical_mean_return": 0.5529914776910483,
+            "method": "risk_parity",
+            "risk_share": {
+              "SYN001": 0.14285938361542105,
+              "SYN002": 0.14285797743289866,
+              "SYN003": 0.14285732862580203,
+              "SYN004": 0.14285571429562707,
+              "SYN006": 0.14285734382203374,
+              "SYN007": 0.1428566188245527,
+              "SYN008": 0.14285563338366486
+            },
+            "weights": {
+              "SYN001": 0.1353355234445691,
+              "SYN002": 0.14448902706318537,
+              "SYN003": 0.14434416674576364,
+              "SYN004": 0.13906776433883475,
+              "SYN006": 0.10869497247761224,
+              "SYN007": 0.18179980674889407,
+              "SYN008": 0.14626873918114086
+            }
+          }
+        ],
+        "symbols": [
+          "SYN001",
+          "SYN002",
+          "SYN003",
+          "SYN004",
+          "SYN006",
+          "SYN007",
+          "SYN008"
+        ],
+        "window_start": "2020-07-01"
+      }
+    },
+    {
+      "body": {
+        "covariance": "sample",
+        "lookback": 60,
+        "methods": [
+          "risk_parity"
+        ],
+        "symbols": [
+          "SYN001",
+          "SYN002",
+          "SYN003"
+        ]
+      },
+      "response": {
+        "as_of": "2022-12-30",
+        "covariance": "sample",
+        "excluded_for_history": [
+          "SYN003"
+        ],
+        "is_synthetic": true,
+        "max_weight": 0.5,
+        "notes": [
+          "Inputs use only returns dated on or before as_of.",
+          "Expected volatility is in-sample; out-of-sample risk is usually higher.",
+          "Mean-variance weights are sensitive to estimated means, which are noisy."
+        ],
+        "observations": 60,
+        "results": [
+          {
+            "beta": null,
+            "concentration": {
+              "effective_n": 1.964561378219405,
+              "hhi": 0.5090194743145962,
+              "top1": 0.5671545765923517,
+              "top10": 1.0,
+              "top5": 1.0
+            },
+            "expected_volatility": 0.2743937788831335,
+            "historical_mean_return": -0.9759759522984132,
+            "method": "risk_parity",
+            "risk_share": {
+              "SYN001": 0.5000000168942046,
+              "SYN002": 0.49999998310579563
+            },
+            "weights": {
+              "SYN001": 0.43284542340764837,
+              "SYN002": 0.5671545765923517
+            }
+          }
+        ],
+        "symbols": [
+          "SYN001",
+          "SYN002"
+        ],
+        "window_start": "2022-10-06"
+      }
+    },
+    {
+      "body": {
+        "benchmark": "NOPE",
+        "risk_aversion": 20,
+        "symbols": [
+          "syn003",
+          "syn004",
+          "syn005",
+          "syn006"
+        ]
+      },
+      "response": {
+        "as_of": "2022-12-30",
+        "covariance": "ledoit_wolf",
+        "excluded_for_history": [
+          "SYN003"
+        ],
+        "is_synthetic": true,
+        "max_weight": 0.4,
+        "notes": [
+          "Inputs use only returns dated on or before as_of.",
+          "Expected volatility is in-sample; out-of-sample risk is usually higher.",
+          "Mean-variance weights are sensitive to estimated means, which are noisy."
+        ],
+        "observations": 252,
+        "results": [
+          {
+            "beta": null,
+            "concentration": {
+              "effective_n": 3.0,
+              "hhi": 0.3333333333333333,
+              "top1": 0.3333333333333333,
+              "top10": 1.0,
+              "top5": 1.0
+            },
+            "expected_volatility": 0.2596622283006063,
+            "historical_mean_return": -0.0713131679294124,
+            "method": "equal_weight",
+            "risk_share": {
+              "SYN004": 0.2898158868062226,
+              "SYN005": 0.31808232063282926,
+              "SYN006": 0.39210179256094824
+            },
+            "weights": {
+              "SYN004": 0.3333333333333333,
+              "SYN005": 0.3333333333333333,
+              "SYN006": 0.3333333333333333
+            }
+          },
+          {
+            "beta": null,
+            "concentration": {
+              "effective_n": 2.8689021400979717,
+              "hhi": 0.34856539232315903,
+              "top1": 0.39999999999999997,
+              "top10": 1.0,
+              "top5": 1.0
+            },
+            "expected_volatility": 0.25562642889192416,
+            "historical_mean_return": -0.05718032817638555,
+            "method": "min_variance",
+            "risk_share": {
+              "SYN004": 0.38790471057511733,
+              "SYN005": 0.3728091959208394,
+              "SYN006": 0.23928609350404356
+            },
+            "weights": {
+              "SYN004": 0.3999999999999999,
+              "SYN005": 0.36544231170717834,
+              "SYN006": 0.23455768829282161
+            }
+          },
+          {
+            "beta": null,
+            "concentration": {
+              "effective_n": 2.804330535598004,
+              "hhi": 0.35659134588667774,
+              "top1": 0.39999999999999997,
+              "top10": 0.9999999999999999,
+              "top5": 0.9999999999999999
+            },
+            "expected_volatility": 0.25594729756100754,
+            "historical_mean_return": -0.053897368561486386,
+            "method": "mean_variance",
+            "risk_share": {
+              "SYN004": 0.3824437485170069,
+              "SYN005": 0.4158325846594337,
+              "SYN006": 0.20172366682355947
+            },
+            "weights": {
+              "SYN004": 0.3999999999999999,
+              "SYN005": 0.39108058488689496,
+              "SYN006": 0.20891941511310497
+            }
+          },
+          {
+            "beta": null,
+            "concentration": {
+              "effective_n": 2.979333581034691,
+              "hhi": 0.33564553038492273,
+              "top1": 0.362579568829282,
+              "top10": 1.0,
+              "top5": 1.0
+            },
+            "expected_volatility": 0.25732960675709066,
+            "historical_mean_return": -0.06588461511996077,
+            "method": "risk_parity",
+            "risk_share": {
+              "SYN004": 0.33333334800885794,
+              "SYN005": 0.3333348851990495,
+              "SYN006": 0.33333176679209253
+            },
+            "weights": {
+              "SYN004": 0.362579568829282,
+              "SYN005": 0.34139483168925916,
+              "SYN006": 0.2960255994814589
+            }
+          }
+        ],
+        "symbols": [
+          "SYN004",
+          "SYN005",
+          "SYN006"
+        ],
+        "window_start": "2021-12-31"
+      }
+    }
+  ]
+}
