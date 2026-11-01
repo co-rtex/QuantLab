@@ -150,6 +150,30 @@ def test_verifier_flags_invented_numbers_and_unknown_citations():
     assert verify_answer("Drawdown #1 began 2021-03-04 [F2] at 28.34% [F2]", f)["grounded"]
 
 
+@pytest.mark.parametrize(
+    ("value", "text", "grounded"),
+    [
+        (-0.0041, "The Sharpe ratio was -0.00 [F1].", True),  # #238: flagged its own figure
+        (-0.0041, "The Sharpe ratio was 0.00 [F1].", True),  # an unsigned rounded zero
+        (0.0041, "The Sharpe ratio was 0.00 [F1].", True),
+        (0.0041, "The Sharpe ratio was -0.00 [F1].", False),  # a minus for a positive value
+        (-0.0141, "The Sharpe ratio was 0.01 [F1].", False),  # not zero at that precision
+        (-0.0141, "The Sharpe ratio was -0.01 [F1].", True),
+    ],
+)
+def test_a_figure_that_rounds_to_zero_keeps_a_consistent_sign(value, text, grounded):
+    f = [Fact("F1", "sharpe", "Sharpe ratio", value, "ratio", "s")]
+    assert verify_answer(text, f)["grounded"] is grounded, verify_answer(text, f)
+
+
+def test_the_assembled_answer_on_a_near_zero_sharpe_verifies():
+    """#238: the deterministic answer rendered -0.0041 as "-0.00", then failed its own check."""
+    f = [Fact("F1", "sharpe", "Sharpe ratio", -0.0041, "ratio", "s")]
+    ans = answer_question("What was the Sharpe ratio?", f, synthetic=False)
+    assert "-0.00" in ans.text
+    assert ans.verification["grounded"] is True and ans.verification["unsupported"] == []
+
+
 def test_verifier_binds_numbers_to_cited_facts_and_their_sign():
     """A number used to be accepted if its magnitude matched *any* fact: an answer turning
     a 28.3% drawdown into "gained 28.3%", cited to the Sharpe fact, was shown as verified."""
