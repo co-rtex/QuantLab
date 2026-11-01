@@ -462,7 +462,8 @@ function Builder() {
             <p id="backtest-size-note" className="text-xs text-ink-2">
               One backtest must fit a worker&apos;s memory. Under the default limits, a
               2005–2023 backtest can have at most 199 symbols with a daily rebalance and 400
-              with a weekly, monthly or quarterly one; a shorter period allows more.
+              with a weekly, monthly or quarterly one. An earlier end date allows more; a
+              later start does not reduce the history loaded.
             </p>
           </div>
         </Panel>

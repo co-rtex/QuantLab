@@ -124,9 +124,16 @@ experiment; results of failed jobs are never stored.
     * It ignores the strategy, so a strategy that holds few names is overestimated.
     * The default limit is 1228 MB, which is 80% of the compose worker's 1536 MB limit.
     * `details` give the estimate, the limit, and the symbols, sessions and rebalances.
-  * **`outside_measured_range`:** the backtest has more than 400 symbols or more than 4,785
-    sessions. The estimate was measured only up to there, so larger backtests are refused
-    rather than estimated. A new measurement (below) can widen the range.
+  * **`outside_measured_range`:** the backtest has more than 400 symbols, or symbols ×
+    sessions or symbols × rebalances above 400 × 4,785. Those products are what was
+    measured, so larger backtests are refused rather than estimated.
+    * A long history of few symbols stays inside: per-session costs that don't scale with
+      symbols are about 1 KB a session.
+    * A new measurement (below) can widen the range.
+* **What reduces a backtest's memory:** fewer symbols, a less frequent rebalance or an
+  earlier end date. The job loads the data from its first bar up to the end date, whatever
+  the start. So a later start doesn't reduce what is loaded, and helps only by cutting
+  rebalances.
 * **Effective caps for 2005–2023** (4,785 sessions) under the defaults, of the 1,500-symbol
   universe limit:
 
@@ -137,8 +144,7 @@ experiment; results of failed jobs are never stored.
   | monthly | 400 | the measured range (the estimate alone would allow 514) |
   | quarterly | 400 | the measured range (the estimate alone would allow 542) |
 
-  A shorter period allows more. The user can choose fewer symbols, a shorter period or a
-  less frequent rebalance.
+  An earlier end date allows more, as does a dataset with less history.
 * **Older experiments:** reproducing one that is larger than these now returns the same
   422, although it ran before #163.
 * **If a job still runs out of memory:** the kernel kills its work horse, and the job fails at

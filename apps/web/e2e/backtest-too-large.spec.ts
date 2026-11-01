@@ -11,7 +11,9 @@ const REFUSAL = {
     code: "backtest_too_large",
     message:
       "This backtest needs an estimated 2084 MB, over the 1228 MB limit for one backtest. " +
-      "Use fewer symbols, a shorter period or a less frequent rebalance.",
+      "Use fewer symbols, a less frequent rebalance or an earlier end date. The whole history " +
+      "up to the end date is loaded whatever the start, so a later start helps only by " +
+      "cutting rebalances.",
     details: { estimated_mb: 2084.0, limit_mb: 1228, symbols: 400, sessions: 4785, rebalances: 4785 },
     request_id: null,
   },

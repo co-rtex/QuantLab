@@ -140,7 +140,15 @@ def create_experiment(
     # A job that cannot fit the worker's memory is refused here, not OOM-killed later (#163).
     # A version without recorded dates has no window to estimate from.
     if dv.start_date and dv.end_date:
-        dates = bar_dates(dataset_store().open(ds.slug, dv.version_hash).path, cfg.end)
+        try:
+            dates = bar_dates(dataset_store().open(ds.slug, dv.version_hash).path, cfg.end)
+        except OSError as exc:  # its manifest or bars are missing on this server
+            raise ApiError(
+                409,
+                "dataset_unavailable",
+                "This dataset version's files are not available on the server. Ask an "
+                "operator, or use another version.",
+            ) from exc
         check_backtest_memory(
             backtest_cost(
                 n_univ, dv.start_date, dv.end_date, cfg.start, cfg.end, cfg.rebalance, dates

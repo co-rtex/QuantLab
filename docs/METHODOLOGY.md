@@ -395,9 +395,12 @@ data after a decision date leaves that decision unchanged (no look-ahead).
     strategy, so one that holds few names is overestimated.
   * It is an envelope over the jobs measured in the real worker container: 100–400 symbols
     with equal weight, which trades every name at every rebalance, over 2005–2023.
-  * **Larger backtests are refused outright,** not estimated: more than 400 symbols or
-    more than 4,785 sessions. Sessions are the larger of the exchange calendar's count and
-    the dataset version's distinct bar dates.
+  * **Larger backtests are refused outright,** not estimated: more than 400 symbols, or
+    symbols × sessions or symbols × rebalances above the measured 400 × 4,785.
+    * Sessions are the larger of the exchange calendar's count and the dataset version's
+      distinct bar dates, from the data's first bar to the end date. The engine loads that
+      whole history whatever the start.
+    * A long history of few symbols is inside the range.
   * For 2005–2023 the effective caps are 199 symbols daily and 400 weekly, monthly or
     quarterly.
   * Details are in `docs/RUNBOOK.md` and `benchmarks/results/*-worker-memory-*.json`.

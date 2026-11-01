@@ -58,5 +58,20 @@ def test_a_backtest_within_the_limit_is_accepted_and_runs(client, seeded, monkey
     assert run_pending_jobs() == ["completed"]
 
 
+def test_missing_version_files_are_a_clean_409_not_a_500(client, seeded, monkeypatch):
+    # #174 re-review: the size check opens the version's files at submission.
+    from quantlab_api.routes import experiments
+
+    class Gone:
+        def open(self, slug, version):
+            raise FileNotFoundError(f"dataset {slug}@{version[:12]} not found")
+
+    monkeypatch.setattr(experiments, "dataset_store", lambda: Gone())
+    r = submit(client, seeded)
+    assert r.status_code == 409, r.text
+    assert r.json()["error"]["code"] == "dataset_unavailable"
+    assert run_pending_jobs() == []
+
+
 def test_the_default_limit_admits_the_seeded_backtest(client, seeded):
     assert submit(client, seeded).status_code == 202

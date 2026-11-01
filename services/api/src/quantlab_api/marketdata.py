@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 import threading
 from datetime import date
+from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
@@ -40,13 +41,15 @@ def _duck() -> duckdb.DuckDBPyConnection:
     return con
 
 
+@lru_cache(maxsize=256)
 def bar_dates(path: Path, end: date | None = None) -> int:
     """Distinct bar dates in a dataset version, up to ``end``: the sessions the engine
     steps through, which can include days the exchange calendar does not (#163).
 
     PyArrow, not DuckDB: this runs at submission, and a DuckDB connection does not survive
     a fork (its threads stay behind), so one opened here would hang a work horse forked
-    from the same process, as the tests run API and worker.
+    from the same process, as the tests run API and worker. Cached: a version's files are
+    immutable (content-addressed), so the count for a path and end never changes.
     """
     dates = pq.read_table(path / "bars.parquet", columns=["date"]).column("date")
     if end is not None:

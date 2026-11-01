@@ -82,12 +82,19 @@ def test_a_refusal_names_the_estimate_and_the_limit():
     check_backtest_memory(cost, math.ceil(cost.memory_mb))  # at the estimate: admitted
 
 
+def _admitted(cost: BacktestCost, limit: int = 1228) -> bool:
+    try:
+        check_backtest_memory(cost, limit)
+    except ApiError:
+        return False
+    return True
+
+
 @pytest.mark.parametrize(
     ("symbols", "start", "end", "rebalance"),
     [
-        (1500, date(2022, 1, 3), date(2023, 12, 29), "daily"),  # wide and short
-        (110, date(1990, 1, 2), date(2023, 12, 29), "daily"),  # a long history
-        (500, START, END, "monthly"),  # more symbols than were measured
+        (1500, date(2022, 1, 3), date(2023, 12, 29), "daily"),  # more symbols than measured
+        (500, START, END, "monthly"),  # likewise
     ],
 )
 def test_backtests_outside_the_measured_range_are_refused(symbols, start, end, rebalance):
@@ -99,20 +106,50 @@ def test_backtests_outside_the_measured_range_are_refused(symbols, start, end, r
     assert exc.value.code == "backtest_too_large"
     assert exc.value.details["reason"] == "outside_measured_range"
     assert "larger backtests are refused" in exc.value.message
+    assert "a later start helps only by cutting rebalances" in exc.value.message
+
+
+@pytest.mark.parametrize(
+    ("symbols", "data_start", "start", "rebalance"),
+    [
+        (1, date(1993, 1, 4), date(2020, 1, 2), "monthly"),  # long history, one symbol
+        (110, date(1990, 1, 2), date(1990, 1, 2), "daily"),  # 1990-2023: 110 x 8,568
+    ],
+)
+def test_a_long_history_of_few_symbols_is_inside_the_measured_products(
+    symbols, data_start, start, rebalance
+):
+    # #174 re-review: a separate session cap refused any dataset with over ~19 years of
+    # history, even one symbol monthly. What was measured is symbols x sessions.
+    cost = backtest_cost(symbols, data_start, END, start, None, rebalance)
+    assert cost.sessions > 4785 and symbols * cost.sessions <= 400 * 4785
+    assert _admitted(cost)
+
+
+def test_the_measured_products_are_the_boundary():
+    full = BacktestCost(400, 4785, 229)  # 400 symbols over 2005-2023, monthly
+    assert _admitted(full, 10_000)
+    assert not _admitted(BacktestCost(400, 4786, 229), 10_000)  # one session more
+    assert not _admitted(BacktestCost(401, 4000, 100), 10_000)  # one symbol more
+    assert not _admitted(BacktestCost(300, 4000, 6400), 10_000)  # rebalances x symbols
+
+
+def _cap(freq: str) -> int:
+    """The most symbols admitted over 2005-2023 (admission is monotone in symbols)."""
+    lo, hi = 0, 1500
+    while lo < hi:
+        mid = (lo + hi + 1) // 2
+        if _admitted(backtest_cost(mid, START, END, START, None, freq)):
+            lo = mid
+        else:
+            hi = mid - 1
+    return lo
 
 
 def test_the_effective_caps_for_2005_to_2023():
-    # The most symbols a 2005-2023 backtest may have under the default limit, per
-    # rebalance frequency: the memory estimate for daily, the measured range otherwise.
-    def admitted(n: int, freq: str) -> bool:
-        try:
-            check_backtest_memory(backtest_cost(n, START, END, START, None, freq), 1228)
-        except ApiError:
-            return False
-        return True
-
-    freqs = ("daily", "weekly", "monthly", "quarterly")
-    caps = {f: max(n for n in range(1, 1501) if admitted(n, f)) for f in freqs}
+    # Under the default limit, per rebalance frequency: the memory estimate decides daily,
+    # the measured range the others.
+    caps = {f: _cap(f) for f in ("daily", "weekly", "monthly", "quarterly")}
     assert caps == {"daily": 199, "weekly": 400, "monthly": 400, "quarterly": 400}
 
 
@@ -137,5 +174,6 @@ def test_sessions_are_the_versions_bar_dates_when_there_are_more():
     extra = backtest_cost(100, START, END, START, None, "daily", bar_dates=4790)
     fewer = backtest_cost(100, START, END, START, None, "daily", bar_dates=4000)
     assert (calendar.sessions, extra.sessions, fewer.sessions) == (4785, 4790, 4785)
-    with pytest.raises(ApiError):  # 4,790 sessions is outside the measured range
-        check_backtest_memory(extra, 10_000)
+    # 400 symbols over those 4,790 sessions is just past the measured 400 x 4,785.
+    wide = backtest_cost(400, START, END, START, None, "monthly", bar_dates=4790)
+    assert not _admitted(wide, 10_000)
