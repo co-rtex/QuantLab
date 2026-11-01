@@ -560,10 +560,9 @@ the same host) replace it with a gateway address. Every user would then share on
 and ten failed logins would lock everyone out. Step 3 checks this.
 
 1. Start the stack with the edge overlay, which publishes only the edge and runs the API
-   in production mode. Its default is `QUANTLAB_ENVIRONMENT=production`
-   (`infra/edge/compose.yml`), so an exported or `.env` value overrides it: leave
-   `QUANTLAB_ENVIRONMENT` unset, or set it to `production`. Under `development`, the API
-   docs are served and none of the production guards run.
+   in production mode. The overlay pins `QUANTLAB_ENVIRONMENT=production` for the API,
+   worker and reaper (`infra/edge/compose.yml`, #235), so an exported or `.env` value,
+   such as `.env.example`'s `development`, cannot turn off the production guards.
    ```
    export QUANTLAB_EDGE_SECRET=$(openssl rand -hex 32)   # store it like the JWT secret
    export QUANTLAB_JWT_SECRET=$(openssl rand -hex 32) QUANTLAB_METRICS_TOKEN=$(openssl rand -hex 24)
