@@ -805,12 +805,25 @@ def _csv_finalizer(ctx: JobContext, staged: Any) -> Finalizer:
 
     from quantlab.data.schema import SchemaError, normalize_actions, normalize_bars
 
+    def read(path: Any) -> pd.DataFrame:
+        # One line per failure (#239): pandas' parser text names its C tokenizer and can
+        # end in a newline; keep only where the file is malformed.
+        try:
+            return pd.read_csv(path)
+        except pd.errors.EmptyDataError as exc:
+            raise SchemaError(f"{path.name} is empty") from exc
+        except UnicodeDecodeError as exc:
+            raise SchemaError(f"{path.name} is not UTF-8 text (byte {exc.start})") from exc
+        except pd.errors.ParserError as exc:
+            where = str(exc).strip().splitlines()[0].removeprefix("Error tokenizing data. ")
+            raise SchemaError(f"{path.name}: {where.removeprefix('C error: ')}") from exc
+
     p = ctx.payload
     try:
-        bars = normalize_bars(pd.read_csv(staged / "bars.csv"))
+        bars = normalize_bars(read(staged / "bars.csv"))
         actions_path = staged / "actions.csv"
-        actions = normalize_actions(pd.read_csv(actions_path) if actions_path.exists() else None)
-    except (SchemaError, ValueError, pd.errors.ParserError) as exc:
+        actions = normalize_actions(read(actions_path) if actions_path.exists() else None)
+    except (SchemaError, ValueError) as exc:
         raise PermanentJobError(f"invalid CSV: {exc}") from exc
     if bars["symbol"].nunique() > get_settings().max_dataset_assets:
         raise PermanentJobError("too many symbols")

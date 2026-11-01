@@ -38,6 +38,14 @@ class SchemaError(ValueError):
     """Raised when a market-data frame violates the canonical schema."""
 
 
+def _not_a_date(column: str, exc: Exception) -> SchemaError:
+    # pandas follows the failing value with several lines of advice about its own `format`
+    # argument, which mean nothing to someone uploading a file (#239). Keep the first
+    # sentence, which names the value.
+    reason = str(exc).split(" You might want to try:")[0].strip().splitlines()[0]
+    return SchemaError(f"{column} is not a date: {reason}")
+
+
 def session_close_utc(dates: pd.Series | pd.DatetimeIndex) -> pd.Series:
     idx = pd.DatetimeIndex(dates)
     local = (idx.normalize() + SESSION_CLOSE).tz_localize(EXCHANGE_TZ)
@@ -54,7 +62,10 @@ def normalize_bars(frame: pd.DataFrame) -> pd.DataFrame:
     if missing:
         raise SchemaError(f"bars frame missing columns: {sorted(missing)}")
     out = frame.copy()
-    dates = pd.to_datetime(out["date"])
+    try:
+        dates = pd.to_datetime(out["date"])
+    except (ValueError, TypeError) as exc:
+        raise _not_a_date("bar date", exc) from exc
     if dates.dt.tz is not None:
         dates = dates.dt.tz_convert(EXCHANGE_TZ).dt.tz_localize(None)
     out["date"] = dates.dt.normalize().astype("datetime64[ns]")
@@ -97,7 +108,7 @@ def normalize_actions(frame: pd.DataFrame | None) -> pd.DataFrame:
         try:
             parsed = pd.to_datetime(out[col])
         except (ValueError, TypeError) as exc:
-            raise SchemaError(f"corporate action {col} is not a date: {exc}") from exc
+            raise _not_a_date(f"corporate action {col}", exc) from exc
         if parsed.dt.tz is not None:
             parsed = parsed.dt.tz_convert(EXCHANGE_TZ).dt.tz_localize(None)
         out[col] = parsed.dt.normalize().astype("datetime64[ns]")

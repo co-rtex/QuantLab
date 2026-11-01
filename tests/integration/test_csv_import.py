@@ -14,7 +14,8 @@ ACTIONS = "symbol,ex_date,kind,value\nxyz,2024-01-04,split,2\n"
 
 
 def _upload(client, h, ws, bars=BARS, actions=ACTIONS, slug="my-data"):
-    files = {"bars": ("bars.csv", io.BytesIO(bars.encode()), "text/csv")}
+    raw = bars if isinstance(bars, bytes) else bars.encode()
+    files = {"bars": ("bars.csv", io.BytesIO(raw), "text/csv")}
     if actions is not None:
         files["actions"] = ("actions.csv", io.BytesIO(actions.encode()), "text/csv")
     return client.post(
@@ -127,3 +128,51 @@ def test_malformed_corporate_actions_block_ingestion_with_a_report(client):
     # The same data with the correct ratio is accepted.
     ok = _upload(client, h, ws, slug="gated")
     assert ok.status_code == 202 and run_pending_jobs() == ["completed"]
+
+
+def test_an_oversized_file_names_the_limit_in_mib(client, monkeypatch):
+    """#239: the limit is binary (50 * 2**20 bytes); the message said "50 MB"."""
+    from quantlab_api.routes import datasets
+
+    monkeypatch.setattr(datasets, "MAX_UPLOAD_BYTES", 2**20)  # 1 MiB keeps the test cheap
+    h = register(client, "big@example.com")
+    ws = workspace_id(client, h)
+    r = _upload(client, h, ws, bars=b"x" * (2**20 + 1), actions=None, slug="big")
+    assert r.status_code == 413, r.text
+    assert r.json()["error"]["code"] == "upload_too_large"
+    assert r.json()["error"]["message"] == "Uploads are limited to 1 MiB"
+
+
+def test_a_malformed_csv_fails_with_one_line_saying_where(client):
+    """#239: the job error carried pandas' own text, including several lines of advice
+    about its `format` argument when a date did not parse."""
+    h = register(client, "malformed@example.com")
+    ws = workspace_id(client, h)
+    cases = {
+        "extra-field": (
+            BARS + "abc,2024-01-05,1,1,1,1,1,9\n",
+            None,
+            "invalid CSV: bars.csv: Expected 7 fields in line 8, saw 8",
+        ),
+        "bad-date": (
+            BARS.replace("2024-01-03", "Jan third", 1),
+            None,
+            'invalid CSV: bar date is not a date: time data "Jan third"',
+        ),
+        "action-date": (
+            BARS,
+            # A first valid date makes pandas infer a format, then add its advice text.
+            "symbol,ex_date,kind,value\nxyz,2024-01-04,split,2\nabc,someday,dividend,0.1\n",
+            'invalid CSV: corporate action ex_date is not a date: time data "someday"',
+        ),
+        "empty": ("", None, "invalid CSV: bars.csv is empty"),
+        "not-utf8": (b"\xff\xfe" + BARS.encode(), None, "invalid CSV: bars.csv is not UTF-8 text"),
+    }
+    for slug, (bars, actions, expected) in cases.items():
+        r = _upload(client, h, ws, bars=bars, actions=actions, slug=slug)
+        assert r.status_code == 202, (slug, r.text)
+        assert run_pending_jobs() == ["failed"], slug
+        job = client.get(f"/api/v1/workspaces/{ws}/jobs", headers=h).json()["items"][0]
+        message = job["error"]["message"]
+        assert message.startswith(expected), (slug, message)
+        assert "\n" not in message and "You might want" not in message, (slug, message)

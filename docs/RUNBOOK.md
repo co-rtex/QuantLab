@@ -414,6 +414,22 @@ and for 10 s after any connection error to Redis (the limiter's breaker, #207: b
 open = counting in-process, still limiting). Each key starts from the floor: the last
 count Redis returned to that process in this window, or 0 for a key it hasn't seen.
 
+### CSV imports: limits and failures (#239)
+`POST /workspaces/{id}/datasets/csv` takes `bars` (required) and `actions` (optional).
+* **Per file: 50 MiB** (`MAX_UPLOAD_BYTES`, routes/datasets.py). Reading stops at the
+  limit, with 413 `upload_too_large`.
+* **Per request: 110 MiB** on this route, enforced at the edge (Caddy `max_size`), in the
+  web proxy (`route.ts`) and in the API (`limits.py`). It answers 413 `payload_too_large`.
+  Other requests are capped at 2 MiB.
+* **No row limit.** The file size bounds the rows. A file with more than
+  `QUANTLAB_MAX_DATASET_ASSETS` symbols (default 2000) fails as "too many symbols".
+  Duplicate (symbol, date) rows keep the last one and are counted in the provenance
+  (`duplicates_dropped`).
+* **A malformed file** fails the import job with one line, "invalid CSV: …". The line
+  names the file and where it is malformed (for example "bars.csv: Expected 7 fields in
+  line 12, saw 8"), the value that is not a date, the missing columns, or an empty or
+  non-UTF-8 file. The upload itself was accepted (202), so the error is on the job.
+
 ### Disk usage
 `$QUANTLAB_DATA_DIR/datasets` holds immutable dataset versions; `artifacts/` holds
 experiment and ML outputs; `uploads/` holds staged CSV imports. Deleting a dataset version
