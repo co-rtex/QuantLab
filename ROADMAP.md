@@ -67,5 +67,5 @@ Owners, file ownership and migration slots: [docs/COORDINATION.md](docs/COORDINA
 | P2 | ✅ #8 Security hardening (#38, #64, #65, #70, #75) | Agent 2 | — |
 | P2 | ✅ #22 Per-worktree isolation hardening (#44, #71, #81) | Lead | — |
 | P2 | ✅ #23 Frontend completeness and synthetic labels (#100–#114) | Agent 2 | — |
-| P2 | ✅ #24 Benchmark methodology (#110) and quiet-window figures for small and medium (#161); large waits on #160 | Agent 3 | — |
+| P2 | ✅ #24 Benchmark methodology (#110) and quiet-window figures for small and medium (#161); large waits only on a quiet window (#160 closed by #176) | Agent 3 | — |
 | P2 | ✅ #25 Job-deletion semantics: ADR-0011 plus a guard test (#78) | Lead | — |
