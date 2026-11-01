@@ -210,7 +210,7 @@ def ml_predictions(
     return {"items": page.to_dict("records"), "total": total, "limit": limit, "offset": offset}
 
 
-# Rows decoded at a time while paging. A model's rows are spread through the file (one
+# Rows converted at a time while paging. A model's rows are spread through the file (one
 # block per fold), so no row group can be skipped; streaming bounds the memory instead.
 PREDICTION_BATCH_ROWS = 65_536
 
@@ -218,9 +218,12 @@ PREDICTION_BATCH_ROWS = 65_536
 def predictions_page(path: Path, model: str, offset: int, limit: int) -> tuple[pd.DataFrame, int]:
     """One page of ``model``'s rows, in file order, and how many it has (#231).
 
-    The whole file used to be read into this process for every page. This streams it one
-    batch at a time and keeps only the page: the same frame as ``read_parquet`` then
-    ``[model]``, then ``.iloc[offset : offset + limit]``, with the memory of one batch."""
+    The whole file used to be read into this process for every page. This streams it and
+    keeps only the page: the same frame as ``read_parquet`` then ``[model]``, then
+    ``.iloc[offset : offset + limit]``. PyArrow decodes a row group's column chunks at a
+    time (up to ~1M rows by default), so the memory is about one row group's, not the
+    file's: 75 MiB instead of 436 MiB for a page of a 3.6M-row file. Each page still reads
+    the whole file, since ``total`` counts every match."""
     f = pq.ParquetFile(path)
     total, parts = 0, []
     for batch in f.iter_batches(batch_size=PREDICTION_BATCH_ROWS):

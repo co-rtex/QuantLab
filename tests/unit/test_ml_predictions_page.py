@@ -66,8 +66,6 @@ def test_every_page_equals_the_previous_read(
         want_total = reference(path, model, 0, 1)[1]
         for offset in sorted({0, 1, 6, 7, 62, 63, 64, want_total - 1, want_total, want_total + 5}):
             for limit in (1, 5, 63, 200, 5000):
-                if offset < 0:
-                    continue
                 want, total = reference(path, model, offset, limit)
                 got, got_total = predictions_page(path, model, offset, limit)
                 assert got_total == total, (model, offset, limit)
@@ -75,6 +73,18 @@ def test_every_page_equals_the_previous_read(
                     got.reset_index(drop=True), want.reset_index(drop=True), check_dtype=True
                 )
                 assert got.to_dict("records") == want.to_dict("records")
+
+
+def test_a_dictionary_encoded_model_column_pages_the_same(tmp_path: Path) -> None:
+    path = tmp_path / "predictions.parquet"
+    frame = predictions()
+    frame["model"] = frame["model"].astype("category")
+    frame.to_parquet(path, index=False)
+    for model in MODELS:
+        want, total = reference(path, model, 5, 40)
+        got, got_total = predictions_page(path, model, 5, 40)
+        assert got_total == total
+        assert got.to_dict("records") == want.to_dict("records")
 
 
 PEAK = textwrap.dedent(
