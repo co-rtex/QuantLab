@@ -313,7 +313,8 @@ Per session `k`:
    * **When even the minimum commissions exceed the cash** (`n x commission_min >=
      cash`), no `s > 0` is feasible, and every buy is rejected `insufficient_cash`.
      Dropping some buys instead would have to choose which, by an order this rule
-     avoids.
+     avoids. A small account spreading over many names can therefore stay in cash: with
+     a minimum of 5, ten buys need more than 50 before any of them fills.
 
    **Example.** Cash after sells 1,000; buys worth 900 and 300 at the fill price;
    commission 10 bps with a minimum of 5.
@@ -455,9 +456,16 @@ from `quantlab`.
 * It applies the same rules: placement and ordering of corporate actions, both delisting
   rules, fills, costs, pro-rata buys, stale marks and the as-of strategy view.
 * `tests/unit/test_engine_oracle.py` requires the engine to agree with it to 1e-9 on 200
-  seeded adversarial synthetic universes, plus five hand-computed cases.
-* A mutation harness (`tests/oracle/mutate.py`) shows the comparison catches 24 injected
+  seeded adversarial synthetic universes, plus eleven hand-computed cases.
+* A mutation harness (`tests/oracle/mutate.py`) shows the comparison catches 31 injected
   engine and adjuster defects.
+* **What is independent and what is not** (#209 review).
+  * Since 1.5.0 the sell proceeds and the pro-rata factor are written from this text; the
+    reference finds the factor by bisection, where the engine solves it in closed form.
+  * Still mirrored from the engine's code rather than this text: the affordability cut's
+    1e-9-share slack, the #196 cut that fits a buy to the cash, and the ledger's 1e-9
+    dollar limit together with the float order of its cash update.
+  * A defect shared there would not show.
 
 It is evidence that the engine implements these rules as written. It is not evidence that
 the rules match any vendor's data.
@@ -542,9 +550,13 @@ names changed-input re-runs and leaves the check "not assessed" if they are the 
       * **A/B against 1.4.1:** 8 runs change their equity, trades, positions and ledger;
         98 change their rejection log.
       * **Attribution:** each of the 98 had a whole-share buy under one share at a fill,
-        and none changed without one. Of the 9 runs that had one and did not change, 4
-        met no fill price and 5 a delisting, which rejects the buy first in both
-        versions.
+        and none changed without one. Of the 9 runs in this grid that had one and kept
+        their economics and log, 4 met no fill price and 5 a delisting, which rejects the
+        buy first in both versions.
+      * The rejection log also changes where such a buy meets no fill price or a
+        zero-volume bar: it is no longer scaled before the rejection, so its recorded
+        quantity is the restated one (in the #209 review's grid: seed 1030, ID3, 0.428809
+        before, 0.5 now).
       * Hand cases: `test_a_sub_share_top_up_does_not_scale_a_real_buy` and
         `test_the_lot_check_uses_the_quantity_restated_across_a_split`.
     * **#195:** the pro-rata factor is exact (step 4), and sell proceeds net of each

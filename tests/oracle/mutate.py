@@ -273,12 +273,23 @@ MUTATIONS = [
 ]
 
 
+TIMEOUT_S = 900  # a suite that runs far past its normal time is taken to hang on the mutant
+TIMED_OUT = -1
+
+
 def _pytest(paths: list[str], env: dict[str, str]) -> int:
     cmd = [sys.executable, "-m", "pytest", "-x", "-q", "-p", "no:cacheprovider", *paths]
-    return subprocess.run(cmd, cwd=ROOT, env=env, capture_output=True).returncode
+    try:
+        return subprocess.run(
+            cmd, cwd=ROOT, env=env, capture_output=True, timeout=TIMEOUT_S
+        ).returncode
+    except subprocess.TimeoutExpired:  # the child is killed; the mutant made a suite hang
+        return TIMED_OUT
 
 
 def _verdict(code: int) -> str:
+    if code == TIMED_OUT:
+        return f"caught (hung past {TIMEOUT_S} s)"
     return {0: "missed", 1: "caught"}.get(code, f"error (exit {code})")
 
 
@@ -325,7 +336,7 @@ def run(keys: list[str], seeds: int, others: bool = True) -> int:
         clean = subprocess.run(["git", "diff", "--quiet", "--", m.path], cwd=ROOT).returncode
         if clean != 0:
             raise SystemExit(f"{m.path} was not restored after {m.key}")
-        missed += oracle != 1
+        missed += oracle not in (1, TIMED_OUT)
         print(
             f"| {m.key} | {m.what} | {_verdict(oracle)} |"
             f" {'not run' if other is None else _verdict(other)} |"

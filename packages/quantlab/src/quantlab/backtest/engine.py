@@ -789,7 +789,8 @@ def buy_scale(values: list[float], bps: float, cmin: float, cash: float) -> floa
     if cmin > 0 and n * cmin >= cash:
         return None
     if cmin <= 0 or bps <= 0:  # one segment: the rate everywhere, or the minimum everywhere
-        return min(1.0, (cash - n * cmin) / (sum(values) * (1 + bps if cmin <= 0 else 1)))
+        s = (cash - n * cmin) / (sum(values) * (1 + bps if cmin <= 0 else 1))
+        return _within_cash(min(s, 1.0), values, bps, cmin, cash)
     # The largest buy leaves the minimum first: its breakpoint cmin / (v * bps) is lowest.
     ordered = sorted(values, reverse=True)
     breaks = [cmin / (v * bps) for v in ordered]
@@ -801,14 +802,32 @@ def buy_scale(values: list[float], bps: float, cmin: float, cash: float) -> floa
     for i, hi in enumerate([*breaks, math.inf]):
         s = (cash - cmin * (n - i)) / (total + bps * at_rate)
         if s <= hi:
-            s = min(s, 1.0)
-            # Float rounding must not leave the total a hair over the cash.
-            while s > 0 and sum(s * v + max(cmin, s * v * bps) for v in values) > cash:
-                s = math.nextafter(s, 0.0)
-            return s
+            return _within_cash(min(s, 1.0), values, bps, cmin, cash)
         if i < n:
             at_rate += ordered[i]
     raise AssertionError("the total is continuous and increasing: some segment holds s")
+
+
+def _within_cash(s: float, values: list[float], bps: float, cmin: float, cash: float) -> float:
+    """``s``, or just below it, so that float rounding never leaves the scaled buys' cost a
+    hair over the cash. The closed form is off by a few units in the last place at most, so
+    a bounded walk down suffices; past it, bisection on [0, s] (#209 review: an unbounded
+    walk can hang on a broken input)."""
+
+    def fits(x: float) -> bool:
+        return sum(x * v + max(cmin, x * v * bps) for v in values) <= cash
+
+    for _ in range(64):
+        if s <= 0 or fits(s):
+            return max(s, 0.0)
+        s = math.nextafter(s, 0.0)
+    lo, hi = 0.0, s
+    for _ in range(128):
+        mid = (lo + hi) / 2
+        if mid in (lo, hi):
+            break
+        lo, hi = (mid, hi) if fits(mid) else (lo, mid)
+    return lo
 
 
 def _sanitize(target: pd.Series, view: MarketView, config: BacktestConfig) -> pd.Series:
