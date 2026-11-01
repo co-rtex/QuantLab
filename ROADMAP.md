@@ -33,6 +33,13 @@ Dependency-ordered. ✅ done and verified · 🔶 partial · ⬜ not started.
 | 11 | Account-wide job and workspace quotas (#2) | ✅ |
 | 11 | Post-audit backlog: tracked as GitHub issues, below | 🔶 |
 
+## Release
+* ✅ **Private release candidate `v0.1.0-rc.1`** on `7fc89ee` (2026-11-01): READY with
+  caveats, per the lead's integrated gate and an independent assessment
+  (docs/RELEASE_READINESS.md). Public deployment stays prohibited (#39, #168).
+* ⬜ **rc.2:** #237 (P1, validation with an explicit universe), #238 (P2, assistant "-0.00"),
+  #239 (P3, minor messages and docs).
+
 ## Post-audit backlog (dependency order)
 
 Owners, file ownership and migration slots: [docs/COORDINATION.md](docs/COORDINATION.md).
@@ -67,5 +74,5 @@ Owners, file ownership and migration slots: [docs/COORDINATION.md](docs/COORDINA
 | P2 | ✅ #8 Security hardening (#38, #64, #65, #70, #75) | Agent 2 | — |
 | P2 | ✅ #22 Per-worktree isolation hardening (#44, #71, #81) | Lead | — |
 | P2 | ✅ #23 Frontend completeness and synthetic labels (#100–#114) | Agent 2 | — |
-| P2 | ✅ #24 Benchmark methodology (#110) and quiet-window figures for small and medium (#161); large waits on #160 | Agent 3 | — |
+| P2 | ✅ #24 Benchmark methodology (#110) and quiet-window figures for small and medium (#161); large waits only on a quiet window (#160 closed by #176) | Agent 3 | — |
 | P2 | ✅ #25 Job-deletion semantics: ADR-0011 plus a guard test (#78) | Lead | — |
