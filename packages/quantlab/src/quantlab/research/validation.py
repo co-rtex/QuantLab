@@ -494,17 +494,20 @@ def leakage_check(
         if len(decisions)
         else pd.DatetimeIndex([])
     )
-    sessions = pd.DatetimeIndex(sorted(bars["date"].unique()))
+    # The engine's session calendar: the dates of the universe's and benchmark's bars. The
+    # kept session after a cut comes from it, not from every date in the input: a date only
+    # other symbols print is no session of this run, and truncating there would end the
+    # truncated data at the cut, with no decision on it (#262).
+    members = set(full.meta.get("universe") or bars["symbol"].unique())
+    if cfg.benchmark:
+        members.add(cfg.benchmark.upper())
+    calendar = pd.DatetimeIndex(sorted(bars.loc[bars["symbol"].isin(members), "date"].unique()))
+    sessions = calendar
     candidates = [d for d in dates[1:-1] if sessions.searchsorted(d) + 1 < len(sessions)]
     if not candidates:
         return {"status": "unassessed", "reason": "no decision dates to test"}
     rng = np.random.default_rng(seed)
     picks = sorted(rng.choice(len(candidates), size=min(samples, len(candidates)), replace=False))
-    # The engine's session calendar: the dates of the universe's and benchmark's bars.
-    members = set(full.meta.get("universe") or bars["symbol"].unique())
-    if cfg.benchmark:
-        members.add(cfg.benchmark.upper())
-    calendar = pd.DatetimeIndex(sorted(bars.loc[bars["symbol"].isin(members), "date"].unique()))
 
     def halted(cut: pd.Timestamp) -> set[str]:
         return _halted_while_held(
