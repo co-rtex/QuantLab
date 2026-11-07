@@ -6,11 +6,13 @@ Usage::
     uv run python -m tests.oracle.ab record after.json    # on the new one
     uv run python -m tests.oracle.ab compare before.json after.json
 
-It runs the 800 differential runs (``default_runs`` over seeds 0-199) and every library
+It runs the 800 differential runs (``default_runs`` over seeds 0-199), every library
 strategy on three synthetic markets (both execution modes; whole shares, fractional shares
-with a small capital so cash runs short, and a 3e9 fractional account), plus 40 large fractional runs with a minimum commission (seeds 1060-1069, #215): 1002 runs in all.
-For each run it stores a hash of each
-output separately: equity, trades, positions, decisions, ledger transactions, meta
+with a small capital so cash runs short, and a 3e9 fractional account), and 40 large
+fractional runs with a minimum commission (seeds 1060-1069, #215): 1002 runs in all. The
+library runs are keyed by instrument, as the platform runs them, so the master's delistings
+apply (#252; before, ticker-keyed bars matched none of its ids). For each run it stores a
+hash of each output separately: equity, trades, positions, decisions, ledger transactions, meta
 (without ``engine_version``), the fingerprint and the rejections. ``compare`` lists the
 outputs that differ in any run.
 """
@@ -61,6 +63,7 @@ def digest(res: Any) -> dict[str, str]:
 
 def runs() -> dict[str, dict[str, str]]:
     from quantlab.backtest.engine import BacktestConfig, run_backtest
+    from quantlab.data.identity import key_by_instrument
     from quantlab.data.synthetic import BENCHMARK_SYMBOL, SyntheticSpec, generate_market
     from quantlab.strategies.library import REGISTRY, create_strategy
     from tests.oracle.differential import default_runs, keyed, run_engine, strategies_for
@@ -92,10 +95,16 @@ def runs() -> dict[str, dict[str, str]]:
                 res = run_engine(sc, cfg, engine_strategy, data)
                 out[f"large/{seed}/{execution}/{name}"] = digest(res)
     small = {"lookback": 30, "skip": 5, "fast": 10, "slow": 40}
+    applied = 0  # master delistings booked on held positions by the library runs (#252)
     for mseed in (3, 11, 29):
         market = generate_market(
             SyntheticSpec(n_assets=30, start="2019-01-02", end="2021-12-31", seed=mseed)
         )
+        # Keyed by instrument, as the platform runs it (#252). The master's ids are QLSYN...
+        # and the generator's bars are by ticker, so unkeyed the engine matched no delisting.
+        bars, actions = key_by_instrument(market.bars, market.actions, market.symbol_history)
+        hist = market.symbol_history
+        bench = str(hist.loc[hist["symbol"] == BENCHMARK_SYMBOL, "instrument_id"].iloc[0])
         master = market.master
         for key, cls in sorted(REGISTRY.items()):
             fields = cls.Params.model_fields
@@ -110,18 +119,21 @@ def runs() -> dict[str, dict[str, str]]:
                         rebalance="weekly",
                         fractional_shares=fractional,
                         initial_capital=capital,
-                        benchmark=BENCHMARK_SYMBOL,
+                        benchmark=bench,
                     )
                     res = run_backtest(
-                        market.bars,
-                        market.actions,
-                        create_strategy(key, params),
-                        cfg,
-                        instruments=master,
+                        bars, actions, create_strategy(key, params), cfg, instruments=master
+                    )
+                    if res.meta["instrument_master_unmatched"]:
+                        raise SystemExit(f"master unmatched in market {mseed}: #252 regressed")
+                    booked = res.meta["delistings"]
+                    applied += sum(
+                        booked[k] for k in ("with_return", "return_unknown", "with_fallback_return")
                     )
                     out[f"synthetic/{mseed}/{key}/{execution}/{fractional}/{capital:g}"] = digest(
                         res
                     )
+    print(f"library runs: {applied} master delistings booked on held positions", file=sys.stderr)
     return out
 
 
