@@ -1,4 +1,5 @@
 import { defineConfig, devices } from "@playwright/test";
+import { e2eBaseUrl } from "./src/lib/e2eBaseUrl";
 
 // Expects a running stack (web + API + worker), e.g. `make app-up` or the dev processes.
 export default defineConfig({
@@ -12,7 +13,9 @@ export default defineConfig({
   retries: process.env.CI ? 1 : 0,
   reporter: [["list"], ["html", { open: "never" }]],
   use: {
-    baseURL: process.env.E2E_BASE_URL ?? "http://localhost:3000",
+    // E2E_BASE_URL, or the main checkout's :3000; a linked worktree without it refuses to
+    // run rather than aim at the main checkout's stack (#263).
+    baseURL: e2eBaseUrl(process.env, __dirname),
     // For runs through the TLS edge (infra/edge/), whose development certificate comes from
     // Caddy's local CA.
     ignoreHTTPSErrors: process.env.E2E_IGNORE_HTTPS_ERRORS === "1",
