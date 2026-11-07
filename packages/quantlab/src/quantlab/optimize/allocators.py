@@ -107,9 +107,48 @@ def _solve_qp(
         constraints=[{"type": "eq", "fun": lambda w: w.sum() - 1.0, "jac": lambda w: np.ones(n)}],
         options={"maxiter": 500, "ftol": 1e-15},
     )
-    if not res.success:
-        raise OptimizationError(f"SLSQP failed: {res.message}")
-    return drop_dust(validate_weights(res.x, bounds), bounds)
+    if res.success:
+        return drop_dust(validate_weights(res.x, bounds), bounds)
+    # SLSQP's own stopping test (successive objective values within ftol = 1e-15) is below
+    # what double precision resolves for an O(1) objective over many assets, so it can end
+    # at the optimum reporting failure, typically mode 8, "Positive directional derivative
+    # for linesearch" (#253). Its status is therefore not taken as the verdict: the point is
+    # accepted only if it is feasible and certified optimal by its Frank-Wolfe gap.
+    try:
+        w = validate_weights(res.x, bounds)
+    except OptimizationError:
+        raise OptimizationError(f"SLSQP failed: {res.message}") from None
+    gap = optimality_gap(w, q, c, bounds)
+    if not gap <= OPTIMALITY_GAP:  # also refuses a NaN gap
+        raise OptimizationError(
+            f"SLSQP failed: {res.message} (optimality gap {gap:.1e} exceeds {OPTIMALITY_GAP:.0e})"
+        )
+    return drop_dust(w, bounds)
+
+
+def _cheapest_vertex(g: np.ndarray, bounds: Bounds) -> np.ndarray:
+    """argmin of ``g @ s`` over {s : sum s = 1, lower <= s <= upper}: every weight at the
+    lower bound, then the remaining mass placed on the lowest gradients first, each up to
+    the upper bound. Exact (a greedy fill solves a linear program over a capped simplex)."""
+    n = len(g)
+    room = bounds.upper - bounds.lower
+    rest = 1.0 - n * bounds.lower
+    fill = np.clip(rest - room * np.arange(n), 0.0, room)  # mass for the k-th cheapest
+    s = np.full(n, bounds.lower, dtype=float)
+    s[np.argsort(g, kind="stable")] += fill
+    return s
+
+
+def optimality_gap(w: np.ndarray, q: np.ndarray, c: np.ndarray, bounds: Bounds) -> float:
+    """Frank-Wolfe (duality) gap of ``f(w) = 0.5 w'qw - c'w`` at a feasible ``w``.
+
+    With ``g`` the gradient at ``w``, the gap is ``g @ w - min_s g @ s`` over the feasible
+    set. For a convex ``f`` it bounds the suboptimality: ``f(w) - f* <= gap``, because
+    ``f* >= f(w) + g @ (w* - w) >= f(w) - gap``. It is 0 exactly at an optimum, needs no
+    tolerance for which bounds are active, and can be checked by hand.
+    """
+    g = q @ w - c
+    return float(g @ w - g @ _cheapest_vertex(g, bounds))
 
 
 # SLSQP leaves weights at an active lower bound of 0 at about 1e-20 to 1e-14 instead of 0
@@ -120,6 +159,11 @@ def _solve_qp(
 # the O(1) objective scaling above: change either and measure again
 # (tests/unit/test_allocator_dust.py).
 DUST_WEIGHT = 1e-10
+
+# A failed SLSQP solve is accepted only within this Frank-Wolfe gap of the optimum, in the
+# O(1) units of _solve_qp's scaled objective (#253). See docs/METHODOLOGY.md, *Optimizers*,
+# for the measurement it comes from.
+OPTIMALITY_GAP = 1e-6
 
 
 def drop_dust(w: np.ndarray, bounds: Bounds) -> np.ndarray:

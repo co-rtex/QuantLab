@@ -42,6 +42,7 @@ OTHER_TESTS = [
     "tests/unit/test_ledger.py",
     "tests/unit/test_allocator_dust.py",
     "tests/unit/test_leakage_master.py",
+    "tests/unit/test_optimizer_certificate.py",
 ]
 
 
@@ -305,6 +306,14 @@ MUTATIONS = [
         " for s in ledger.positions}",
         "a halted holding marked at its delisting return 10 days before the delisting is"
         " public (#259 review's ML)",
+    ),
+    Mutation(
+        "M36",
+        ALLOC,
+        "    if not gap <= OPTIMALITY_GAP:  # also refuses a NaN gap",
+        "    if False:",
+        "a failed SLSQP solve accepted at any feasible point, without its optimality"
+        " certificate (#253)",
     ),
 ]
 
