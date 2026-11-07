@@ -315,7 +315,17 @@ export default function ExperimentPage() {
                 .map(([k, v]) => `${k.replaceAll("_", " ")} ${v}`)
                 .join(", ")}
             </span>
-            {e.notes && <span className="mt-1 block text-ink-2">{e.notes}</span>}
+            {e.parent_id && (
+              <span className="mt-1 block text-ink-2">
+                Reproduces{" "}
+                <Link href={`/experiments/${e.parent_id}`} className="text-cobalt hover:underline">
+                  experiment <span className="num">{shortHash(e.parent_id, 8)}</span>
+                </Link>
+                .
+              </span>
+            )}
+            {/* The API's own note on a reproduction ("Reproduction of <id>") is the link above. */}
+            {e.notes && !(e.parent_id && e.notes.startsWith("Reproduction of ")) && <span className="mt-1 block text-ink-2">{e.notes}</span>}
           </>
         }
         actions={

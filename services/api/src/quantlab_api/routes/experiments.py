@@ -465,7 +465,8 @@ def reproduce(
 ) -> ExperimentSubmitted:
     exp = load_experiment(db, user, experiment_id, Role.editor)
     body = ExperimentIn(
-        name=f"{exp.name} (reproduction)",
+        # One suffix, however many generations deep (audit A12).
+        name=f"{exp.name.removesuffix(' (reproduction)')} (reproduction)",
         dataset_version_id=exp.dataset_version_id,
         strategy_key=exp.strategy_key,
         strategy_params=exp.strategy_params,

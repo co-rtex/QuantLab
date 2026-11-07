@@ -272,7 +272,7 @@ export function ValidationPanel({ experimentId, onComplete }: { experimentId: st
                     <th>Costs</th>
                     <th className="r">Round trip</th>
                     <th className="r">CAGR</th>
-                    <th className="r">vs benchmark</th>
+                    <th className="r">Excess total return</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -287,6 +287,7 @@ export function ValidationPanel({ experimentId, onComplete }: { experimentId: st
                 </tbody>
               </table>
               <p className="mt-2 text-xs text-ink-3">
+                Excess total return is over the whole sample against the benchmark, not per year.{" "}
                 {r.cost.breakeven_multiplier !== null
                   ? `The edge over the benchmark disappears at about ${num(r.cost.breakeven_multiplier, 1)}× the assumed costs.`
                   : r.cost.note

@@ -20,12 +20,12 @@ def _pct(v: Any, d: int = 1) -> str:
     return (
         UNDEF
         if v is None or (isinstance(v, float) and not math.isfinite(v))
-        else f"{v * 100:.{d}f}%"
+        else f"{v * 100:z.{d}f}%"  # z: no "-0.00" from rounding (audit A10)
     )
 
 
 def _num(v: Any, d: int = 2) -> str:
-    return UNDEF if v is None or (isinstance(v, float) and not math.isfinite(v)) else f"{v:,.{d}f}"
+    return UNDEF if v is None or (isinstance(v, float) and not math.isfinite(v)) else f"{v:z,.{d}f}"
 
 
 def _money(v: Any) -> str:

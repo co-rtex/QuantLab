@@ -42,13 +42,14 @@ class Fact:
             return "undefined"
         if isinstance(v, str):
             return v
+        # z: a value that rounds to zero shows as 0.00, not "-0.00" (audit A10).
         if self.unit == "pct":
-            return f"{v * 100:.2f}%"
+            return f"{v * 100:z.2f}%"
         if self.unit == "usd":
             return f"${v:,.0f}"
         if self.unit == "count":
             return f"{v:,.0f}"
-        return f"{v:.2f}"
+        return f"{v:z.2f}"
 
 
 @dataclass

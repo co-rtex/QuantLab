@@ -87,4 +87,10 @@ test("research workflow: data -> backtest -> results -> reproduction", async ({ 
   await page.getByRole("button", { name: "Reproduce" }).click();
   await expect(page.getByText("(reproduction)").first()).toBeVisible();
   await expect(page.getByText("outputs match this run exactly")).toBeVisible({ timeout: 60_000 });
+  // A reproduction links back to its original, and reproducing it again keeps one suffix
+  // (audit A12: "… (reproduction) (reproduction)").
+  await expect(page.getByRole("link", { name: /^experiment [0-9a-f]{8}$/ })).toBeVisible();
+  await page.getByRole("button", { name: "Reproduce" }).click();
+  await expect(page.getByRole("heading", { level: 1 })).toHaveText(/ \(reproduction\)$/);
+  await expect(page.getByRole("heading", { level: 1 })).not.toHaveText(/\(reproduction\) \(reproduction\)/);
 });

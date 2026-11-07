@@ -6,7 +6,7 @@ import { CompareChart, SERIES } from "@/components/charts";
 import { PageHeader } from "@/components/Shell";
 import { ErrorNote, Panel, QueryError, Skeleton, SyntheticLabel } from "@/components/ui";
 import { api, ApiError, type Experiment, type Metrics, type Page, type Series } from "@/lib/api";
-import { num, pct, signClass, strategyLabel } from "@/lib/format";
+import { dateTime, num, pct, shortHash, signClass, strategyLabel } from "@/lib/format";
 import { combined, useSynthetic } from "@/lib/synthetic";
 import { useApi } from "@/lib/useApi";
 import { useWorkspace } from "@/lib/workspace";
@@ -89,7 +89,11 @@ export default function ComparePage() {
                         {e.name}
                         <SyntheticLabel inline status={synthetic(e)} />
                       </span>
-                      <span className="block text-xs text-ink-2">{strategyLabel(e.strategy_key)}</span>
+                      {/* Same-named runs stay distinguishable: when, and which inputs (the
+                          same hash means the same configuration, as for a reproduction) (A13). */}
+                      <span className="block text-xs text-ink-2">
+                        {strategyLabel(e.strategy_key)} · {dateTime(e.created_at)} · inputs <span className="num">{shortHash(e.input_hash, 8)}</span>
+                      </span>
                     </span>
                   </label>
                 </li>
