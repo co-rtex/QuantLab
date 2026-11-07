@@ -159,6 +159,14 @@ at once in the shared VM. Named volumes are kept either way. Two consequences:
 * A crash-recovery probe on a worktree slot must set `QUANTLAB_RESTART_POLICY=unless-stopped`
   itself, and still run under `scripts/fullstack-lock.sh run ...`.
 
+**Near-miss (2026-11-01): Playwright aimed at the main checkout.** A script ran
+`npx playwright test` directly in a worktree. With no `E2E_BASE_URL`, Playwright defaults to
+`http://localhost:3000`, the main checkout's web tier. It was refused only because that stack
+was down. Rule: E2E runs **only** through `QUANTLAB_SLOT=n make e2e-serial`. A fail-closed
+guard is #263. Also: never `docker compose down -v` or `docker volume rm` on any slot without
+the user's explicit approval (the lead's trial script did `down -v` on slot 86 until
+2026-11-01, now removed).
+
 **Docker memory budget.** The Docker VM on this machine has 3.8 GiB (3918 MiB), below the
 documented 5120 MiB minimum for the default stack since #228 (docs/RUNBOOK.md,
 "Resources"). On 2026-10-30 a full `make app-up` stack peaked around 1.7 GB idle and three

@@ -29,6 +29,7 @@ from quantlab.data.schema import normalize_actions
 from quantlab.portfolio.ledger import LedgerError
 from quantlab.portfolio.valuation import Entry, summary, time_weighted_returns, value_portfolio
 from quantlab_api import provenance
+from quantlab_api.config import get_settings
 from quantlab_api.errors import ApiError
 from quantlab_api.limits import heavy_slot
 from quantlab_api.models import Instrument, Portfolio, PortfolioTransaction, Role
@@ -259,6 +260,18 @@ def _add_transaction(
     # next sequence number must be unique.
     db.execute(select(Portfolio.id).where(Portfolio.id == p.id).with_for_update())
     db.refresh(p, ["transactions"])
+    # Each append replays the whole ledger under this lock, so a ledger is capped (#218).
+    # Checked under the lock, before any market data or replay: concurrent appends can't
+    # overshoot, and a refusal costs nothing. A longer ledger from before stays readable.
+    cap, held = get_settings().max_portfolio_transactions, len(p.transactions)
+    if held >= cap:
+        raise ApiError(
+            422,
+            "ledger_full",
+            f"This portfolio holds {held:,} transactions, the most one portfolio may hold "
+            f"({cap:,}). Start a new portfolio to record more.",
+            {"limit": cap, "transactions": held},
+        )
     seq = (max((t.seq for t in p.transactions), default=0)) + 1
     t = PortfolioTransaction(
         portfolio_id=p.id,
@@ -365,6 +378,9 @@ def _valuation(p: Portfolio, user: CurrentUser, db: DB) -> dict[str, Any]:
                 "name": p.name,
                 "benchmark": p.benchmark,
                 "is_synthetic": synthetic,
+                # The ledger's length and its cap (#218), so a ledger near it can be seen.
+                "transactions": len(entries),
+                "max_transactions": get_settings().max_portfolio_transactions,
             },
             "summary": summary(val),
             "series": {

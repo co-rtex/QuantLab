@@ -396,6 +396,39 @@ experiment; results of failed jobs are never stored.
   and "Fewer than two symbols have enough history in the look-back window". The message is
   in the job's `error`, the job isn't retried, and the page shows it.
 
+### Portfolio ledger cap (#218)
+* **The refusal:** an append to a portfolio that already holds
+  `QUANTLAB_MAX_PORTFOLIO_TRANSACTIONS` transactions (default 10,000) gets
+  `422 ledger_full`, with `details` `{limit, transactions}`. The user starts a new portfolio.
+* **Why:** each append replays the whole ledger while holding the portfolio's row lock, and
+  each valuation replays it too, so the cost of both grows with the ledger.
+* **Checked under the lock,** before any market data is loaded or the ledger replayed: a
+  refusal costs nothing, and concurrent appends can't overshoot.
+* **Existing ledgers:** one longer than the cap (from before it, or after the cap was
+  lowered) stays readable; only appends are refused.
+* **Near the cap:** `GET /portfolios/{id}/valuation` reports `portfolio.transactions` and
+  `portfolio.max_transactions`.
+* **The default, measured** on slot 21's API at the default 1880M limit. One real append and
+  one valuation per point, from a fresh API restart, with earlier entries inserted directly.
+  Synthetic data: 120 assets, 2,517 sessions. Anonymous memory above idle (~383 MiB):
+
+  | Entries before | Append (1 / 50 symbols) | Valuation (1 / 50) | API memory (1 / 50) |
+  |---|---|---|---|
+  | 1,000 | 0.38 / 0.52 s | 0.10 / 0.18 s | +90 / +162 MiB |
+  | 5,000 | 0.48 / 0.58 s | 0.25 / 0.37 s | +105 / +175 MiB |
+  | 10,000 | 0.69 / 0.68 s | 0.39 / 0.49 s | +103 / +196 MiB |
+  | 20,000 | 1.00 / 1.08 s | 0.91 / 0.95 s | +132 / +214 MiB |
+  | 50,000 | 1.95 / 2.86 s | 1.74 / 2.06 s | +194 / +269 MiB |
+
+  * At 10,000, an append stays under 1 s and about a tenth of the API's limit, with one heavy
+    request per process.
+  * Time, not memory, is what grows. Building a ledger costs O(n²), so the cap also bounds
+    that.
+  * About 0.4 s of an append is fixed (the market data load), whatever the ledger's length.
+* **Raising it:** measure again (one append and one valuation at the new length, over the
+  widest ledger expected); a replay from a stored checkpoint (#218's second fix) would remove
+  the growth.
+
 ### ML runs fail with "submitted for pipeline version N"
 Deploy the API and the workers together, at the same release. The API stamps its
 `ML_PIPELINE_VERSION` into each ML run's config and input hash. A worker running a
