@@ -469,6 +469,12 @@ data after a decision date leaves that decision unchanged (no look-ahead).
 **Look-ahead check in the validation suite** (`leakage_check`). The suite re-runs the
 experiment on data truncated one session after four sampled decision dates and requires
 every decision up to each cut to match the full run.
+* **The kept session (#262).** "One session after" is the next session of the run's own
+  calendar: the dates on which the universe or the benchmark prints. Until suite version 3
+  it was the next date in the whole dataset. On a date that only other symbols printed,
+  for example a single-name universe that skipped that session, the truncated data ended
+  at the cut, the truncated run made no decision there, and an honest strategy was
+  reported "failed". Pinned in `tests/unit/test_leakage_master.py`.
 * **Explicit universe (#237).** A member first listed after a cut has no bars in the
   truncated data. The truncated run is given only the members the kept data lists, and a
   cut with none listed is skipped (`dates_skipped`). The check is "unassessed" when every
@@ -762,6 +768,10 @@ dependencies; CI checks it on Linux (`tests/unit/test_reproducibility_processes.
   version is unrecorded, and its finding names which side is missing. A run recorded
   before #155 belongs to suite version 1. Requesting validation again runs a fresh suite
   (version 2) that records both versions, instead of returning the old run.
+* **Suite version 3** (#247, #262). The look-ahead check changed twice: the truncated run
+  gets the instrument master as of the cut, and the kept session comes from the run's own
+  calendar. Either can change a verdict, so a run of version 2 is kept as recorded, and
+  requesting validation again runs a fresh version-3 suite.
 * A mismatch is flagged rather than refused. The suite is internally consistent on one
   engine, and refusing would leave every older experiment unvalidatable until it was
   reproduced.

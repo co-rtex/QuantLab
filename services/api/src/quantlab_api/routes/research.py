@@ -37,7 +37,11 @@ SUITE = "validation"
 # 2: results record the engine the suite ran on and whether it matches the experiment's
 # (#155), so a request after the upgrade runs a fresh suite instead of returning a
 # completed run that cannot say which engine it used.
-SUITE_VERSION = 2
+# 3: the look-ahead check gives the truncated run the instrument master as of the cut (#247)
+# and keeps the next session of the run's own calendar (#262), so a check that passed on
+# version 2 can fail now, and a false failure can pass. A version-2 run is kept as it was;
+# requesting validation again runs a fresh suite.
+SUITE_VERSION = 3
 
 
 def _run_out(db: DB, run: ResearchRun) -> dict[str, Any]:
