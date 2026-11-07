@@ -25,5 +25,10 @@ ADD --checksum=sha256:90a6f1a7978a1b1b096dca6c57511ca48d3b8cf052f8e704baf358f34e
     https://truststore.pki.rds.amazonaws.com/global/global-bundle.pem /etc/ssl/certs/rds-global-bundle.pem
 ENV PATH="/app/.venv/bin:$PATH" QUANTLAB_DATA_DIR=/data
 USER quantlab
+# The commit this image was built from (scripts/stack-env.sh passes it; "-dirty" when the
+# tree had uncommitted changes). Every experiment, optimization and ML run records it as its
+# code version. Declared last so that a new commit reuses every layer above (A21).
+ARG QUANTLAB_GIT_SHA=unknown
+ENV QUANTLAB_GIT_SHA=$QUANTLAB_GIT_SHA
 EXPOSE 8000
 CMD ["uvicorn", "quantlab_api.main:app", "--host", "0.0.0.0", "--port", "8000"]

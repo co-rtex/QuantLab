@@ -70,6 +70,15 @@ pg=${QUANTLAB_PG_PORT:-$pg} redis=${QUANTLAB_REDIS_PORT:-$redis} web=${QUANTLAB_
 emit QUANTLAB_DATABASE_URL "postgresql+psycopg://quantlab:quantlab@localhost:$pg/quantlab"
 emit QUANTLAB_REDIS_URL "redis://:${QUANTLAB_REDIS_PASSWORD:-quantlab-dev}@localhost:$redis/0"
 emit E2E_BASE_URL "http://localhost:$web"
+# The code version every run records (A21): this checkout's commit, "-dirty" when tracked
+# files differ from it (untracked files, such as test output, don't count). Images get it
+# as a build argument, and dev processes from this environment. Outside git: "unknown".
+if sha=$(git -C "$top" rev-parse HEAD 2>/dev/null); then
+  [ -z "$(git -C "$top" status --porcelain --untracked-files=no 2>/dev/null)" ] || sha="$sha-dirty"
+else
+  sha=unknown
+fi
+emit QUANTLAB_GIT_SHA "$sha"
 
 # The default stack's minimum Docker VM memory (#175, #220, docs/RUNBOOK.md "Resources"): the
 # sum of the memory limits (2 workers at 1536 MiB, the API at 1880 MiB) plus the measured
