@@ -40,6 +40,7 @@ OTHER_TESTS = [
     "tests/unit/test_research_correctness.py",
     "tests/unit/test_ledger.py",
     "tests/unit/test_allocator_dust.py",
+    "tests/unit/test_optimizer_certificate.py",
 ]
 
 
@@ -285,6 +286,14 @@ MUTATIONS = [
         "    return np.where(w < DUST_WEIGHT, 0.0, w)",
         "    return w",
         "SLSQP residue weights kept, dust orders from zero holdings in large accounts (#227)",
+    ),
+    Mutation(
+        "M36",
+        ALLOC,
+        "    if not gap <= OPTIMALITY_GAP:  # also refuses a NaN gap",
+        "    if False:",
+        "a failed SLSQP solve accepted at any feasible point, without its optimality"
+        " certificate (#253)",
     ),
 ]
 

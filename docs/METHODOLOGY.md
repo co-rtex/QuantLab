@@ -794,6 +794,57 @@ objective; risk parity uses Spinu's convex formulation. Every result is validate
 sums to 1, within bounds) or an error is raised; infeasible bounds are rejected before
 solving.
 
+**A failed SLSQP solve is accepted only with an optimality certificate (#253, engine
+1.8.0).**
+* **The failure.** At the optimize API's defaults with 100 symbols (lookback 252,
+  Ledoit-Wolf, risk aversion 5, cap 0.4), `mean_variance` ended with SLSQP's mode 8,
+  "Positive directional derivative for linesearch", in 77 of 78 windows on macOS
+  (Accelerate) and 78 of 78 in the Linux image (OpenBLAS). The API reported the method as
+  failed.
+* **The cause.** SLSQP stops when successive objective values agree within `ftol` (1e-15).
+  The objective is scaled to O(1), and its rounding over 100 terms is of the order of
+  n × 1.1e-16, so near the optimum the test is usually not met. The line search then ends
+  at the optimum, reporting failure.
+  With `ftol` 1e-12, all 78 solves succeed. `ftol` is kept, because changing it would move
+  every successful solve and the measured dust gap (*Solver residue*).
+* **The rule.** A successful solve is returned exactly as before, without a certificate.
+  A failed one is accepted only if its point is feasible and its **Frank-Wolfe gap** is at
+  most `OPTIMALITY_GAP` = 1e-6. Otherwise the error is raised as before, now with the gap.
+  * The gap is `g·w − min_s g·s` over the feasible set, with `g` the gradient at `w`.
+  * For a convex objective it bounds the suboptimality: `f(w) − f* ≤ gap`. It is 0 exactly
+    at an optimum and needs no tolerance for which bounds are active.
+  * The minimizing `s` is exact: every weight at its lower bound, then the remaining mass
+    on the lowest gradients, each up to the cap.
+* **How 1e-6 was chosen** (`benchmarks/optimizer_certificate.py`, markets 3, 11 and 29,
+  n = 30 and 100, every 20th window, 78 windows each). The reference optimum is FISTA with
+  an exact projection, run to a gap under 1e-13; it shares nothing with SLSQP.
+  * **Converged points**, successes and mode-8 alike, on both platforms:
+    * the gap is at most 5.56e-8 (Linux, n = 100, mode 8);
+    * `f − f*` is at most 3.16e-14 and `max|w − w*|` at most 1.22e-7.
+    * So SLSQP's mode-8 points are as optimal as its successes.
+  * **Non-converged points:**
+    * an optimum perturbed by noise of 1e-5 has a gap of at least 2.62e-6, and by 1e-6 of
+      at least 2.23e-7;
+    * a solve stopped after 3 iterations has a median gap of 1.1e-3 to 4.5e-3.
+  * 1e-6 sits 18× above the largest converged gap. It rejects every 1e-5-perturbed point
+    and every early-stopped iterate that isn't already optimal. 1e-7 would leave less
+    than 2× of margin over the Linux maximum.
+* **Residue at accepted points.** At the mode-8 points, a weight whose reference optimum is
+  0 was at most 5.85e-15, and the smallest real weight at least 2.06e-4. So the dust
+  threshold below applies to them unchanged.
+* **Backtests.** Only `min_variance` runs in strategies. On a failed solve the strategy
+  keeps its holdings, so where a failed solve is now accepted, a backtest trades instead.
+  That is why the engine version moved to 1.8.0. On the A/B grid and the default weekly
+  and daily backtests (4,980 `min_variance` solves), no solve fails on either platform
+  (#253's measurement); the A/B record before and after is in the PR.
+* Pinned in `tests/unit/test_optimizer_certificate.py`:
+  * the cheapest vertex against an LP solver;
+  * the gap against a closed-form optimum: 0 there, and an upper bound elsewhere;
+  * a failed solve at a non-optimal or infeasible point still raises;
+  * a successful one never computes a gap;
+  * the issue's case is solved within 1e-12 of the independent optimum's objective.
+  * Mutation M36 (accepting any feasible failed point) is caught.
+
 **Solver residue (#227, engine 1.7.0).** At an active lower bound of 0, SLSQP leaves a
 weight of about 1e-20 to 1e-14 instead of 0.
 * Since 1.7.0 a weight under `DUST_WEIGHT` = 1e-10 is set to exactly 0. Bounds with a
