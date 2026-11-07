@@ -25,6 +25,16 @@ async function overflow(page: Page): Promise<{ scroll: number; client: number; c
         culprits.push(`${e.tagName.toLowerCase()}.${cls} right=${Math.round(e.getBoundingClientRect().right)}`);
       }
     }
+    // Text can run past its own box without widening it (a long unbroken word): name the
+    // innermost elements whose content overflows them, outside any scroll container.
+    if (!culprits.length) {
+      for (const e of Array.from(document.querySelectorAll("main *"))) {
+        if (e.scrollWidth <= e.clientWidth + 1 || scrolls(e) || e.querySelector("*:not(br)")) continue;
+        let p = e.parentElement;
+        while (p && !scrolls(p)) p = p.parentElement;
+        if (!p || p === document.documentElement) culprits.push(`text in ${e.tagName.toLowerCase()}: ${(e.textContent ?? "").slice(0, 40)}`);
+      }
+    }
     return { scroll: document.documentElement.scrollWidth, client: vw, culprits: culprits.slice(0, 8) };
   });
 }

@@ -73,6 +73,13 @@ main .grid > * {
   min-width: 0;
 }
 
+/* A long unbroken string (an email address, an id) breaks rather than running past the page
+   edge. break-word, not anywhere: it leaves a table's min-content width alone, so tables
+   still scroll in their card instead of wrapping inside numbers. */
+main {
+  overflow-wrap: break-word;
+}
+
 .field {
   width: 100%;
   border: 1px solid var(--color-rule);
