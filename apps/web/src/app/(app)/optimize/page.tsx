@@ -4,7 +4,7 @@ import { useRouter, useSearchParams } from "next/navigation";
 import { Suspense, useState, type FormEvent } from "react";
 import { SERIES } from "@/components/charts";
 import { PageHeader } from "@/components/Shell";
-import { ErrorNote, JobProgress, Panel, QueryError, Skeleton, SyntheticTag } from "@/components/ui";
+import { ErrorNote, JobProgress, Panel, QueryError, Skeleton, SyntheticTag, TableScroll } from "@/components/ui";
 import { api, ApiError, cancelJob, newIdempotencyKey, type DatasetVersion, type Job } from "@/lib/api";
 import { num, pct, shortHash } from "@/lib/format";
 import { useInstruments } from "@/lib/instruments";
@@ -208,7 +208,7 @@ function Optimizer() {
         ) : (
           <div className="space-y-4">
             {res.is_synthetic && <SyntheticTag />}
-            <div className="overflow-x-auto" tabIndex={0}>
+            <TableScroll>
               <table className="data num">
                 <thead>
                   <tr>
@@ -250,7 +250,7 @@ function Optimizer() {
                   ))}
                 </tbody>
               </table>
-            </div>
+            </TableScroll>
             {res.results
               .filter((r) => r.error)
               .map((r) => (

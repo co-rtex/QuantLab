@@ -193,7 +193,7 @@ export function ValidationPanel({ experimentId, onComplete }: { experimentId: st
                   <span className="num font-medium text-ink">{num(r.walk_forward.mean_oos_sharpe)}</span>.
                 </p>
                 <div className="grid gap-6 xl:grid-cols-2">
-                  <div className="overflow-x-auto" tabIndex={0}>
+                  <TableScroll>
                     <table className="data num">
                       <thead>
                         <tr>
@@ -226,7 +226,7 @@ export function ValidationPanel({ experimentId, onComplete }: { experimentId: st
                         ))}
                       </tbody>
                     </table>
-                  </div>
+                  </TableScroll>
                   <OosChart dates={r.walk_forward.oos_equity.dates} equity={r.walk_forward.oos_equity.equity} />
                 </div>
               </>
@@ -327,7 +327,7 @@ export function ValidationPanel({ experimentId, onComplete }: { experimentId: st
           {r.regimes.length > 0 && (
             <section>
               <h3 className="mb-2 text-sm font-semibold">Performance by market regime</h3>
-              <div className="overflow-x-auto" tabIndex={0}>
+              <TableScroll>
                 <table className="data num">
                   <thead>
                     <tr>
@@ -352,7 +352,7 @@ export function ValidationPanel({ experimentId, onComplete }: { experimentId: st
                     ))}
                   </tbody>
                 </table>
-              </div>
+              </TableScroll>
               <p className="mt-2 text-xs text-ink-3">Regimes are classified from the benchmark&apos;s trailing 63-session volatility and 126-session return, using only data available before each day. The low/mid/high volatility cut-offs are terciles of the whole period, so this table is an after-the-fact breakdown, not a signal a strategy could have used.</p>
             </section>
           )}

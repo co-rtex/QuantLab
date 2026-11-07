@@ -129,7 +129,7 @@ function Trades({ id }: { id: string }) {
         <span className="sr-only">Filter by symbol</span>
         <input className="field" placeholder="Filter by symbol" value={symbol} onChange={(e) => { setSymbol(e.target.value.toUpperCase()); setOffset(0); }} />
       </label>
-      <div className="overflow-x-auto" tabIndex={0}>
+      <TableScroll>
         <table className="data num">
           <thead>
             <tr>
@@ -164,7 +164,7 @@ function Trades({ id }: { id: string }) {
             ))}
           </tbody>
         </table>
-      </div>
+      </TableScroll>
       {t.data && t.data.total > 25 && (
         <div className="mt-3 flex justify-end gap-2 text-sm">
           <button className="btn btn-quiet" disabled={offset === 0} onClick={() => setOffset(Math.max(0, offset - 25))}>
@@ -504,7 +504,7 @@ export default function ExperimentPage() {
           {a?.factor_exposures && !a.factor_exposures.error && (
             <Panel title="Factor exposures" aside={a.factor_exposures.method}>
               <div className="grid gap-6 lg:grid-cols-[2fr_1fr]">
-                <div className="overflow-x-auto" tabIndex={0}>
+                <TableScroll>
                   <table className="data num">
                     <thead>
                       <tr>
@@ -523,7 +523,7 @@ export default function ExperimentPage() {
                       ))}
                     </tbody>
                   </table>
-                </div>
+                </TableScroll>
                 <div>
                 <dl className="space-y-1.5 text-sm">
                   {[

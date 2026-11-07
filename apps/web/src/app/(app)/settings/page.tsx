@@ -433,7 +433,7 @@ export default function SettingsPage() {
       {isOwner && (
         <Panel title="Audit log" className="mt-6" aside="Sensitive actions in this workspace">
           <QueryError q={audit} what="the audit log" />
-          <div className="overflow-x-auto" tabIndex={0}>
+          <TableScroll>
             <table className="data num">
               <thead>
                 <tr>
@@ -454,7 +454,7 @@ export default function SettingsPage() {
                 ))}
               </tbody>
             </table>
-          </div>
+          </TableScroll>
         </Panel>
       )}
     </>

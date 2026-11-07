@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useRef, useState, type FormEvent } from "react";
 import { PageHeader } from "@/components/Shell";
-import { ErrorNote, JobProgress, Panel, QueryError, Skeleton, StatusPill, SyntheticTag } from "@/components/ui";
+import { ErrorNote, JobProgress, Panel, QueryError, Skeleton, StatusPill, SyntheticTag, TableScroll } from "@/components/ui";
 import { api, ApiError, cancelJob, newIdempotencyKey, type Dataset, type DatasetVersion, type Job } from "@/lib/api";
 import { compact, dateTime, shortHash } from "@/lib/format";
 import { useApi } from "@/lib/useApi";
@@ -156,7 +156,7 @@ export default function DataPage() {
                     {(d.provider === "synthetic" || byDataset(d.id).some((v) => v.is_synthetic)) && <SyntheticTag />}
                   </div>
                   <p className="mt-0.5 max-w-prose text-sm text-ink-2">{d.description}</p>
-                  <div className="mt-3 overflow-x-auto" tabIndex={0}>
+                  <TableScroll className="mt-3">
                     <table className="data num">
                       <thead>
                         <tr>
@@ -193,7 +193,7 @@ export default function DataPage() {
                         ))}
                       </tbody>
                     </table>
-                  </div>
+                  </TableScroll>
                 </div>
               ))}
             </div>

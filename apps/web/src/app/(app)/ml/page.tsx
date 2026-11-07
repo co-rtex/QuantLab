@@ -160,7 +160,7 @@ function RunDetail({ id }: { id: string }) {
         {pct(res.panel.positive_rate, 1)}), hash <span className="num">{shortHash(res.panel.hash, 12)}</span>.
       </p>
       <PanelInputs res={res} />
-      <div className="overflow-x-auto" tabIndex={0}>
+      <TableScroll>
         <table className="data num">
           <thead>
             <tr>
@@ -189,7 +189,7 @@ function RunDetail({ id }: { id: string }) {
             ))}
           </tbody>
         </table>
-      </div>
+      </TableScroll>
       <div className="grid gap-6 lg:grid-cols-2">
         <section>
           <h3 className="mb-2 text-sm font-semibold">Chronological folds (purged, embargoed)</h3>
