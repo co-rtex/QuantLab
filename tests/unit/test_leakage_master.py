@@ -247,3 +247,22 @@ def test_a_bar_without_a_close_is_no_bar():
     trades = pd.DataFrame({"symbol": ["A"], "date": [cal[1]], "quantity": [10.0]})
     actions = pd.DataFrame(columns=["symbol", "ex_date", "kind", "value"])
     assert validation._halted_while_held(trades, actions, bars, cal, cal[14], 5) == {"A"}
+
+
+def test_the_kept_session_comes_from_the_universe_calendar_not_the_input(monkeypatch):
+    # #262: the truncated run kept the input's next session after the cut. When no universe
+    # member printed on it (here a single name that skips single sessions other symbols
+    # print), the truncated data ended at the cut, the truncated run made no decision there
+    # and an honest strategy was reported "failed".
+    m = generate_market(SyntheticSpec(n_assets=5, start="2019-01-02", end="2020-12-31", seed=8))
+    name = sorted(m.bars["symbol"].unique())[0]
+    sessions = pd.DatetimeIndex(sorted(m.bars["date"].unique()))
+    skipped = set(sessions[200::3])  # gaps of one session: no halt, no delisting rule
+    bars = m.bars[~((m.bars["symbol"] == name) & m.bars["date"].isin(skipped))]
+    cfg = engine.BacktestConfig(start="2019-07-01", rebalance="weekly", universe=[name])
+    res = leakage_check(bars, m.actions, "equal_weight", {}, cfg, samples=100)
+    assert res["status"] == "verified", res
+    # The case is the issue's: some tested cut has no bar for the name on the next input
+    # session.
+    nxt = {s: sessions[i + 1] for i, s in enumerate(sessions[:-1])}
+    assert any(nxt[pd.Timestamp(d)] in skipped for d in res["dates_tested"]), res
