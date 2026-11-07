@@ -1,8 +1,61 @@
 # Status (authoritative handoff)
 
-_Last updated: 2026-11-01, end of week (handoff below; main `07eece0`)_
+_Last updated: 2026-11-07 (handoff below)_
 
-## Handoff (2026-11-01, end of week): read this first
+## Handoff (2026-11-07): read this first
+**Operating model.** Since 2026-11-07, one interactive session does the lead's, Agent 2's and
+Agent 3's work: implementation, review, integration and release. The three-agent setup is
+retired; its leases are reclaimed (no worktree had uncommitted work). Reviews in this mode
+are the same session's own, not independent ones: evidence comes from tests written first,
+mutation runs, A/B records and references that share no code with what they check.
+
+**State.** Main is CI-green after the merges below. The latest verified private release
+candidate is still **`v0.1.0-rc.2` on `87449b2`** (its tags exist locally only). Main after
+rc.2 is **not release-gated**. Public deployment stays prohibited (#39).
+
+**Merged 2026-11-07:**
+* #259 (`067ce6f`, #247): the look-ahead check gives the truncated run the instrument master
+  as of the cut. Mutations M34 and M35 are caught. Local suite: 1218 passed.
+* #266 (`1277051`, #263): Playwright refuses, in a linked worktree, an unset `E2E_BASE_URL`
+  and a loopback :3000 one unless `E2E_ALLOW_MAIN_CHECKOUT=1`.
+* #267 (`2fed8bf`): the rate-limiter breaker tests run on a frozen monotonic clock. The flake
+  was reproduced every time with an injected 60 ms stall.
+
+**Open PRs (this session), in merge order:**
+* #268 (#262): the look-ahead check's kept session comes from the run's own calendar;
+  validation **suite version 3**. #259 had changed verdicts without a version bump.
+* #269 (#253): a failed SLSQP solve is accepted only when its Frank-Wolfe gap certifies it
+  optimal (ε = 1e-6, measured on macOS and Linux); **engine 1.8.0**. A/B: 0 of 1,002 runs
+  changed. M36 caught. Local suite: 1227 passed.
+* #270 (#252): the A/B harness's library runs are keyed by instrument, so they book master
+  delistings (252; 0 before).
+* #271 (#261, partial): the readiness test asserts one attempt, not wall time; the outage
+  test keeps a strict check with failure diagnostics. **#261 stays open:** 20 runs under 8
+  CPU burners (load 12 to 60) didn't reproduce it.
+
+**Open issues after these merge:**
+* #254 (P3): residue weights up to ~1e-6 with a singular covariance (lookback < assets).
+  METHODOLOGY documents it. Measured effect: 41 fills under $1 at 3e9 capital.
+* #261 (P3, outage test only), as above.
+* Externally blocked (the user): #39, #168, #11/#12, #15, #20, #17 as a required check, AWS.
+* Environment: the Docker VM is 3918 MiB, below the documented 5120 MiB minimum. Other Claude
+  sessions on this Mac may share it.
+
+**Plan (the 2026-11-07 brief):**
+1. Backlog: finish the PRs above.
+2. End-to-end product audit on an isolated slot.
+3. UX polish where it has a concrete benefit.
+4. Engineering and quant audit.
+5. Measured performance work.
+6. Portfolio docs: README, architecture, demo, case study, interview guide.
+7. A full release gate and rc.3, or v0.1.0, only on a verified commit.
+
+**Resume.** `cd ~/Developer/QuantLab && git fetch && gh pr list && scripts/fullstack-lock.sh
+status`. Worktrees: `lead-trial` (slot 86), `agent-2-security` (79), `agent-3-data`,
+`lead-docs`. Full `tests/unit` runs and every stack run go under the lock; E2E only via
+`make e2e-serial`; `make down` only, never `down -v`.
+
+## Previous handoff (2026-11-01, superseded)
 **State.** Main `07eece0`, CI green. The latest verified private release candidate is
 **`v0.1.0-rc.2` on `87449b2`** (READY; docs/RELEASE_READINESS.md). Its tags `v0.1.0-rc.1`
 (`7fc89ee`) and `v0.1.0-rc.2` exist **locally only**; the user decides whether to
