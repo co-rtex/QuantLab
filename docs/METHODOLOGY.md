@@ -485,6 +485,55 @@ every decision up to each cut to match the full run.
     sizes by their count. Its decisions differ between the two runs, and the check reports
     "failed". So does a planted look-ahead with a late-listed member. Both fail at a cut
     before the listing (`tests/unit/test_research.py`).
+* **The instrument master (#247).** The truncated run gets the master as it was knowable
+  at the kept session (`master_as_of`).
+  * A delisting dated on or before it is public, so it is kept with its reason and
+    return. A later one is blanked, as for a security still listed.
+  * Listing dates and names are kept: the backtest doesn't read them, and a listing shows
+    in the bars anyway.
+  * **One stated exemption, for the halt rule.** A halted security the master later
+    delists is held to its delisting return rather than sold at its last close (see
+    *Delistings*), because a halted stock can't be sold.
+    * **What the exempt name keeps:** only the fact that it delists later. Its date is set
+      to the day after the kept session, so nothing can act on it in the truncated window,
+      but the halt rule still sees a delisting coming. Its return and reason are blanked
+      like any other.
+    * **Who is exempt:** a name whose missing-bar run reached `delist_after_missing`
+      sessions at or before the cut, while the full run held it at the start of that run.
+      * That covers a halt still running at the cut and one that ended before it: either
+        way the rule kept the position, and without the exemption the truncated run would
+        have sold it.
+      * Whether it prints on the kept session doesn't matter. A run reaching the threshold
+        only then can't change a decision dated up to the cut.
+      * Only bars dated up to the cut and the full run's own trades up to the cut are read:
+        its state at the cut, not data from after it. Holdings are split-adjusted, so a
+        name sold out after a split doesn't count as held.
+    * **Why it isn't a strategy channel:** the rule decides no target. It only resolves a
+      position that can't trade. Without the exemption, the truncated run would sell at a
+      last close no holder could get, and an honest strategy would be reported "failed".
+    * **Pinned** in `tests/unit/test_leakage_master.py`:
+      * a 15-session halt that ends in a −90% delisting;
+      * an 8-session halt that resumes, with the delisting later.
+      * Equal weight and a test strategy that sizes by its locked capital are verified in
+        both. With the exemption removed (mutation M34), the second one fails.
+      * An engine that marks a halted holding at its delisting return 10 days before the
+        delisting is public (mutation M35) is caught, because the exempt name's return is
+        blanked.
+    * **Effect on library strategies:** their targets don't depend on the size of holdings.
+      `buy_and_hold` reads only whether anything is held, which a halted name doesn't
+      change while other positions remain. So for them the exemption doesn't change the
+      verdict.
+    * **The blind spot left:** for an exempt name, an engine path that used only the
+      existence of a later delisting, not its date or return, would go unseen. The halt
+      rule is the one such path today.
+  * Before #247 both runs got the full master, so an engine path that acted on a delisting
+    before it was public behaved identically in both and went unseen. A planted one, an
+    engine that acts on each delisting 10 days early, is now "failed"; with the full master
+    it was "verified" (`tests/unit/test_leakage_master.py`).
+  * **The limit:** strategies never receive the master (`MarketView` has none), so the
+    library can't leak through it. A custom strategy that keeps its own copy of the master
+    and reads it ahead can't be caught by truncating the engine's input. The check sees
+    only what reaches the backtest through its arguments.
 * When a backtest inside the suite cannot run, the job fails with "validation could not
   run: …". It names each instrument by its ticker as of the experiment's start:
   * for an instrument listed later, the ticker it first listed under;
@@ -502,7 +551,9 @@ from `quantlab`.
 * A mutation harness (`tests/oracle/mutate.py`) shows the comparison catches 32 injected
   engine and adjuster defects. A 33rd, M33, keeps the allocators' solver residue (#227).
   The comparison can't see it, because none of its strategies uses an optimizer.
-  `tests/unit/test_allocator_dust.py` catches it.
+  `tests/unit/test_allocator_dust.py` catches it. M34 drops the look-ahead check's halt
+  exemption (#247). The comparison doesn't run the check, so it misses M34;
+  `tests/unit/test_leakage_master.py` catches it.
 * **What is independent and what is not** (#209 review).
   * Since 1.5.0 the sell proceeds and the pro-rata factor are written from this text; the
     reference finds the factor by bisection, where the engine solves it in closed form.
@@ -593,6 +644,18 @@ reports apart from their `generated_at` timestamp. The hash seed (`PYTHONHASHSEE
 the BLAS/OpenMP thread count (1, 2 or 4) don't change them. The ML models and the
 bootstrap take explicit seeds. This was measured on macOS arm64 with the locked
 dependencies; CI checks it on Linux (`tests/unit/test_reproducibility_processes.py`).
+
+**Byte-identical holds within one platform and BLAS, not across them.**
+* Optimizer outputs for one seeded version were measured on macOS (Accelerate) and in the
+  Linux image (OpenBLAS), with numpy 2.5.4 and scipy 1.18.1 on both. They agree only at
+  float level: 148 floats differ, by at most 2.22e-15 absolute.
+* The platform's jobs all run in the Linux image, so a reproduction within one deployment
+  is exact. Comparing a deployment's results with a run on a developer's Mac needs a float
+  tolerance.
+* Only the optimizer outputs were compared across platforms. Whole backtests and their
+  fingerprints were not. A float-level difference can cross one of the engine's
+  thresholds (an order's noise floor, a whole share), so across platforms a fingerprint
+  match is not guaranteed.
 
 **Engine versions.**
 * History (versions before 1.2.0 are in the git history):
