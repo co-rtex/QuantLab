@@ -3,7 +3,7 @@
 import { useRouter } from "next/navigation";
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import { PageHeader } from "@/components/Shell";
-import { ErrorNote, Panel, QueryError } from "@/components/ui";
+import { ErrorNote, Panel, QueryError, TableScroll } from "@/components/ui";
 import { api, ApiError, type Page } from "@/lib/api";
 import { dateTime } from "@/lib/format";
 import { useApi } from "@/lib/useApi";
@@ -216,55 +216,57 @@ export default function SettingsPage() {
       <div className="grid gap-6 xl:grid-cols-2">
         <Panel title={<span ref={membersHeading} tabIndex={-1} className="outline-none">Members</span>}>
           <QueryError q={members} what="members" />
-          <table className="data">
-            <thead>
-              <tr>
-                <th>Name</th>
-                <th>Email</th>
-                <th>Role</th>
-                {isOwner && <th className="sr-only">Actions</th>}
-              </tr>
-            </thead>
-            <tbody>
-              {members.data?.map((m) => (
-                <tr key={m.user_id}>
-                  <td>{m.display_name}</td>
-                  <td className="text-ink-2">{m.email}</td>
-                  <td>
-                    {isOwner ? (
-                      <select
-                        aria-label={`Role of ${m.display_name}`}
-                        value={m.role}
-                        onChange={(e) => setRole(m, e.target.value)}
-                        className="field py-0.5"
-                      >
-                        <option value="viewer">viewer</option>
-                        <option value="editor">editor</option>
-                        <option value="owner">owner</option>
-                      </select>
-                    ) : (
-                      m.role
-                    )}
-                  </td>
-                  {isOwner && (
-                    <td className="r whitespace-nowrap">
-                      <button
-                        type="button"
-                        className="btn btn-quiet py-0.5"
-                        data-remove={m.user_id}
-                        aria-label={m.user_id === user?.id ? "Leave this workspace" : `Remove ${m.display_name}`}
-                        aria-expanded={removing?.user_id === m.user_id}
-                        aria-controls="remove-member"
-                        onClick={() => openRemove(m)}
-                      >
-                        {m.user_id === user?.id ? "Leave" : "Remove"}
-                      </button>
-                    </td>
-                  )}
+          <TableScroll>
+            <table className="data">
+              <thead>
+                <tr>
+                  <th>Name</th>
+                  <th>Email</th>
+                  <th>Role</th>
+                  {isOwner && <th className="sr-only">Actions</th>}
                 </tr>
-              ))}
-            </tbody>
-          </table>
+              </thead>
+              <tbody>
+                {members.data?.map((m) => (
+                  <tr key={m.user_id}>
+                    <td>{m.display_name}</td>
+                    <td className="text-ink-2">{m.email}</td>
+                    <td>
+                      {isOwner ? (
+                        <select
+                          aria-label={`Role of ${m.display_name}`}
+                          value={m.role}
+                          onChange={(e) => setRole(m, e.target.value)}
+                          className="field py-0.5"
+                        >
+                          <option value="viewer">viewer</option>
+                          <option value="editor">editor</option>
+                          <option value="owner">owner</option>
+                        </select>
+                      ) : (
+                        m.role
+                      )}
+                    </td>
+                    {isOwner && (
+                      <td className="r whitespace-nowrap">
+                        <button
+                          type="button"
+                          className="btn btn-quiet py-0.5"
+                          data-remove={m.user_id}
+                          aria-label={m.user_id === user?.id ? "Leave this workspace" : `Remove ${m.display_name}`}
+                          aria-expanded={removing?.user_id === m.user_id}
+                          aria-controls="remove-member"
+                          onClick={() => openRemove(m)}
+                        >
+                          {m.user_id === user?.id ? "Leave" : "Remove"}
+                        </button>
+                      </td>
+                    )}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </TableScroll>
           {isOwner && removing && (
             <div
               id="remove-member"
@@ -337,32 +339,34 @@ export default function SettingsPage() {
           {isOwner && invitations.data && invitations.data.length > 0 && (
             <div className="mt-4">
               <h3 className="mb-1 text-sm font-semibold">Pending invitations</h3>
-              <table className="data">
-                <thead>
-                  <tr>
-                    <th>Email</th>
-                    <th>Role</th>
-                    <th>Expires</th>
-                    <th>
-                      <span className="sr-only">Actions</span>
-                    </th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {invitations.data.map((i) => (
-                    <tr key={i.id}>
-                      <td className="text-ink-2">{i.email}</td>
-                      <td>{i.role}</td>
-                      <td>{i.status === "expired" ? "expired" : dateTime(i.expires_at)}</td>
-                      <td>
-                        <button className="btn btn-quiet py-0.5" onClick={() => revoke(i.id)}>
-                          Withdraw
-                        </button>
-                      </td>
+              <TableScroll>
+                <table className="data">
+                  <thead>
+                    <tr>
+                      <th>Email</th>
+                      <th>Role</th>
+                      <th>Expires</th>
+                      <th>
+                        <span className="sr-only">Actions</span>
+                      </th>
                     </tr>
-                  ))}
-                </tbody>
-              </table>
+                  </thead>
+                  <tbody>
+                    {invitations.data.map((i) => (
+                      <tr key={i.id}>
+                        <td className="text-ink-2">{i.email}</td>
+                        <td>{i.role}</td>
+                        <td>{i.status === "expired" ? "expired" : dateTime(i.expires_at)}</td>
+                        <td>
+                          <button className="btn btn-quiet py-0.5" onClick={() => revoke(i.id)}>
+                            Withdraw
+                          </button>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </TableScroll>
             </div>
           )}
           <p className="mt-3 text-xs text-ink-3">Viewers can read results. Editors can run experiments. Owners manage members and see the audit log.</p>

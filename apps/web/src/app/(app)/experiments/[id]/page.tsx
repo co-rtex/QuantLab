@@ -5,7 +5,7 @@ import { useParams, useRouter } from "next/navigation";
 import { useState } from "react";
 import { EquityChart, MonthlyReturns } from "@/components/charts";
 import { PageHeader } from "@/components/Shell";
-import { ErrorNote, JobProgress, Panel, Pending, QueryError, StatusPill, SyntheticLabel, syntheticStatus } from "@/components/ui";
+import { ErrorNote, JobProgress, Panel, Pending, QueryError, StatusPill, SyntheticLabel, syntheticStatus, TableScroll } from "@/components/ui";
 import { AssistantPanel } from "@/components/Assistant";
 import { IntegrityReport, ValidationPanel } from "@/components/Validation";
 import { api, ApiError, newIdempotencyKey, type DatasetVersion, type Experiment, type Job, type Series } from "@/lib/api";
@@ -373,32 +373,34 @@ export default function ExperimentPage() {
             </Panel>
             <Panel title="Performance">
               {a ? (
-                <table className="data num">
-                  <thead>
-                    <tr>
-                      <th>Measure</th>
-                      <th className="r">Strategy</th>
-                      <th className="r">Before costs</th>
-                      <th className="r">{benchLabel}</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {ROWS.map(([label, k, fmt]) => (
-                      <tr key={k}>
-                        <td>{label}</td>
-                        <td className={`r font-medium ${SIGNED.has(k) ? signClass(a.performance.values[k]) : ""}`}>
-                          <Value m={a.performance} k={k} fmt={fmt} />
-                        </td>
-                        <td className="r text-ink-2">
-                          <Value m={a.gross_performance} k={k} fmt={fmt} />
-                        </td>
-                        <td className="r text-ink-2">
-                          <Value m={a.benchmark_performance} k={k} fmt={fmt} />
-                        </td>
+                <TableScroll>
+                  <table className="data num">
+                    <thead>
+                      <tr>
+                        <th>Measure</th>
+                        <th className="r">Strategy</th>
+                        <th className="r">Before costs</th>
+                        <th className="r">{benchLabel}</th>
                       </tr>
-                    ))}
-                  </tbody>
-                </table>
+                    </thead>
+                    <tbody>
+                      {ROWS.map(([label, k, fmt]) => (
+                        <tr key={k}>
+                          <td>{label}</td>
+                          <td className={`r font-medium ${SIGNED.has(k) ? signClass(a.performance.values[k]) : ""}`}>
+                            <Value m={a.performance} k={k} fmt={fmt} />
+                          </td>
+                          <td className="r text-ink-2">
+                            <Value m={a.gross_performance} k={k} fmt={fmt} />
+                          </td>
+                          <td className="r text-ink-2">
+                            <Value m={a.benchmark_performance} k={k} fmt={fmt} />
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </TableScroll>
               ) : (
                 <Pending q={analysis} what="performance analysis" />
               )}
@@ -449,26 +451,28 @@ export default function ExperimentPage() {
                 <p className="mt-3 text-xs text-ink-3">Losses as a share of portfolio value. Historical estimates cannot exceed the worst day in the sample.</p>
               </Panel>
               <Panel title="Largest drawdowns">
-                <table className="data num">
-                  <thead>
-                    <tr>
-                      <th>Peak</th>
-                      <th className="r">Depth</th>
-                      <th className="r">Sessions</th>
-                      <th>Recovered</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {a.drawdowns.map((d) => (
-                      <tr key={d.peak}>
-                        <td>{d.peak.slice(0, 10)}</td>
-                        <td className="r text-loss">{pct(d.depth, 1)}</td>
-                        <td className="r">{d.total_sessions}</td>
-                        <td className="text-ink-2">{d.recovery ? d.recovery.slice(0, 10) : "Not yet"}</td>
+                <TableScroll>
+                  <table className="data num">
+                    <thead>
+                      <tr>
+                        <th>Peak</th>
+                        <th className="r">Depth</th>
+                        <th className="r">Sessions</th>
+                        <th>Recovered</th>
                       </tr>
-                    ))}
-                  </tbody>
-                </table>
+                    </thead>
+                    <tbody>
+                      {a.drawdowns.map((d) => (
+                        <tr key={d.peak}>
+                          <td>{d.peak.slice(0, 10)}</td>
+                          <td className="r text-loss">{pct(d.depth, 1)}</td>
+                          <td className="r">{d.total_sessions}</td>
+                          <td className="text-ink-2">{d.recovery ? d.recovery.slice(0, 10) : "Not yet"}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </TableScroll>
               </Panel>
               <Panel title="Contribution to P&L" aside="Realized and unrealized">
                 <div className="grid grid-cols-2 gap-4 text-sm">

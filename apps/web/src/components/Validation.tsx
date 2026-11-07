@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import { Legend, SERIES } from "@/components/charts";
-import { ErrorNote, JobProgress, Panel, Pending, QueryError, StatusPill } from "@/components/ui";
+import { ErrorNote, JobProgress, Panel, Pending, QueryError, StatusPill, TableScroll } from "@/components/ui";
 import { api, ApiError, cancelJob, newIdempotencyKey, type Job } from "@/lib/api";
 import { num, pct, signClass } from "@/lib/format";
 import { useApi } from "@/lib/useApi";
@@ -266,26 +266,28 @@ export function ValidationPanel({ experimentId, onComplete }: { experimentId: st
             </section>
             <section>
               <h3 className="mb-2 text-sm font-semibold">Trading-cost sweep</h3>
-              <table className="data num">
-                <thead>
-                  <tr>
-                    <th>Costs</th>
-                    <th className="r">Round trip</th>
-                    <th className="r">CAGR</th>
-                    <th className="r">vs benchmark</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {r.cost.rows.map((c) => (
-                    <tr key={c.multiplier}>
-                      <td>{c.multiplier}×</td>
-                      <td className="r">{num(c.round_trip_bps, 0)} bps</td>
-                      <td className={`r ${signClass(c.cagr)}`}>{pct(c.cagr, 2)}</td>
-                      <td className={`r ${signClass(c.excess_total_return)}`}>{pct(c.excess_total_return, 1)}</td>
+              <TableScroll>
+                <table className="data num">
+                  <thead>
+                    <tr>
+                      <th>Costs</th>
+                      <th className="r">Round trip</th>
+                      <th className="r">CAGR</th>
+                      <th className="r">vs benchmark</th>
                     </tr>
-                  ))}
-                </tbody>
-              </table>
+                  </thead>
+                  <tbody>
+                    {r.cost.rows.map((c) => (
+                      <tr key={c.multiplier}>
+                        <td>{c.multiplier}×</td>
+                        <td className="r">{num(c.round_trip_bps, 0)} bps</td>
+                        <td className={`r ${signClass(c.cagr)}`}>{pct(c.cagr, 2)}</td>
+                        <td className={`r ${signClass(c.excess_total_return)}`}>{pct(c.excess_total_return, 1)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </TableScroll>
               <p className="mt-2 text-xs text-ink-3">
                 {r.cost.breakeven_multiplier !== null
                   ? `The edge over the benchmark disappears at about ${num(r.cost.breakeven_multiplier, 1)}× the assumed costs.`

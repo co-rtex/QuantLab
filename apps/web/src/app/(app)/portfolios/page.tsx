@@ -4,7 +4,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useState, type FormEvent } from "react";
 import { PageHeader } from "@/components/Shell";
-import { BusyNote, ErrorNote, Panel, QueryError, SyntheticLabel } from "@/components/ui";
+import { BusyNote, ErrorNote, Panel, QueryError, SyntheticLabel, TableScroll } from "@/components/ui";
 import { api, ApiError, type DatasetVersion } from "@/lib/api";
 import { dateTime, shortHash } from "@/lib/format";
 import { useSynthetic } from "@/lib/synthetic";
@@ -75,31 +75,33 @@ export default function PortfoliosPage() {
           {list.data?.length === 0 ? (
             <p className="text-sm text-ink-2">No portfolios yet. Create one to start recording trades.</p>
           ) : (
-            <table className="data">
-              <thead>
-                <tr>
-                  <th>Name</th>
-                  <th>Benchmark</th>
-                  <th className="r">Ledger entries</th>
-                  <th>Created</th>
-                </tr>
-              </thead>
-              <tbody>
-                {list.data?.map((p) => (
-                  <tr key={p.id}>
-                    <td>
-                      <Link className="font-medium text-cobalt hover:underline" href={`/portfolios/${p.id}`}>
-                        {p.name}
-                      </Link>
-                      <SyntheticLabel inline status={synthetic(p)} />
-                    </td>
-                    <td>{p.benchmark ?? "—"}</td>
-                    <td className="r num">{p.transactions}</td>
-                    <td className="text-ink-2">{dateTime(p.created_at)}</td>
+            <TableScroll>
+              <table className="data">
+                <thead>
+                  <tr>
+                    <th>Name</th>
+                    <th>Benchmark</th>
+                    <th className="r">Ledger entries</th>
+                    <th>Created</th>
                   </tr>
-                ))}
-              </tbody>
-            </table>
+                </thead>
+                <tbody>
+                  {list.data?.map((p) => (
+                    <tr key={p.id}>
+                      <td>
+                        <Link className="font-medium text-cobalt hover:underline" href={`/portfolios/${p.id}`}>
+                          {p.name}
+                        </Link>
+                        <SyntheticLabel inline status={synthetic(p)} />
+                      </td>
+                      <td>{p.benchmark ?? "—"}</td>
+                      <td className="r num">{p.transactions}</td>
+                      <td className="text-ink-2">{dateTime(p.created_at)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </TableScroll>
           )}
         </Panel>
         <Panel title="New portfolio">
