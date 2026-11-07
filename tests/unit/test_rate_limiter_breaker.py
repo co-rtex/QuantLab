@@ -7,7 +7,6 @@ three per login, 15.21 s measured live with Redis paused (#200's probe).
 
 from __future__ import annotations
 
-import time
 from typing import Any
 
 import fakeredis
@@ -20,8 +19,16 @@ from quantlab_api.security import RateLimiter
 from tests.limiter_clock import limiter_clock  # noqa: F401 - the fixture below
 from tests.unit.test_redis_timeouts import api_redis, silent_redis
 
-# Fixed-window limits: counted against a frozen clock, never across a window boundary.
-pytestmark = pytest.mark.usefixtures("limiter_clock")
+# Fixed-window limits: counted against a frozen clock, never across a window boundary. The
+# breaker's window is timed on a frozen monotonic clock too, moved only by advance(): with a
+# real 50 ms window, a stall between two calls under load turned one into the probe.
+pytestmark = pytest.mark.usefixtures("breaker_clock")
+
+
+@pytest.fixture
+def breaker_clock(limiter_clock):  # noqa: F811
+    limiter_clock.freeze_monotonic()
+    return limiter_clock
 
 
 class Flaky:
@@ -104,7 +111,9 @@ def test_while_open_redis_is_not_asked(flaky: Flaky) -> None:
 
 
 def test_a_refund_goes_back_only_where_the_attempt_was_counted(
-    flaky: Flaky, monkeypatch: pytest.MonkeyPatch
+    breaker_clock,
+    flaky: Flaky,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """#211 review N2: a refund that was the breaker's probe sent DECR to Redis for an
     attempt counted locally, leaving the bucket at -1, and with no TTL."""
@@ -113,7 +122,7 @@ def test_a_refund_goes_back_only_where_the_attempt_was_counted(
     local = lim.reserve_receipt("acct", 5)  # Redis down: counted locally
     assert local and not local.in_redis
     flaky.down = False
-    time.sleep(0.06)  # the breaker's window is over: the next call would be its probe
+    breaker_clock.advance(0.06)  # the breaker's window is over: the next call would be its probe
     lim.refund(local)
     assert flaky.real.exists(local.bucket) == 0  # no DECR: not created at -1
     counted = lim.reserve_receipt("acct", 5)  # the probe; Redis counts it
@@ -146,13 +155,17 @@ def test_the_floor_never_lowers_a_local_count(
     assert lim.reserve("k", 5) is False  # the 6th locally (an assigned floor gave 2)
 
 
-def test_one_probe_among_concurrent_calls(flaky: Flaky, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_one_probe_among_concurrent_calls(
+    breaker_clock,
+    flaky: Flaky,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     import threading
 
     lim = RateLimiter()
     monkeypatch.setattr(lim, "BREAKER_SECONDS", 0.05)
     lim.reserve("k", 5)
-    time.sleep(0.06)
+    breaker_clock.advance(0.06)
     start, got = threading.Barrier(16), []
 
     def call() -> None:
@@ -215,7 +228,10 @@ def test_in_degraded_mode_the_limit_is_per_process(flaky: Flaky) -> None:
 
 
 def test_after_its_window_one_probe_closes_it_on_success(
-    flaky: Flaky, monkeypatch: pytest.MonkeyPatch, logged: list[str]
+    breaker_clock,
+    flaky: Flaky,
+    monkeypatch: pytest.MonkeyPatch,
+    logged: list[str],
 ) -> None:
     lim = RateLimiter()
     monkeypatch.setattr(lim, "BREAKER_SECONDS", 0.05)
@@ -224,7 +240,7 @@ def test_after_its_window_one_probe_closes_it_on_success(
     flaky.down = False
     lim.reserve("k", 5)  # still open: counted locally
     assert flaky.calls == 1
-    time.sleep(0.06)
+    breaker_clock.advance(0.06)
     lim.reserve("k", 5)  # the probe: Redis answers and the breaker closes
     assert lim._open_until == 0.0
     assert _gauge() == 0.0 and logged == [
@@ -235,13 +251,17 @@ def test_after_its_window_one_probe_closes_it_on_success(
     assert int(flaky.real.get(lim._bucket("k", 60)) or 0) == 2  # both in Redis again
 
 
-def test_only_one_probe_runs_at_a_time(flaky: Flaky, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_only_one_probe_runs_at_a_time(
+    breaker_clock,
+    flaky: Flaky,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """While the probe waits on Redis, other calls keep counting locally instead of all
     waiting too."""
     lim = RateLimiter()
     monkeypatch.setattr(lim, "BREAKER_SECONDS", 0.05)
     lim.reserve("k", 5)
-    time.sleep(0.06)
+    breaker_clock.advance(0.06)
     assert lim._redis() is flaky  # the probe
     assert lim._redis() is None  # everyone else, meanwhile
     lim._redis_answered()
@@ -249,12 +269,15 @@ def test_only_one_probe_runs_at_a_time(flaky: Flaky, monkeypatch: pytest.MonkeyP
 
 
 def test_a_failed_probe_opens_it_for_another_window(
-    flaky: Flaky, monkeypatch: pytest.MonkeyPatch, logged: list[str]
+    breaker_clock,
+    flaky: Flaky,
+    monkeypatch: pytest.MonkeyPatch,
+    logged: list[str],
 ) -> None:
     lim = RateLimiter()
     monkeypatch.setattr(lim, "BREAKER_SECONDS", 0.05)
     lim.reserve("k", 5)
-    time.sleep(0.06)
+    breaker_clock.advance(0.06)
     lim.reserve("k", 5)  # the probe fails
     assert flaky.calls == 2
     lim.reserve("k", 5)
