@@ -30,6 +30,7 @@ ROOT = Path(__file__).resolve().parents[2]
 ENG = "packages/quantlab/src/quantlab/backtest/engine.py"
 ADJ = "packages/quantlab/src/quantlab/data/adjust.py"
 ALLOC = "packages/quantlab/src/quantlab/optimize/allocators.py"
+VAL = "packages/quantlab/src/quantlab/research/validation.py"
 ORACLE = "tests/unit/test_engine_oracle.py"
 OTHER_TESTS = [
     "tests/unit/test_backtest.py",
@@ -40,6 +41,7 @@ OTHER_TESTS = [
     "tests/unit/test_research_correctness.py",
     "tests/unit/test_ledger.py",
     "tests/unit/test_allocator_dust.py",
+    "tests/unit/test_leakage_master.py",
 ]
 
 
@@ -285,6 +287,24 @@ MUTATIONS = [
         "    return np.where(w < DUST_WEIGHT, 0.0, w)",
         "    return w",
         "SLSQP residue weights kept, dust orders from zero holdings in large accounts (#227)",
+    ),
+    Mutation(
+        "M34",
+        VAL,
+        "else master_as_of(instruments, nxt, keep=halted(d)),",
+        "else master_as_of(instruments, nxt),",
+        "look-ahead check without the halt exemption: an honest halt-then-delist fails (#247)",
+    ),
+    Mutation(
+        "M35",
+        ENG,
+        "        prices = {s: float(last_px[col[s]]) for s in ledger.positions}",
+        "        prices = {s: float(last_px[col[s]]) * (1 + delist_at[s][1] if s in delist_at"
+        " and math.isfinite(delist_at[s][1]) and not has_bar[k, col[s]]"
+        " and delist_at[s][0] - d <= pd.Timedelta(days=10) else 1.0)"
+        " for s in ledger.positions}",
+        "a halted holding marked at its delisting return 10 days before the delisting is"
+        " public (#259 review's ML)",
     ),
 ]
 
