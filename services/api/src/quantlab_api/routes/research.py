@@ -173,13 +173,15 @@ def integrity_evidence(db: DB, user: CurrentUser, exp: Experiment) -> dict[str, 
     # Ids only when every delisted row has one; a partial id set is never compared (#66).
     ids = {i for _, i in gone}
     delisted_ids = None if None in ids else sorted(i for i in ids if i is not None)
+    # Distinct configurations tried on this dataset version (A20): a reproduction or an
+    # identical re-run has the same input hash and is not another trial, and a run that
+    # never completed produced nothing to select from.
     trials = (
         db.scalar(
-            select(func.count())
-            .select_from(Experiment)
-            .where(
+            select(func.count(func.distinct(Experiment.input_hash))).where(
                 Experiment.workspace_id == exp.workspace_id,
                 Experiment.dataset_version_id == exp.dataset_version_id,
+                Experiment.status == JobStatus.completed,
             )
         )
         or 0

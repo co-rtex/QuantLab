@@ -618,6 +618,24 @@ each differing input (`input_differences`, for example `engine_version 1.2.0 →
 The integrity report only uses same-input re-runs to verify or fail reproducibility; it
 names changed-input re-runs and leaves the check "not assessed" if they are the only ones.
 
+**Code version** (A21, 2026-11-07). Each run records the commit it ran as `code_version`:
+* **Containers:** the commit the image was built from (a build argument that
+  `scripts/stack-env.sh` sets).
+* **Dev processes:** the checkout's commit.
+* **Uncommitted changes:** `-dirty` is added when tracked files differ from the commit.
+* **Outside git:** `unknown`. Before A21, every containerized run recorded `unknown`.
+* The code version is not part of the input hash: the engine version is, and
+  identical outputs are the reproducibility test.
+* The comparison's `same_code_version` is `null` when either side is `unknown` or `-dirty`,
+  never `true`. The reproducibility check then says that identical outputs came from code
+  that can't be compared.
+
+**Trials on a dataset version** (A20). The selection-bias check states how many
+**distinct configurations** (input hashes of completed runs) the workspace has run on the
+dataset version. A reproduction or an identical re-run is not another trial. Before A20,
+every experiment row counted, failed ones included. The deflated Sharpe ratio itself uses
+the validation's parameter sweep, and was unaffected.
+
 **An experiment recorded on an older engine, reproduced after an upgrade** (for example
 1.5.0 → 1.6.0):
 * **What runs.** *Reproduce* submits the experiment again with its stored dataset version,
