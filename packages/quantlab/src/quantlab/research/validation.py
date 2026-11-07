@@ -431,7 +431,9 @@ def _halted_while_held(
     sessions = calendar[calendar <= cut]
     at = {s: i for i, s in enumerate(sessions)}
     found: set[str] = set()
-    for sym, dates in bars.loc[bars["date"] <= cut].groupby("symbol")["date"]:
+    # As the engine's has_bar: a row without a finite close is a session without a bar.
+    printed_bars = bars.loc[(bars["date"] <= cut) & np.isfinite(bars["close"].to_numpy(float))]
+    for sym, dates in printed_bars.groupby("symbol")["date"]:
         printed = np.array(sorted(at[x] for x in dates if x in at))
         if not len(printed):
             continue

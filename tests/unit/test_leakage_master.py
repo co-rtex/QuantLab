@@ -1,6 +1,7 @@
 """The look-ahead check gives the truncated run the instrument master as knowable at the
-cut (#247): a delisting dated after the kept session is not known yet, except for a name
-held and halted at the cut, whose delisting the engine's halt rule waits for.
+cut (#247): a delisting dated after the kept session is not known yet. The one exemption is
+a name the full run held through a halt the engine's rule acted on: it keeps only the fact
+that it delists later, not when or at what return.
 
 Synthetic data only. Before #247 both runs got the full master, so an engine path that
 acted on a delisting before it was public behaved the same in both and went unseen.
@@ -221,7 +222,8 @@ def test_held_is_split_adjusted():
     # 10 shares bought, a 2-for-1 split, 20 sold: nothing held, though the trade quantities
     # sum to -10. A halt afterwards is not a held halt.
     cal = pd.bdate_range("2024-01-02", periods=20)
-    bars = pd.DataFrame({"symbol": "A", "date": list(cal[:8]) + list(cal[15:])})
+    printed = list(cal[:8]) + list(cal[15:])
+    bars = pd.DataFrame({"symbol": "A", "date": printed, "close": 10.0})
     trades = pd.DataFrame(
         {"symbol": ["A", "A"], "date": [cal[1], cal[5]], "quantity": [10.0, -20.0]}
     )
@@ -233,3 +235,15 @@ def test_held_is_split_adjusted():
     assert validation._halted_while_held(kept, actions, bars, cal, cal[14], 5) == {"A"}
     # A run shorter than the rule's threshold is not a halt the rule acted on.
     assert validation._halted_while_held(kept, actions, bars, cal, cal[10], 5) == set()
+
+
+def test_a_bar_without_a_close_is_no_bar():
+    # The engine counts a session as printed only if its close is finite (has_bar). A row
+    # with a NaN close inside a halt must not reset the missing-bar run here either, or the
+    # exemption would miss a halt the rule acted on.
+    cal = pd.bdate_range("2024-01-02", periods=20)
+    bars = pd.DataFrame({"symbol": "A", "date": cal, "close": 10.0})
+    bars.loc[bars["date"].isin(cal[8:15]), "close"] = float("nan")
+    trades = pd.DataFrame({"symbol": ["A"], "date": [cal[1]], "quantity": [10.0]})
+    actions = pd.DataFrame(columns=["symbol", "ex_date", "kind", "value"])
+    assert validation._halted_while_held(trades, actions, bars, cal, cal[14], 5) == {"A"}
