@@ -324,7 +324,7 @@ export default function SettingsPage() {
                 Send this link to {link.email}. It is shown only once and works only for that address.
               </label>
               <div className="flex gap-2">
-                <input id="invite-link" readOnly value={link.url} className="field flex-1 font-mono text-xs" />
+                <input id="invite-link" readOnly value={link.url} className="field min-w-0 flex-1 font-mono text-xs" />
                 <button type="button" className="btn btn-quiet" onClick={() => navigator.clipboard?.writeText(link.url)}>
                   Copy
                 </button>
@@ -390,7 +390,7 @@ export default function SettingsPage() {
           {workspace && canEdit && (
             <Panel title="This workspace">
               <form onSubmit={rename} className="flex gap-2 text-sm" key={workspace.id}>
-                <label className="flex-1">
+                <label className="min-w-0 flex-1">
                   <span className="mb-1 block">Name</span>
                   <input name="name" required maxLength={120} defaultValue={workspace.name} className="field" />
                 </label>
@@ -421,7 +421,7 @@ export default function SettingsPage() {
           )}
           <Panel title="New workspace">
             <form onSubmit={createWorkspace} className="flex gap-2 text-sm">
-              <label className="flex-1">
+              <label className="min-w-0 flex-1">
                 <span className="sr-only">Workspace name</span>
                 <input name="name" required maxLength={120} placeholder="Workspace name" className="field" />
               </label>

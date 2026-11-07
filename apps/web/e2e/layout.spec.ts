@@ -30,6 +30,7 @@ async function overflow(page: Page): Promise<{ scroll: number; client: number; c
     if (!culprits.length) {
       for (const e of Array.from(document.querySelectorAll("main *"))) {
         if (e.scrollWidth <= e.clientWidth + 1 || scrolls(e) || e.querySelector("*:not(br)")) continue;
+        if (getComputedStyle(e).position === "absolute" && e.clientWidth <= 1) continue; // sr-only
         let p = e.parentElement;
         while (p && !scrolls(p)) p = p.parentElement;
         if (!p || p === document.documentElement) culprits.push(`text in ${e.tagName.toLowerCase()}: ${(e.textContent ?? "").slice(0, 40)}`);
