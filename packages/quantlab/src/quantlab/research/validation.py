@@ -18,6 +18,7 @@ import pandas as pd
 
 from quantlab.analytics.performance import compute_performance, simple_returns
 from quantlab.backtest.engine import BacktestConfig, BacktestError, run_backtest
+from quantlab.data.identity import master_as_of
 from quantlab.research.stats import per_period_sharpe
 from quantlab.strategies.library import create_strategy
 
@@ -407,6 +408,54 @@ def cost_sensitivity(
     }
 
 
+def _split_factor(splits: pd.DataFrame, day: pd.Timestamp) -> float:
+    """Shares per original share after the splits ex-dated on or before ``day``."""
+    return float(np.prod(splits.loc[splits["ex_date"] <= day, "value"]))
+
+
+def _halted_while_held(
+    trades: pd.DataFrame,
+    actions: pd.DataFrame,
+    bars: pd.DataFrame,
+    calendar: pd.DatetimeIndex,
+    cut: pd.Timestamp,
+    missing: int,
+) -> set[str]:
+    """Names whose missing-bar run reached ``missing`` sessions at or before ``cut`` while
+    the full run held them: those the engine's halt rule kept (#247). Uses bars and trades
+    dated up to ``cut`` only; a halt that ended counts too. A run reaching ``missing`` only
+    after the cut can't change a decision dated up to it, so the kept session doesn't
+    matter. Holdings are the full run's own trades, split-adjusted."""
+    if not len(trades):
+        return set()
+    sessions = calendar[calendar <= cut]
+    at = {s: i for i, s in enumerate(sessions)}
+    found: set[str] = set()
+    # As the engine's has_bar: a row without a finite close is a session without a bar.
+    printed_bars = bars.loc[(bars["date"] <= cut) & np.isfinite(bars["close"].to_numpy(float))]
+    for sym, dates in printed_bars.groupby("symbol")["date"]:
+        printed = np.array(sorted(at[x] for x in dates if x in at))
+        if not len(printed):
+            continue
+        # Sessions without a bar after each printed bar, the last run reaching the cut.
+        gaps = np.diff(np.append(printed, len(sessions))) - 1
+        halts = sessions[printed[gaps >= missing]]  # the last bar before each long run
+        if not len(halts):
+            continue
+        t = trades.loc[trades["symbol"] == sym, ["date", "quantity"]]
+        splits = actions.loc[(actions["symbol"] == sym) & (actions["kind"] == "split")]
+        for last_bar in halts:
+            before = t[t["date"] <= last_bar]
+            held = sum(
+                q * _split_factor(splits, last_bar) / _split_factor(splits, day)
+                for day, q in before.itertuples(index=False)
+            )
+            if abs(held) > 1e-9:
+                found.add(str(sym))
+                break
+    return found
+
+
 def leakage_check(
     bars: pd.DataFrame,
     actions: pd.DataFrame,
@@ -451,6 +500,17 @@ def leakage_check(
         return {"status": "unassessed", "reason": "no decision dates to test"}
     rng = np.random.default_rng(seed)
     picks = sorted(rng.choice(len(candidates), size=min(samples, len(candidates)), replace=False))
+    # The engine's session calendar: the dates of the universe's and benchmark's bars.
+    members = set(full.meta.get("universe") or bars["symbol"].unique())
+    if cfg.benchmark:
+        members.add(cfg.benchmark.upper())
+    calendar = pd.DatetimeIndex(sorted(bars.loc[bars["symbol"].isin(members), "date"].unique()))
+
+    def halted(cut: pd.Timestamp) -> set[str]:
+        return _halted_while_held(
+            full.trades, actions, bars, calendar, cut, cfg.delist_after_missing
+        )
+
     mismatches = []
     tested = []
     skipped = []
@@ -478,7 +538,16 @@ def leakage_check(
             create_strategy(strategy_key, params),
             cfg.model_copy(update=update),
             record_positions=False,
-            instruments=instruments,
+            # The master as knowable at the kept session (#247): a later delisting is not
+            # known yet, so an engine path that reads it ahead shows as a mismatch. One
+            # stated exemption: the engine holds a halted position until its master delisting
+            # (CRSP's convention: a halted stock can't be sold). A name the full run held
+            # through such a halt keeps only the fact that it delists later, not when or at
+            # what return. That rule decides no target; it only keeps an untradable position
+            # from a last-close sale nobody could make.
+            instruments=None
+            if instruments is None
+            else master_as_of(instruments, nxt, keep=halted(d)),
         )
         a = decisions[decisions["date"] <= d].reset_index(drop=True)
         b = trunc.weights_target[trunc.weights_target["date"] <= d].reset_index(drop=True)
