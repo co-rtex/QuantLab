@@ -106,10 +106,25 @@ def _run(
     return subprocess.CompletedProcess(proc.args, proc.returncode, out, ""), first, second
 
 
+def _row(jid: uuid.UUID) -> dict[str, object]:
+    with SessionLocal() as db:
+        job = db.get(Job, jid)
+        cols = ("status", "attempts", "message", "error", "worker_id", "attempt_started_at")
+        out = {c: getattr(job, c) for c in cols}
+        out |= {c: getattr(job, c) for c in ("heartbeat_at", "finished_at", "lease_expires_at")}
+        return {k: (v.value if hasattr(v, "value") else v) for k, v in out.items()}
+
+
 def test_a_busy_worker_outlasts_a_redis_outage_and_takes_the_next_job(seeded, tmp_path):
     done, first, second = _run("quantlab", tmp_path)
     assert done.returncode == 0, done.stdout[-3000:]
-    assert _status(first) == ("completed", 1)  # no attempt lost
+    # No attempt lost, checked once the worker has exited. Nothing may write job 1's state
+    # after that: a horse outliving its worker is the defect this test exists for (#185), so
+    # the check is not given time to settle. One loaded full-suite run saw job 1 still
+    # "running" here (#261, not reproduced since); on a mismatch, job 1's row and the
+    # worker's whole output say whether its horse died mid-job or its terminal write failed.
+    state = _status(first)
+    assert state == ("completed", 1), f"job 1 {_row(first)}\n{done.stdout[-12000:]}"
     assert _status(second) == ("completed", 1)  # the same worker went on
     assert "found an unhandled exception, quitting" not in done.stdout
     # The monitor's own heartbeat met the outage while the horse ran, and was the one

@@ -52,11 +52,24 @@ def _timed(call):  # type: ignore[no-untyped-def]
     return out, time.monotonic() - t
 
 
-def test_readiness_is_503_with_redis_in_error(client, silent) -> None:
+def test_readiness_is_503_with_redis_in_error(client, silent, monkeypatch) -> None:
+    import redis.connection
+
+    # One attempt, never a retry: every command the check sends to Redis, counted. It was
+    # a wall-clock bound (< 1 + T), which a loaded host broke at 2.3 s (#261).
+    sent: list[str] = []
+    real = redis.connection.AbstractConnection.send_command
+
+    def spy(self, *args, **kwargs):  # type: ignore[no-untyped-def]
+        sent.append(str(args[0]).upper())
+        return real(self, *args, **kwargs)
+
+    monkeypatch.setattr(redis.connection.AbstractConnection, "send_command", spy)
     r, elapsed = _timed(lambda: client.get("/api/v1/ready"))
     assert r.status_code == 503, r.text
     assert r.json()["checks"] == {"database": "ok", "redis": "error"}
-    assert elapsed < 1 + T, elapsed  # one call: a ping
+    assert sent and len(sent) == len(set(sent)), sent  # one attempt: nothing sent twice
+    assert elapsed < 10 + 10 * T, elapsed  # a hang guard only, far above any wait
 
 
 def test_the_rate_limiter_still_limits_counting_in_the_process(client, silent) -> None:
