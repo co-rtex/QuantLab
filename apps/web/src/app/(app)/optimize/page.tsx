@@ -32,9 +32,19 @@ interface Response {
   notes: string[];
 }
 /** A queued or finished optimization (#224): `result` once its job has completed. */
+/** The inputs a run was submitted with (the API's OptimizeIn, as stored). */
+interface RunParams {
+  symbols: string[];
+  as_of: string | null;
+  lookback: number;
+  max_weight: number;
+  covariance: string;
+}
+
 interface OptimizationRun {
   id: string;
   dataset_version_id: string;
+  params?: RunParams | null;
   status: Job["status"];
   result: Response | null;
   job: Job | null;
@@ -74,12 +84,15 @@ function Optimizer() {
   const ws = workspace?.id;
   const versions = useApi<DatasetVersion[]>(ws ? `/workspaces/${ws}/dataset-versions` : null);
   const [dv, setDv] = useState("");
-  const dvId = dv || versions.data?.[0]?.id || null;
+  const run = useApi<OptimizationRun>(runId ? `/optimizations/${runId}` : null, { poll: pollRun });
+  // The form shows the inputs of the run on screen (audit A25: it showed the defaults next
+  // to results computed from others), and its dataset until another one is chosen.
+  const shown = run.data?.params ?? undefined;
+  const dvId = dv || run.data?.dataset_version_id || versions.data?.[0]?.id || null;
   const version = versions.data?.find((v) => v.id === dvId);
   const inst = useInstruments(dvId);
   const assets = inst.data?.items.filter((i) => i.asset_class !== "index_fund") ?? [];
   const index = inst.data?.items.find((i) => i.asset_class === "index_fund")?.symbol;
-  const run = useApi<OptimizationRun>(runId ? `/optimizations/${runId}` : null, { poll: pollRun });
   const res = run.data?.status === "completed" ? (run.data.result ?? undefined) : undefined;
   const active = run.data?.status === "queued" || run.data?.status === "running";
   // An error belongs to the run it came from: none is carried to another ?run=.
@@ -138,7 +151,10 @@ function Optimizer() {
       <Panel title="Inputs">
         <QueryError q={versions} what="dataset versions" />
         <QueryError q={inst} what="instruments" />
-        <form onSubmit={submit} className="space-y-3 text-sm">
+        {/* Remounted per run, so its defaults are that run's inputs; polling keeps the id,
+            so it never resets what someone is typing. */}
+        <form key={shown ? `run-${run.data?.id}` : "new"} onSubmit={submit} className="space-y-3 text-sm">
+          {shown && <p className="text-xs text-ink-2">The inputs of the run shown. Change them and compare again for a new run.</p>}
           <label className="block">
             <span className="mb-1 block">Dataset version</span>
             <select className="field" value={dvId ?? ""} onChange={(e) => setDv(e.target.value)}>
@@ -152,24 +168,24 @@ function Optimizer() {
           </label>
           <label className="block">
             <span className="mb-1 block">Symbols</span>
-            <textarea name="symbols" rows={3} className="field" placeholder={`First 12: ${assets.slice(0, 12).map((a) => a.symbol).join(", ")}`} />
+            <textarea name="symbols" rows={3} className="field" defaultValue={shown?.symbols.join(", ")} placeholder={`First 12: ${assets.slice(0, 12).map((a) => a.symbol).join(", ")}`} />
           </label>
           <div className="grid grid-cols-2 gap-3">
             <label className="block">
               <span className="mb-1 block">As of</span>
-              <input name="as_of" type="date" min={version?.start_date} max={version?.end_date} className="field" />
+              <input name="as_of" type="date" min={version?.start_date} max={version?.end_date} defaultValue={shown?.as_of ?? ""} className="field" />
             </label>
             <label className="block">
               <span className="mb-1 block">Look-back (sessions)</span>
-              <input name="lookback" type="number" min={40} max={1260} defaultValue={252} className="field num" />
+              <input name="lookback" type="number" min={40} max={1260} defaultValue={shown?.lookback ?? 252} className="field num" />
             </label>
             <label className="block">
               <span className="mb-1 block">Max weight (%)</span>
-              <input name="max_weight" type="number" min={1} max={100} defaultValue={30} className="field num" />
+              <input name="max_weight" type="number" min={1} max={100} defaultValue={shown ? Math.round(shown.max_weight * 10000) / 100 : 30} className="field num" />
             </label>
             <label className="block">
               <span className="mb-1 block">Covariance</span>
-              <select name="covariance" className="field" defaultValue="ledoit_wolf">
+              <select name="covariance" className="field" defaultValue={shown?.covariance ?? "ledoit_wolf"}>
                 <option value="ledoit_wolf">Ledoit-Wolf shrinkage</option>
                 <option value="sample">Sample</option>
               </select>

@@ -46,12 +46,19 @@ test("a viewer reads an optimization but cannot run one", async ({ browser }: { 
 
   await viewer.goto(`/optimize?run=${run.id}`);
   await expect(viewer.getByRole("cell", { name: "Expected volatility" })).toBeVisible();
+  // The form shows this run's inputs, not the defaults beside its results (audit A25).
+  await expect(viewer.getByText("The inputs of the run shown")).toBeVisible();
+  await expect(viewer.getByLabel("Look-back (sessions)")).toHaveValue("120");
+  await expect(viewer.getByLabel("Symbols")).toHaveValue(body.symbols.join(", "));
+  await expect(viewer.getByLabel("Max weight (%)")).toHaveValue("40");
   await expect(viewer.getByRole("button", { name: "Compare allocations" })).toBeDisabled();
   await expect(viewer.getByText("Running one needs the editor role")).toBeVisible();
   expect((await viewer.request.post(`/api/v1/dataset-versions/${dv}/optimizations`, { data: body })).status()).toBe(403);
 
   await owner.goto("/optimize");
   await expect(owner.getByPlaceholder(/First 12: SYN001/)).toBeVisible();
+  await expect(owner.getByLabel("Look-back (sessions)")).toHaveValue("252"); // a new run: defaults
+  await expect(owner.getByText("The inputs of the run shown")).toHaveCount(0);
   await expect(owner.getByRole("button", { name: "Compare allocations" })).toBeEnabled();
   await expect(owner.getByText("Running one needs the editor role")).toHaveCount(0);
 });
