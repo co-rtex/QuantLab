@@ -19,9 +19,10 @@ uv run python scripts/demo_seed.py
 * a 100-asset synthetic dataset (2018–2023, seed 7);
 * three experiments: momentum, equal weight and minimum variance;
 * the validation suite on the momentum run, and a reproduction of it;
-* a portfolio with two purchases.
+* a portfolio with two purchases;
+* portfolio construction on all 100 symbols at the optimize API's defaults.
 
-It prints the pages to open. From a linked git worktree, pass
+A fresh run took 32 s on a one-worker stack on the development Mac. It prints the pages to open. From a linked git worktree, pass
 `--url http://localhost:<web port>` (from `make stack-env`). The script refuses any
 non-local URL.
 
@@ -66,7 +67,8 @@ Each stop shows one engineering idea. The line in **bold** is the point to make.
    * The picker shows each run's time and input hash: runs with the same hash are the
      same configuration.
    * **The page warns that the best of many variants is inflated by chance.**
-8. **Construction**: enter 100 symbols, max weight 40%, and compare allocations.
+8. **Construction**: open the `optimize?run=…` link the script printed. That is the seeded
+   run on all 100 symbols with a 40% cap.
    * Equal weight, minimum variance, mean-variance and risk parity on the same history.
    * **Mean-variance at these settings used to fail. The solver stopped at the optimum
      without recognizing it. A failed solve is now accepted only with an optimality

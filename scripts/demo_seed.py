@@ -10,7 +10,8 @@ It drives the public API through the web tier, as the browser does, and creates:
 * three experiments (cross-sectional momentum, equal weight, minimum variance), from
   2019-01-02 against the synthetic index;
 * the validation suite on the momentum experiment, and one reproduction of it;
-* a portfolio with two recorded purchases.
+* a portfolio with two recorded purchases;
+* portfolio construction on all 100 symbols at the optimize API's defaults.
 
 Then it prints where to look. A second run against the same account adds new experiments
 and reuses the dataset. Only http://localhost and 127.0.0.1 URLs are accepted: the stack
@@ -151,12 +152,27 @@ def main() -> None:
         )
     print("portfolio: 2 purchases recorded")
 
+    # Portfolio construction at the optimize API's defaults with all 100 symbols: the case
+    # mean-variance failed on before engine 1.8.0 (#253).
+    run = api.call(
+        "POST",
+        f"/dataset-versions/{dv}/optimizations",
+        json={
+            "symbols": [f"SYN{i:03d}" for i in range(1, 101)],
+            "max_weight": 0.4,
+            "benchmark": "SYNIDX",
+        },
+    )
+    opt = api.wait(f"/optimizations/{run['id']}", "portfolio construction")
+    methods = {r["method"]: "error" not in r for r in (opt.get("result") or {}).get("results", [])}
+    print(f"construction on 100 symbols: {', '.join(m for m, ok in methods.items() if ok)} solved")
+
     web = a.url.rstrip("/")
     print("\nOpen, signed in as the account above:")
     print(f"  {web}/experiments/{mom}      results, validation and the integrity report")
     print(f"  {web}/compare                select the three experiments")
     print(f"  {web}/portfolios/{pf['id']}")
-    print(f"  {web}/optimize               portfolio construction")
+    print(f"  {web}/optimize?run={run['id']}  construction, 100 symbols")
     print("All of it is synthetic data: it shows how the platform works, not a real result.")
 
 
