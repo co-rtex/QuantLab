@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useState } from "react";
 import { PageHeader } from "@/components/Shell";
-import { Panel, QueryError, Skeleton, StatusPill, SyntheticLabel } from "@/components/ui";
+import { Panel, QueryError, Skeleton, StatusPill, SyntheticLabel, TableScroll } from "@/components/ui";
 import type { Experiment, Page } from "@/lib/api";
 import { dateTime, multiple, num, pct, signClass, strategyLabel } from "@/lib/format";
 import { useSynthetic } from "@/lib/synthetic";
@@ -64,7 +64,7 @@ export default function ExperimentsPage() {
           <p className="py-6 text-sm text-ink-2">No experiments match. Adjust the filters or create a new experiment.</p>
         ) : (
           <>
-            <div className="overflow-x-auto" tabIndex={0}>
+            <TableScroll>
               <table className="data num">
                 <thead>
                   <tr>
@@ -105,7 +105,7 @@ export default function ExperimentsPage() {
                   ))}
                 </tbody>
               </table>
-            </div>
+            </TableScroll>
             {exps.data && exps.data.total > PAGE && (
               <div className="mt-4 flex items-center justify-between text-sm">
                 <span className="text-ink-2">

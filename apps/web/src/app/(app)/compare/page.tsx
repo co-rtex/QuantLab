@@ -4,7 +4,7 @@ import Link from "next/link";
 import { useState } from "react";
 import { CompareChart, SERIES } from "@/components/charts";
 import { PageHeader } from "@/components/Shell";
-import { ErrorNote, Panel, QueryError, Skeleton, SyntheticLabel } from "@/components/ui";
+import { ErrorNote, Panel, QueryError, Skeleton, SyntheticLabel, TableScroll } from "@/components/ui";
 import { api, ApiError, type Experiment, type Metrics, type Page, type Series } from "@/lib/api";
 import { num, pct, signClass, strategyLabel } from "@/lib/format";
 import { combined, useSynthetic } from "@/lib/synthetic";
@@ -110,7 +110,7 @@ export default function ComparePage() {
                 <CompareChart series={result.map((r) => ({ name: r.name, dates: r.series.dates, values: r.series.normalized as (number | null)[] }))} />
               </Panel>
               <Panel title="Statistics">
-                <div className="overflow-x-auto" tabIndex={0}>
+                <TableScroll>
                   <table className="data num">
                     <thead>
                       <tr>
@@ -141,7 +141,7 @@ export default function ComparePage() {
                       ))}
                     </tbody>
                   </table>
-                </div>
+                </TableScroll>
                 <p className="mt-3 text-xs text-ink-3">
                   Comparing many variants on the same data inflates the best result by chance. Treat the top row as a hypothesis to validate out of sample.
                 </p>

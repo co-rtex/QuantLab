@@ -5,7 +5,7 @@ import { useParams } from "next/navigation";
 import { useState, type FormEvent } from "react";
 import { EquityChart } from "@/components/charts";
 import { PageHeader } from "@/components/Shell";
-import { BusyNote, ErrorNote, Panel, QueryError, Skeleton, SyntheticLabel, syntheticStatus } from "@/components/ui";
+import { BusyNote, ErrorNote, Panel, QueryError, Skeleton, SyntheticLabel, syntheticStatus, TableScroll } from "@/components/ui";
 import { api, ApiError } from "@/lib/api";
 import { money, num, pct, signClass } from "@/lib/format";
 import { useApi } from "@/lib/useApi";
@@ -171,26 +171,28 @@ export default function PortfolioPage() {
             {val.holdings.length === 0 ? (
               <p className="text-sm text-ink-2">All cash.</p>
             ) : (
-              <table className="data num">
-                <thead>
-                  <tr>
-                    <th>Symbol</th>
-                    <th className="r">Shares</th>
-                    <th className="r">Value</th>
-                    <th className="r">Weight</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {val.holdings.map((h) => (
-                    <tr key={h.symbol}>
-                      <td className="font-medium">{h.symbol}</td>
-                      <td className="r">{num(h.quantity, 2)}</td>
-                      <td className="r">{money(h.value)}</td>
-                      <td className="r">{pct(h.weight, 1)}</td>
+              <TableScroll>
+                <table className="data num">
+                  <thead>
+                    <tr>
+                      <th>Symbol</th>
+                      <th className="r">Shares</th>
+                      <th className="r">Value</th>
+                      <th className="r">Weight</th>
                     </tr>
-                  ))}
-                </tbody>
-              </table>
+                  </thead>
+                  <tbody>
+                    {val.holdings.map((h) => (
+                      <tr key={h.symbol}>
+                        <td className="font-medium">{h.symbol}</td>
+                        <td className="r">{num(h.quantity, 2)}</td>
+                        <td className="r">{money(h.value)}</td>
+                        <td className="r">{pct(h.weight, 1)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </TableScroll>
             )}
           </Panel>
           <Panel title="Risk">
@@ -211,24 +213,26 @@ export default function PortfolioPage() {
               ))}
             </dl>
             {val.risk.contributions && (
-              <table className="data num mt-4">
-                <thead>
-                  <tr>
-                    <th>Symbol</th>
-                    <th className="r">Weight</th>
-                    <th className="r">Share of risk</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {val.risk.contributions.map((c) => (
-                    <tr key={c.symbol}>
-                      <td>{c.symbol}</td>
-                      <td className="r">{pct(c.weight, 1)}</td>
-                      <td className="r">{pct(c.pct, 1)}</td>
+              <TableScroll className="mt-4">
+                <table className="data num">
+                  <thead>
+                    <tr>
+                      <th>Symbol</th>
+                      <th className="r">Weight</th>
+                      <th className="r">Share of risk</th>
                     </tr>
-                  ))}
-                </tbody>
-              </table>
+                  </thead>
+                  <tbody>
+                    {val.risk.contributions.map((c) => (
+                      <tr key={c.symbol}>
+                        <td>{c.symbol}</td>
+                        <td className="r">{pct(c.weight, 1)}</td>
+                        <td className="r">{pct(c.pct, 1)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </TableScroll>
             )}
           </Panel>
           <Panel title="Scenarios">
@@ -255,34 +259,36 @@ export default function PortfolioPage() {
         </div>
       )}
       <Panel title="Ledger" className="mt-6">
-        <table className="data num">
-          <thead>
-            <tr>
-              <th>#</th>
-              <th>Session</th>
-              <th>Type</th>
-              <th>Symbol</th>
-              <th className="r">Shares</th>
-              <th className="r">Price</th>
-              <th className="r">Commission</th>
-              <th className="r">Amount</th>
-            </tr>
-          </thead>
-          <tbody>
-            {p.data?.transactions.map((t) => (
-              <tr key={t.seq}>
-                <td>{t.seq}</td>
-                <td>{t.trade_date}</td>
-                <td>{t.kind}</td>
-                <td>{t.symbol ?? ""}</td>
-                <td className="r">{t.quantity ? num(t.quantity, 2) : ""}</td>
-                <td className="r">{t.price ? num(t.price) : ""}</td>
-                <td className="r">{t.commission ? money(t.commission, 2) : ""}</td>
-                <td className="r">{t.amount ? money(t.amount) : ""}</td>
+        <TableScroll>
+          <table className="data num">
+            <thead>
+              <tr>
+                <th>#</th>
+                <th>Session</th>
+                <th>Type</th>
+                <th>Symbol</th>
+                <th className="r">Shares</th>
+                <th className="r">Price</th>
+                <th className="r">Commission</th>
+                <th className="r">Amount</th>
               </tr>
-            ))}
-          </tbody>
-        </table>
+            </thead>
+            <tbody>
+              {p.data?.transactions.map((t) => (
+                <tr key={t.seq}>
+                  <td>{t.seq}</td>
+                  <td>{t.trade_date}</td>
+                  <td>{t.kind}</td>
+                  <td>{t.symbol ?? ""}</td>
+                  <td className="r">{t.quantity ? num(t.quantity, 2) : ""}</td>
+                  <td className="r">{t.price ? num(t.price) : ""}</td>
+                  <td className="r">{t.commission ? money(t.commission, 2) : ""}</td>
+                  <td className="r">{t.amount ? money(t.amount) : ""}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </TableScroll>
       </Panel>
     </>
   );

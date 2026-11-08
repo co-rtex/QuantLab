@@ -5,7 +5,7 @@ import { useParams } from "next/navigation";
 import { useState } from "react";
 import { PriceChart } from "@/components/charts";
 import { PageHeader } from "@/components/Shell";
-import { Panel, Pending, QueryError, Skeleton, StatusPill, SyntheticTag } from "@/components/ui";
+import { Panel, Pending, QueryError, Skeleton, StatusPill, SyntheticTag, TableScroll } from "@/components/ui";
 import type { DatasetVersion, Instrument, Page } from "@/lib/api";
 import { compact, pct } from "@/lib/format";
 import { useApi } from "@/lib/useApi";
@@ -127,7 +127,7 @@ export default function VersionPage() {
       </div>
 
       <Panel title="Quality checks" className="mt-6">
-        <div className="overflow-x-auto" tabIndex={0}>
+        <TableScroll>
           <table className="data">
             <thead>
               <tr>
@@ -150,7 +150,7 @@ export default function VersionPage() {
               ))}
             </tbody>
           </table>
-        </div>
+        </TableScroll>
         {d.quality?.per_symbol_worst && d.quality.per_symbol_worst.some((p) => p.coverage < 1) && (
           <div className="mt-4">
             <h3 className="mb-2 text-sm font-medium">Lowest session coverage</h3>

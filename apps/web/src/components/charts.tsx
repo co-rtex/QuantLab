@@ -13,6 +13,7 @@ import {
   YAxis,
 } from "recharts";
 import { compact, money, num, pct } from "@/lib/format";
+import { TableScroll } from "./ui";
 
 // Categorical order validated for CVD separation (see docs/FRONTEND.md). Fixed order:
 // an experiment keeps its slot for the life of a comparison.
@@ -209,7 +210,7 @@ export function MonthlyReturns({ data }: { data: { year: number; month: number; 
     return rs.length ? rs.reduce((acc, r) => acc * (1 + r), 1) - 1 : null;
   };
   return (
-    <div className="overflow-x-auto" tabIndex={0}>
+    <TableScroll>
       <table className="data num" aria-label="Monthly returns">
         <thead>
           <tr>
@@ -243,6 +244,6 @@ export function MonthlyReturns({ data }: { data: { year: number; month: number; 
           ))}
         </tbody>
       </table>
-    </div>
+    </TableScroll>
   );
 }

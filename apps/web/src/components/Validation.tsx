@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import { Legend, SERIES } from "@/components/charts";
-import { ErrorNote, JobProgress, Panel, Pending, QueryError, StatusPill } from "@/components/ui";
+import { ErrorNote, JobProgress, Panel, Pending, QueryError, StatusPill, TableScroll } from "@/components/ui";
 import { api, ApiError, cancelJob, newIdempotencyKey, type Job } from "@/lib/api";
 import { num, pct, signClass } from "@/lib/format";
 import { useApi } from "@/lib/useApi";
@@ -193,7 +193,7 @@ export function ValidationPanel({ experimentId, onComplete }: { experimentId: st
                   <span className="num font-medium text-ink">{num(r.walk_forward.mean_oos_sharpe)}</span>.
                 </p>
                 <div className="grid gap-6 xl:grid-cols-2">
-                  <div className="overflow-x-auto" tabIndex={0}>
+                  <TableScroll>
                     <table className="data num">
                       <thead>
                         <tr>
@@ -226,7 +226,7 @@ export function ValidationPanel({ experimentId, onComplete }: { experimentId: st
                         ))}
                       </tbody>
                     </table>
-                  </div>
+                  </TableScroll>
                   <OosChart dates={r.walk_forward.oos_equity.dates} equity={r.walk_forward.oos_equity.equity} />
                 </div>
               </>
@@ -266,26 +266,28 @@ export function ValidationPanel({ experimentId, onComplete }: { experimentId: st
             </section>
             <section>
               <h3 className="mb-2 text-sm font-semibold">Trading-cost sweep</h3>
-              <table className="data num">
-                <thead>
-                  <tr>
-                    <th>Costs</th>
-                    <th className="r">Round trip</th>
-                    <th className="r">CAGR</th>
-                    <th className="r">vs benchmark</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {r.cost.rows.map((c) => (
-                    <tr key={c.multiplier}>
-                      <td>{c.multiplier}×</td>
-                      <td className="r">{num(c.round_trip_bps, 0)} bps</td>
-                      <td className={`r ${signClass(c.cagr)}`}>{pct(c.cagr, 2)}</td>
-                      <td className={`r ${signClass(c.excess_total_return)}`}>{pct(c.excess_total_return, 1)}</td>
+              <TableScroll>
+                <table className="data num">
+                  <thead>
+                    <tr>
+                      <th>Costs</th>
+                      <th className="r">Round trip</th>
+                      <th className="r">CAGR</th>
+                      <th className="r">vs benchmark</th>
                     </tr>
-                  ))}
-                </tbody>
-              </table>
+                  </thead>
+                  <tbody>
+                    {r.cost.rows.map((c) => (
+                      <tr key={c.multiplier}>
+                        <td>{c.multiplier}×</td>
+                        <td className="r">{num(c.round_trip_bps, 0)} bps</td>
+                        <td className={`r ${signClass(c.cagr)}`}>{pct(c.cagr, 2)}</td>
+                        <td className={`r ${signClass(c.excess_total_return)}`}>{pct(c.excess_total_return, 1)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </TableScroll>
               <p className="mt-2 text-xs text-ink-3">
                 {r.cost.breakeven_multiplier !== null
                   ? `The edge over the benchmark disappears at about ${num(r.cost.breakeven_multiplier, 1)}× the assumed costs.`
@@ -325,7 +327,7 @@ export function ValidationPanel({ experimentId, onComplete }: { experimentId: st
           {r.regimes.length > 0 && (
             <section>
               <h3 className="mb-2 text-sm font-semibold">Performance by market regime</h3>
-              <div className="overflow-x-auto" tabIndex={0}>
+              <TableScroll>
                 <table className="data num">
                   <thead>
                     <tr>
@@ -350,7 +352,7 @@ export function ValidationPanel({ experimentId, onComplete }: { experimentId: st
                     ))}
                   </tbody>
                 </table>
-              </div>
+              </TableScroll>
               <p className="mt-2 text-xs text-ink-3">Regimes are classified from the benchmark&apos;s trailing 63-session volatility and 126-session return, using only data available before each day. The low/mid/high volatility cut-offs are terciles of the whole period, so this table is an after-the-fact breakdown, not a signal a strategy could have used.</p>
             </section>
           )}

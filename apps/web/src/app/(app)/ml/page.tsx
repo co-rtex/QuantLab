@@ -2,7 +2,7 @@
 
 import { useState, type FormEvent } from "react";
 import { PageHeader } from "@/components/Shell";
-import { ErrorNote, JobProgress, Panel, Pending, QueryError, StatusPill, SyntheticLabel } from "@/components/ui";
+import { ErrorNote, JobProgress, Panel, Pending, QueryError, StatusPill, SyntheticLabel, TableScroll } from "@/components/ui";
 import { api, ApiError, cancelJob, newIdempotencyKey, type DatasetVersion, type Job } from "@/lib/api";
 import { dateTime, num, pct, shortHash } from "@/lib/format";
 import { useSynthetic } from "@/lib/synthetic";
@@ -160,7 +160,7 @@ function RunDetail({ id }: { id: string }) {
         {pct(res.panel.positive_rate, 1)}), hash <span className="num">{shortHash(res.panel.hash, 12)}</span>.
       </p>
       <PanelInputs res={res} />
-      <div className="overflow-x-auto" tabIndex={0}>
+      <TableScroll>
         <table className="data num">
           <thead>
             <tr>
@@ -189,30 +189,32 @@ function RunDetail({ id }: { id: string }) {
             ))}
           </tbody>
         </table>
-      </div>
+      </TableScroll>
       <div className="grid gap-6 lg:grid-cols-2">
         <section>
           <h3 className="mb-2 text-sm font-semibold">Chronological folds (purged, embargoed)</h3>
-          <table className="data num">
-            <thead>
-              <tr>
-                <th>Fold</th>
-                <th className="r">Training dates</th>
-                <th>Test window</th>
-              </tr>
-            </thead>
-            <tbody>
-              {res.splits.map((f) => (
-                <tr key={f.fold}>
-                  <td>{f.fold}</td>
-                  <td className="r">{f.train_dates}</td>
-                  <td>
-                    {f.test_start} to {f.test_end}
-                  </td>
+          <TableScroll>
+            <table className="data num">
+              <thead>
+                <tr>
+                  <th>Fold</th>
+                  <th className="r">Training dates</th>
+                  <th>Test window</th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
+              </thead>
+              <tbody>
+                {res.splits.map((f) => (
+                  <tr key={f.fold}>
+                    <td>{f.fold}</td>
+                    <td className="r">{f.train_dates}</td>
+                    <td>
+                      {f.test_start} to {f.test_end}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </TableScroll>
         </section>
         <section>
           <h3 className="mb-2 text-sm font-semibold">Feature importance ({res.feature_importance.random_forest ? "random forest" : "logistic"})</h3>
