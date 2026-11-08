@@ -6,6 +6,19 @@ ownership and current leases. A restarted lead recovers from: this file, `STATUS
 the worker launch briefs in `docs/agents/`, open issues/PRs (`gh issue list`,
 `gh pr list`) and `git worktree list`.
 
+## Single-session mode (from 2026-11-07)
+The user retired the three-agent setup. One interactive session now holds every role below,
+and launches no other autonomous session.
+* **Leases:** every lease and ownership entry below is reclaimed. Before that, each worktree
+  was checked: no uncommitted or unpushed work, and every branch is still on the remote.
+* **Kept as written:** the rules on full-stack runs, the lock, slots, migrations and Docker
+  volumes still apply.
+* **Reviews:** a PR's review is the same session's, so the PR says so. Its evidence is tests
+  written first, mutation runs, A/B records and references that share no code with the
+  code under test.
+
+The sections below record how the multi-agent setup worked (2026-10-30 to 2026-11-01).
+
 ## Roles
 
 | Role | Owns | Does not |
