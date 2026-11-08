@@ -6,6 +6,15 @@ import { useState, type FormEvent } from "react";
 import { api, ApiError } from "@/lib/api";
 import { safeNext } from "@/lib/safeRedirect";
 
+/** A validator's message as an instruction (audit A1): the email validator's own wording
+ * ("value is not a valid email address: The part after the @-sign is …") keeps its reason
+ * after a plain request. */
+function fieldMessage(msg: string): string {
+  const m = /^value is not a valid email address:\s*([\s\S]*)$/.exec(msg);
+  if (m) return `Enter a valid email address. ${m[1]}`.trim();
+  return msg.replace("Value error, ", "");
+}
+
 export function AuthForm({ mode }: { mode: "login" | "register" }) {
   const router = useRouter();
   const params = useSearchParams();
@@ -28,7 +37,7 @@ export function AuthForm({ mode }: { mode: "login" | "register" }) {
       router.push(safeNext(params.get("next"), window.location.origin));
     } catch (err) {
       if (err instanceof ApiError && Array.isArray(err.details)) {
-        setError((err.details as { msg: string }[]).map((d) => d.msg.replace("Value error, ", "")).join(". "));
+        setError((err.details as { msg: string }[]).map((d) => fieldMessage(d.msg)).join(". "));
       } else {
         setError(err instanceof Error ? err.message : "Something went wrong");
       }

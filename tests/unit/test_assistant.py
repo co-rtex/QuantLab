@@ -167,11 +167,14 @@ def test_a_figure_that_rounds_to_zero_keeps_a_consistent_sign(value, text, groun
 
 
 def test_the_assembled_answer_on_a_near_zero_sharpe_verifies():
-    """#238: the deterministic answer rendered -0.0041 as "-0.00", then failed its own check."""
+    """#238: the deterministic answer rendered -0.0041 as "-0.00", then failed its own check.
+    Since audit A10 it renders "0.00" (no negative zero from rounding), and must still verify;
+    an answer that writes "-0.00" itself (a hosted model's) is still accepted too."""
     f = [Fact("F1", "sharpe", "Sharpe ratio", -0.0041, "ratio", "s")]
     ans = answer_question("What was the Sharpe ratio?", f, synthetic=False)
-    assert "-0.00" in ans.text
+    assert "Sharpe ratio: 0.00 [F1]" in ans.text and "-0.00" not in ans.text
     assert ans.verification["grounded"] is True and ans.verification["unsupported"] == []
+    assert verify_answer("The Sharpe ratio was -0.00 [F1].", f)["grounded"]
 
 
 def test_verifier_binds_numbers_to_cited_facts_and_their_sign():

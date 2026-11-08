@@ -103,6 +103,7 @@ export default function Overview() {
           </Panel>
           <Panel title="Dataset versions" aside={<Link className="text-cobalt hover:underline" href="/data">Manage</Link>}>
             <QueryError q={versions} what="dataset versions" />
+            {versions.data?.length === 0 && <p className="text-sm text-ink-2">No dataset versions yet.</p>}
             <ul className="space-y-2 text-sm">
               {versions.data?.slice(0, 5).map((v) => (
                 <li key={v.id} className="flex items-center justify-between gap-2">

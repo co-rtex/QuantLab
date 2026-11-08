@@ -248,6 +248,10 @@ export default function MLPage() {
   const runs = useApi<MLRun[]>(ws ? `/workspaces/${ws}/ml-runs?n=${nonce}` : null, { poll: 4000 });
   const synthetic = useSynthetic(runs.data);
   const [selected, setSelected] = useState<string | null>(null);
+  // A run just submitted can be selected before the polled list has it: its detail shows by
+  // id, and its label once the list has it.
+  const shownId = selected ?? runs.data?.[0]?.id;
+  const shownRun = runs.data?.find((r) => r.id === shownId);
   const [err, setErr] = useState<ApiError>();
   const [busy, setBusy] = useState(false);
 
@@ -346,11 +350,9 @@ export default function MLPage() {
             </ul>
           </Panel>
         </div>
-        <Panel
-          title="Results"
-          aside={<SyntheticLabel status={synthetic(runs.data?.find((r) => r.id === (selected ?? runs.data?.[0]?.id)))} />}
-        >
-          {selected ?? runs.data?.[0]?.id ? <RunDetail id={(selected ?? runs.data?.[0]?.id) as string} /> : <p className="text-sm text-ink-2">Train a model to see out-of-sample results here.</p>}
+        {/* The label describes the run shown; with none there is nothing to label (A19). */}
+        <Panel title="Results" aside={shownRun ? <SyntheticLabel status={synthetic(shownRun)} /> : undefined}>
+          {shownId ? <RunDetail id={shownId} /> : <p className="text-sm text-ink-2">Train a model to see out-of-sample results here.</p>}
         </Panel>
       </div>
     </>
