@@ -209,10 +209,17 @@ def test_a_validation_from_before_155_is_not_reused_and_can_be_reassessed(client
     assert {c["key"]: c for c in rep["checks"]}["validation_engine"]["status"] == "verified"
 
 
-def test_trials_count_distinct_configurations_and_unknown_code_is_not_the_same(client, seeded):
+def test_trials_count_distinct_configurations_and_unknown_code_is_not_the_same(
+    client, seeded, monkeypatch
+):
     # A20: a reproduction (same input hash) and a failed run are not further trials; a
     # second configuration is. A21: two runs whose code version is "unknown" are not
-    # reported as the same code.
+    # reported as the same code. The version is set here, not taken from the environment:
+    # with QUANTLAB_GIT_SHA exported (scripts/stack-env.sh does), both runs recorded the
+    # same commit and the check saw True.
+    from quantlab_api.config import get_settings
+
+    monkeypatch.setattr(get_settings(), "git_sha", "unknown")
     h = seeded["headers"]
     exp_id = _completed_experiment(client, seeded)
     rep = client.post(f"/api/v1/experiments/{exp_id}/reproduce", headers=h)
@@ -232,4 +239,4 @@ def test_trials_count_distinct_configurations_and_unknown_code_is_not_the_same(c
     repro = client.get(f"/api/v1/experiments/{exp_id}/reproducibility", headers=h).json()
     (cmp,) = repro["comparisons"]
     assert cmp["fingerprint_match"] is True
-    assert cmp["same_code_version"] is None  # both "unknown" in tests: not comparable
+    assert cmp["same_code_version"] is None  # both "unknown": not comparable
