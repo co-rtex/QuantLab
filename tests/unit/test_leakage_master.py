@@ -266,3 +266,82 @@ def test_the_kept_session_comes_from_the_universe_calendar_not_the_input(monkeyp
     # session.
     nxt = {s: sessions[i + 1] for i, s in enumerate(sessions[:-1])}
     assert any(nxt[pd.Timestamp(d)] in skipped for d in res["dates_tested"]), res
+
+
+def _reference_halted_while_held(trades, actions, bars, calendar, cut, missing):  # type: ignore[no-untyped-def]
+    """The implementation before vectorization (#259 at 481fbcc), kept verbatim as the
+    reference: a product over the splits for every trade, summed in trade order."""
+    import numpy as np
+
+    def split_factor(splits, day):  # type: ignore[no-untyped-def]
+        return float(np.prod(splits.loc[splits["ex_date"] <= day, "value"]))
+
+    if not len(trades):
+        return set()
+    sessions = calendar[calendar <= cut]
+    at = {s: i for i, s in enumerate(sessions)}
+    found: set[str] = set()
+    printed_bars = bars.loc[(bars["date"] <= cut) & np.isfinite(bars["close"].to_numpy(float))]
+    for sym, dates in printed_bars.groupby("symbol")["date"]:
+        printed = np.array(sorted(at[x] for x in dates if x in at))
+        if not len(printed):
+            continue
+        gaps = np.diff(np.append(printed, len(sessions))) - 1
+        halts = sessions[printed[gaps >= missing]]
+        if not len(halts):
+            continue
+        t = trades.loc[trades["symbol"] == sym, ["date", "quantity"]]
+        splits = actions.loc[(actions["symbol"] == sym) & (actions["kind"] == "split")]
+        for last_bar in halts:
+            before = t[t["date"] <= last_bar]
+            held = sum(
+                q * split_factor(splits, last_bar) / split_factor(splits, day)
+                for day, q in before.itertuples(index=False)
+            )
+            if abs(held) > 1e-9:
+                found.add(str(sym))
+                break
+    return found
+
+
+def test_the_vectorized_halt_scan_matches_the_per_trade_reference():
+    # Randomized markets: halts of 0 to 9 sessions, NaN closes, splits (including inexact
+    # ratios) on and off the bars, buys and sells that sometimes close a position out.
+    import numpy as np
+
+    nonempty = 0
+    for seed in range(300):
+        rng = np.random.default_rng(seed)
+        cal = pd.bdate_range("2021-01-04", periods=80)
+        names = [f"S{i}" for i in range(6)]
+        rows, trades, acts = [], [], []
+        for s in names:
+            keep = np.ones(len(cal), dtype=bool)
+            for _ in range(rng.integers(0, 4)):
+                start = int(rng.integers(5, 75))
+                keep[start : start + int(rng.integers(1, 10))] = False
+            for d in cal[keep]:
+                close = float("nan") if rng.random() < 0.03 else 10.0
+                rows.append((s, d, close))
+            printed = cal[keep]
+            pos = 0
+            for d in sorted(rng.choice(printed, size=int(rng.integers(0, 6)), replace=False)):
+                q = float(rng.integers(1, 50)) if pos <= 0 or rng.random() < 0.5 else -pos
+                pos += q
+                trades.append((s, pd.Timestamp(d), q))
+            for d in rng.choice(cal, size=int(rng.integers(0, 3)), replace=False):
+                acts.append(
+                    (s, pd.Timestamp(d), "split", float(rng.choice([2.0, 3.0, 0.5, 0.1, 1.5])))
+                )
+        bars = pd.DataFrame(rows, columns=["symbol", "date", "close"])
+        tr = pd.DataFrame(trades, columns=["symbol", "date", "quantity"]).sort_values(
+            "date", kind="stable"
+        )
+        ac = pd.DataFrame(acts, columns=["symbol", "ex_date", "kind", "value"])
+        cut = cal[int(rng.integers(20, 80))]
+        missing = int(rng.choice([3, 5]))
+        args = (tr, ac, bars, cal, cut, missing)
+        expected = _reference_halted_while_held(*args)
+        assert validation._halted_while_held(*args) == expected, seed
+        nonempty += bool(expected)
+    assert nonempty >= 30, nonempty  # the comparison is not vacuous
