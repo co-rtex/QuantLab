@@ -1,117 +1,138 @@
 # QuantLab
 
-QuantLab is a reproducible quantitative research platform. You can ingest and version
-historical market data, define strategies, run event-driven backtests as background jobs,
-measure performance and risk, and reproduce any experiment exactly from its manifest.
+QuantLab is a self-hosted platform for **reproducible quantitative research on equities**.
+You version historical market data, define a strategy, run an event-driven backtest as a
+background job, and get its performance, risk, statistical validation and an integrity
+report. Every result can be reproduced exactly from its manifest.
 
 It is research infrastructure, not a trading bot. Results describe the past under stated
-assumptions and are never investment advice.
+assumptions and are never investment advice. **All bundled data is synthetic**, and is
+labelled synthetic on every screen, report and API response. A backtest on it shows how
+the platform behaves, not that any strategy is profitable.
 
-## What works today
+## The problem it addresses
+
+A backtest is easy to write and easy to get wrong. The common failures are quiet:
+* **Look-ahead.** A signal uses a price, a split or a delisting before it was public.
+* **Survivorship.** The universe holds only stocks that still exist today.
+* **Fills that couldn't happen.** At a decision-day close, through a trading halt, or on a
+  zero-volume bar.
+* **Statistics that hide their uncertainty.** Undefined ratios printed as 0. The best of
+  many variants reported as if it were the only one.
+* **Results nobody can regenerate.** The data, parameters or code changed silently.
+
+QuantLab treats each of these as an engineering requirement with a test, rather than a
+convention.
+
+## What it does
 
 | Area | Capability |
 |---|---|
-| Market data | NYSE trading calendar, raw OHLCV with availability timestamps, splits and dividends, point-in-time total-return adjustment, 23 quality checks (blocking gates and warnings), content-addressed immutable Parquet versions, DuckDB retrieval with Redis caching, resumable throttled ingestion with backoff |
-| Accounting | Transaction ledger with replay audit, value conservation, corporate actions, rejection of impossible trades |
-| Backtesting | Daily event-driven engine with next-session fills, slippage, commissions, partial fills, rejections, delisting liquidation and deterministic fingerprints. Nine strategies: buy and hold, equal weight, SMA crossover, momentum, mean reversion, low volatility, minimum variance, risk parity, volatility target |
-| Analytics | Return, risk-adjusted, benchmark-relative and drawdown statistics with explicit undefined handling. Historical, Gaussian and Cornish-Fisher VaR/ES, risk contributions, stress scenarios, bootstrap Monte Carlo, FIFO trade statistics, cost attribution |
-| Reproducibility | Input hash, engine version, code version, dataset hash and output fingerprint for every experiment; one-click reproduction with automatic fingerprint comparison; downloadable manifest |
-| Platform | FastAPI with OpenAPI docs, Argon2id auth, JWT plus httpOnly cookie sessions, workspace roles, audit log, durable Postgres-backed jobs (leases, fencing, retries, cancellation, timeouts, reaper), Prometheus metrics, structured logs with request correlation |
-| Frontend | Next.js research workspace: market-data explorer, quality report, strategy builder, live job progress, results explorer (equity and drawdown, benchmark table, tail risk, attribution, monthly returns, trade blotter, holdings by date), comparison, workspace administration |
-| Validation | Walk-forward with in-sample parameter selection, parameter and cost sweeps, bootstrap confidence intervals, deflated Sharpe, regime breakdown, engine-level look-ahead check, and a Research Integrity Report |
-| ML research | Point-in-time features, purged and embargoed chronological CV, baselines against logistic regression, random forest and gradient boosting |
-| Assistant and reports | Evidence-grounded assistant with verified citations and a deterministic fallback ([eval](docs/AI_EVAL.md)); HTML and Markdown report export |
-
-See the [case study](docs/CASE_STUDY.md) for the whole workflow on one research question,
-[benchmarks](docs/BENCHMARKS.md) for measured performance, [ROADMAP.md](ROADMAP.md) for what
-remains, and [STATUS.md](STATUS.md) for the current state.
+| Market data | NYSE trading calendar, raw OHLCV with availability timestamps, splits and dividends, point-in-time total-return adjustment, 23 quality checks, content-addressed immutable Parquet versions, permanent instrument identity across ticker changes, DuckDB retrieval with Redis caching |
+| Backtesting | Daily event-driven engine: next-session fills, slippage, commissions, partial fills, no fills on zero-volume bars, point-in-time delistings, deterministic output fingerprints. Nine strategies, from buy-and-hold to minimum variance and risk parity |
+| Accounting | Append-only transaction ledger with replay audit, value conservation and corporate actions; portfolios valued against a dataset version |
+| Analytics | Return, risk-adjusted, benchmark-relative and drawdown statistics, with undefined values reported as undefined and a reason. Historical, Gaussian and Cornish-Fisher VaR/ES, factor exposures with Newey-West errors, stress scenarios, bootstrap Monte Carlo |
+| Validation | Walk-forward with in-sample parameter selection, parameter and cost sweeps, bootstrap confidence intervals, deflated Sharpe ratio, regime breakdown, an engine-level look-ahead check, and a Research Integrity Report |
+| Portfolio construction | Minimum variance, mean-variance and risk parity, long-only with weight caps, each solve validated (and a failed one accepted only with an optimality certificate) |
+| ML research | Point-in-time features, purged and embargoed chronological cross-validation, models compared with simple baselines |
+| Assistant and reports | A question box whose answers cite computed results and are checked against them before display; works without an LLM key ([eval](docs/AI_EVAL.md)); HTML and Markdown reports |
+| Platform | FastAPI, Argon2id auth, workspaces with roles, audit log, durable Postgres-backed jobs (leases, fencing, retries, cancellation, timeouts, crash recovery), Prometheus metrics, OpenTelemetry traces from request to job |
 
 ## Architecture
 
-```
- Browser ──► Next.js (apps/web) ──/api/*──► FastAPI (services/api) ──► PostgreSQL
-                                              │        │                (metadata, jobs,
-                                              │        └─ enqueue ─► Redis/RQ   results)
-                                              │                         │
-                                              └─ DuckDB ◄── Parquet ◄── Workers (RQ)
-                                                  (dataset versions,    run quantlab domain
-                                                   experiment artifacts) library
+```mermaid
+flowchart LR
+  B[Browser] --> W["Next.js web<br/>(apps/web)"]
+  W -- "/api/* same-origin proxy" --> A["FastAPI<br/>(services/api)"]
+  A --> P[("PostgreSQL<br/>users, experiments,<br/>jobs, results")]
+  A -- "enqueue job id" --> R[("Redis<br/>RQ delivery, cache,<br/>login throttling")]
+  R --> K["Workers (RQ)<br/>run the quantlab<br/>domain library"]
+  K --> P
+  K <--> F[("Parquet dataset versions<br/>and artifacts, read via DuckDB")]
+  X["Reaper"] --> P
+  X -. "redeliver lost jobs" .-> R
 ```
 
-* `packages/quantlab`: pure domain library (no web or DB imports).
-* `services/api`: HTTP API, persistence, job system, worker and CLI entrypoints.
-* `apps/web`: Next.js 16 frontend that talks to the API through a same-origin proxy.
+* **`packages/quantlab`:** the domain library (data, engine, ledger, analytics, validation,
+  ML, assistant). It imports no web or database code, so everything numerical is testable
+  in isolation.
+* **`services/api`:** HTTP routes, persistence and the job system. Routes never run a
+  simulation: they validate the request, record a job in Postgres and enqueue its id.
+* **PostgreSQL** is the source of truth for job state; Redis only delivers job ids
+  (DECISIONS.md, ADR-0002). A lost message or a dead worker is recovered by the reaper,
+  and a stale worker can't overwrite a newer attempt (fencing tokens, database-time
+  leases).
 
-Details are in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md), the formulas in
+More in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md), the formulas and conventions in
 [docs/METHODOLOGY.md](docs/METHODOLOGY.md), and the decisions in [DECISIONS.md](DECISIONS.md).
 
-## Quick start
+## Run it
 
-Requirements: Docker, Python 3.12 with [uv](https://docs.astral.sh/uv/), Node.js 22. The
-full stack (`make app-up`, 2 workers) needs at least **5 GiB of Docker VM memory**: the sum
-of its memory limits (2 workers at 1,536 MiB and the API at 1,880 MiB) plus the measured
-peaks of Postgres, Redis, web and the reaper, about 110 MiB, is 5,062 MiB (#175, #220;
-[RUNBOOK, Resources](docs/RUNBOOK.md#resources)). `make` warns on smaller VMs. The earlier
-4.5 GiB predates the API's memory limit.
+You need Docker, with at least 5 GiB of VM memory for the default stack (or
+`QUANTLAB_WORKERS=1` on a smaller one; see [Development](docs/DEVELOPMENT.md)), plus
+Python 3.12 with [uv](https://docs.astral.sh/uv/) and Node.js 22.
 
 ```bash
-make setup            # uv sync + npm ci
-make up               # PostgreSQL 17 and Redis 7 (ports 5433, 6380 on localhost)
-make api-dev          # migrations + API on :8000   (terminal 1)
-make worker           # background worker            (terminal 2)
-make reaper           # stale-job recovery           (terminal 3)
-make web-dev          # frontend on :3000            (terminal 4)
+make setup     # install Python and web dependencies
+make app-up    # build and start web, API, workers, reaper, Postgres and Redis
 ```
 
-Or run everything in containers: `make app-up` (web on :3000, API on :8000, two workers).
+Open http://localhost:3000 and create an account. The [demo walkthrough](docs/DEMO.md)
+takes about ten minutes: a synthetic dataset, a backtest, its validation and integrity
+report, a reproduction, and portfolio construction.
 
-**Local only.** Every port is bound to 127.0.0.1. **Public exposure is prohibited until
-#39 is closed.** It needs the TLS edge on an address-preserving Linux host, its verification
-from a second machine, and the lead's rerun ([RUNBOOK, Exposing a
-deployment](docs/RUNBOOK.md#exposing-a-deployment)). Never publish the web tier, the API,
-Postgres, Redis, Prometheus, Grafana or Jaeger directly.
+**Local only.** Every port is bound to 127.0.0.1. Public exposure is prohibited until the
+security gate #39 is closed (an edge verified on an address-preserving host); see
+[RUNBOOK, Exposing a deployment](docs/RUNBOOK.md#exposing-a-deployment).
 
-Open http://localhost:3000, create an account, generate a synthetic dataset under
-**Market data**, then create an experiment. API docs: http://localhost:8000/api/v1/docs, served only with `QUANTLAB_ENVIRONMENT=development`
-(the default) and never through the web app's `/api` proxy (#201).
+## How it is verified
 
-### Several git worktrees at once
+* **Hand-computed cases.** Backtests checked against arithmetic done by hand, and
+  corporate-action and delisting cases with known answers.
+* **An independent reference engine.** `tests/oracle/reference.py` is written from the
+  methodology and imports nothing from the engine. The engine must agree with it to 1e-9
+  on 50 seeded synthetic universes (200 in the slow mode), which combine halts, splits,
+  dividends, delistings, ticker reuse and short cash.
+* **Mutation testing.** `tests/oracle/mutate.py` injects 36 known defects (one-bar
+  look-ahead, fills at the wrong price, delisting a day early, and so on). The suites must
+  catch each one.
+* **A/B records.** Every engine change is compared with the previous engine on 1,002 runs,
+  and every changed run is attributed.
+* **Look-ahead checks.** Decisions must not change when all later data is removed.
+* **Unit, integration and browser tests.** Unit and property tests for the library;
+  integration tests against real Postgres and Redis (authorization matrix, migrations, job
+  failure injection); Playwright end-to-end with an axe WCAG 2.1 AA audit and a layout
+  check at desktop and phone widths.
+* **Two audits.** Their findings are in [docs/AUDIT_2026-10-30.md](docs/AUDIT_2026-10-30.md)
+  and [docs/AUDIT_2026-11-07.md](docs/AUDIT_2026-11-07.md).
 
-The ports above are the main checkout's. In a linked worktree, `make` gives the checkout
-its own Compose project, volumes and port block (`make stack-env` prints them; override
-with `QUANTLAB_SLOT=<1-89>`), so `make up`, `make app-up`, `make api-dev`, `make web-dev`
-and `make e2e` never touch another checkout's containers. In a linked worktree, `make`
-(through `scripts/stack-env.sh`) also writes a gitignored `docker-compose.override.yml`
-naming that project, so a bare `docker compose` there never reaches the main checkout's
-`quantlab` stack (#233). Two exceptions: before a worktree's first `make`, and with an
-explicit `-f` list, which skips override files; pass `-p` then. Integration tests use a
-per-worktree database (`quantlab_test_<hash>`) and a session advisory lock, so concurrent
-runs that do share a database wait for each other instead of truncating each other's tables.
+What each layer covers is in [docs/TEST_MATRIX.md](docs/TEST_MATRIX.md); how to run them in
+[docs/DEVELOPMENT.md](docs/DEVELOPMENT.md).
 
-Full-stack runs (`make e2e-serial`, or any command under `scripts/fullstack-lock.sh run`)
-take a lock in git's common directory, which every linked worktree of one clone shares. A
-**separate clone** has its own git directory, and so its own lock: it does not wait for
-this clone's runs. Stop its stacks before running one here, or run from a worktree of the
-same clone. A separate clone also defaults to slot 0, the `quantlab` project; give it its
-own `QUANTLAB_SLOT` (#233).
+## Limitations
 
-## Testing
+* **No real market data is configured.** The CSV importer accepts data whose licence permits
+  local research use. A licensed vendor adapter exists as a fixture-tested contract, and
+  needs credentials to go live (docs/MARKET_DATA_PROVIDERS.md).
+* **The assistant** uses a deterministic, citation-checked answerer by default. A hosted LLM
+  is optional and has not been evaluated with a key (docs/AI_EVAL.md).
+* **Not publicly deployed.** It is a private, self-hosted application. Public deployment
+  waits on #39 and an account-lifecycle decision (#168); the AWS Terraform is validated and
+  has never been applied.
+* **Measured on one machine.** Performance figures come from one developer Mac
+  ([docs/BENCHMARKS.md](docs/BENCHMARKS.md)), not from a server.
+* **Daily bars only.** No leverage or shorting is modelled, and cash earns nothing. The full
+  list is in METHODOLOGY, *Known limitations*.
 
-```bash
-make lint typecheck   # ruff + mypy --strict
-make test-unit        # domain tests (golden, property-based, look-ahead checks)
-make test-integration # API, security, migrations, job failure injection (needs `make up`)
-make coverage
-make e2e              # Playwright, against a running stack
-```
+## Documentation
 
-See [docs/TEST_MATRIX.md](docs/TEST_MATRIX.md) for what each layer covers.
-
-## Data and limitations
-
-No licensed market-data feed or LLM credentials are configured in this environment. All
-bundled data is **synthetic** and labelled as such in the API (`is_synthetic`) and in the
-UI. A CSV provider is available for user-supplied data whose licence permits local
-research use. A CSV upload takes up to 50 MiB per file and 110 MiB per request, with no row
-limit; see [docs/RUNBOOK.md](docs/RUNBOOK.md#csv-imports-limits-and-failures-239). See [docs/METHODOLOGY.md](docs/METHODOLOGY.md#known-limitations) and
-[docs/BLOCKERS.md](docs/BLOCKERS.md).
+| | |
+|---|---|
+| [docs/DEMO.md](docs/DEMO.md) | A ten-minute walkthrough and a suggested order for a technical demo |
+| [docs/ENGINEERING_CASE_STUDY.md](docs/ENGINEERING_CASE_STUDY.md) | Difficult problems in building it, and how they were solved and verified |
+| [docs/CASE_STUDY.md](docs/CASE_STUDY.md) | One research question taken through the whole workflow |
+| [docs/METHODOLOGY.md](docs/METHODOLOGY.md) | Every formula, convention and known limitation |
+| [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) · [DECISIONS.md](DECISIONS.md) | Components, data flow, security model; architecture decision records |
+| [docs/RUNBOOK.md](docs/RUNBOOK.md) | Operating it: resources, failure modes, recovery |
+| [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md) · [docs/TEST_MATRIX.md](docs/TEST_MATRIX.md) | Working on it; what the tests cover |
+| [docs/RELEASE_READINESS.md](docs/RELEASE_READINESS.md) · [STATUS.md](STATUS.md) | Release evidence; current state |
