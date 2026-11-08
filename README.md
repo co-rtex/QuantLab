@@ -10,6 +10,8 @@ assumptions and are never investment advice. **All bundled data is synthetic**, 
 labelled synthetic on every screen, report and API response. A backtest on it shows how
 the platform behaves, not that any strategy is profitable.
 
+![An experiment's results: the evidence panel with the dataset version, engine, input hash and output fingerprint, then the equity curve against the benchmark and its drawdown. Synthetic data.](docs/images/experiment-results.png)
+
 ## The problem it addresses
 
 A backtest is easy to write and easy to get wrong. The common failures are quiet:
@@ -37,6 +39,8 @@ convention.
 | ML research | Point-in-time features, purged and embargoed chronological cross-validation, models compared with simple baselines |
 | Assistant and reports | A question box whose answers cite computed results and are checked against them before display; works without an LLM key ([eval](docs/AI_EVAL.md)); HTML and Markdown reports |
 | Platform | FastAPI, Argon2id auth, workspaces with roles, audit log, durable Postgres-backed jobs (leases, fencing, retries, cancellation, timeouts, crash recovery), Prometheus metrics, OpenTelemetry traces from request to job |
+
+![The research integrity report for the same experiment. Four warnings: synthetic data, weaker out-of-sample performance, a Sharpe interval that includes zero, and possible selection bias. Twelve checks verified, including the look-ahead check.](docs/images/integrity-report.png)
 
 ## Architecture
 
