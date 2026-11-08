@@ -70,3 +70,18 @@ uv run python -m tests.oracle.mutate   # inject engine defects; the suites must 
   unset `E2E_BASE_URL`, or the main checkout's `:3000`, unless `E2E_ALLOW_MAIN_CHECKOUT=1`
   (#263).
 * **What each layer covers:** [TEST_MATRIX.md](TEST_MATRIX.md).
+
+## Continuous integration
+`.github/workflows/ci.yml` runs on every push to main and every pull request.
+* **`python`:** ruff, mypy, and every test outside `tests/integration`.
+* **`python-integration`:** `tests/integration` against a Postgres service. The two run in
+  parallel.
+* **`coverage`:** combines both jobs' coverage into one report and `coverage.xml`.
+* **`audit`:** pip-audit on the runtime dependencies (blocking) and the dev tools (report
+  only), independent of the tests, so a slow test run never skips it.
+* **`web`:** eslint, `tsc`, unit tests, a production build, and npm audit (blocking for
+  runtime dependencies, report-only for dev tools).
+* **`docker`:** builds the API image (the web image is built by the E2E workflow).
+
+`.github/workflows/e2e.yml` runs the Playwright suite against a full compose stack on pull
+requests that touch the web, API, library or compose files.
