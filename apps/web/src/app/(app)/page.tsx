@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { PageHeader } from "@/components/Shell";
-import { Empty, Panel, QueryError, Skeleton, StatusPill, SyntheticLabel } from "@/components/ui";
+import { Empty, Panel, QueryError, Skeleton, StatusPill, SyntheticLabel, TableScroll } from "@/components/ui";
 import type { DatasetVersion, Experiment, Job, Page } from "@/lib/api";
 import { dateTime, num, pct, shortHash, signClass, strategyLabel } from "@/lib/format";
 import { useSynthetic } from "@/lib/synthetic";
@@ -50,7 +50,7 @@ export default function Overview() {
           ) : exps.error && !exps.data ? null : exps.data && exps.data.items.length === 0 ? (
             <p className="text-sm text-ink-2">No experiments yet. Configure a strategy and run your first backtest.</p>
           ) : (
-            <div className="overflow-x-auto" tabIndex={0}>
+            <TableScroll>
               <table className="data num">
                 <thead>
                   <tr>
@@ -82,7 +82,7 @@ export default function Overview() {
                   ))}
                 </tbody>
               </table>
-            </div>
+            </TableScroll>
           )}
         </Panel>
         <div className="space-y-6">

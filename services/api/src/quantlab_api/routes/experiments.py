@@ -478,6 +478,15 @@ def reproduce(
     )
 
 
+def same_code_version(a: str | None, b: str | None) -> bool | None:
+    """Whether two runs ran the same code, or None when that can't be told (A21): a version
+    that wasn't recorded ("unknown"), or one built from uncommitted changes ("-dirty"), is
+    no evidence of identical code, so two of them are never reported as the same."""
+    if not a or not b or "unknown" in (a, b) or a.endswith("-dirty") or b.endswith("-dirty"):
+        return None
+    return a == b
+
+
 @router.get("/experiments/{experiment_id}/reproducibility")
 def reproducibility(experiment_id: uuid.UUID, user: CurrentUser, db: DB) -> dict[str, Any]:
     """Compare this experiment's output fingerprint with its parent's (or vice versa)."""
@@ -500,7 +509,7 @@ def reproducibility(experiment_id: uuid.UUID, user: CurrentUser, db: DB) -> dict
                 "name": other.name,
                 "same_inputs": other.input_hash == exp.input_hash,
                 "input_differences": input_differences(original, rerun),
-                "same_code_version": other.code_version == exp.code_version,
+                "same_code_version": same_code_version(other.code_version, exp.code_version),
                 "fingerprint_match": (
                     res is not None and ores is not None and res.fingerprint == ores.fingerprint
                 ),

@@ -207,3 +207,29 @@ def test_a_validation_from_before_155_is_not_reused_and_can_be_reassessed(client
     assert current["id"] == new.json()["id"] and current["comparable_engine"] is True
     rep = client.get(f"/api/v1/experiments/{exp_id}/integrity", headers=h).json()
     assert {c["key"]: c for c in rep["checks"]}["validation_engine"]["status"] == "verified"
+
+
+def test_trials_count_distinct_configurations_and_unknown_code_is_not_the_same(client, seeded):
+    # A20: a reproduction (same input hash) and a failed run are not further trials; a
+    # second configuration is. A21: two runs whose code version is "unknown" are not
+    # reported as the same code.
+    h = seeded["headers"]
+    exp_id = _completed_experiment(client, seeded)
+    rep = client.post(f"/api/v1/experiments/{exp_id}/reproduce", headers=h)
+    assert rep.status_code == 202, rep.text
+    assert run_pending_jobs() == ["completed"]
+
+    def trials() -> int:
+        report = client.get(f"/api/v1/experiments/{exp_id}/integrity", headers=h).json()
+        by = {c["key"]: c for c in report["checks"]}
+        return by["multiple_testing"]["evidence"]["workspace_trials"]
+
+    assert trials() == 1  # the original and its reproduction: one configuration
+    submit(client, seeded, params={"lookback": 126, "skip": 5, "top_n": 4})
+    assert run_pending_jobs() == ["completed"]
+    assert trials() == 2
+
+    repro = client.get(f"/api/v1/experiments/{exp_id}/reproducibility", headers=h).json()
+    (cmp,) = repro["comparisons"]
+    assert cmp["fingerprint_match"] is True
+    assert cmp["same_code_version"] is None  # both "unknown" in tests: not comparable

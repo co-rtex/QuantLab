@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, type FormEvent } from "react";
-import { ErrorNote, Panel, SyntheticLabel, type SyntheticStatus } from "@/components/ui";
+import { ErrorNote, Panel, SyntheticLabel, type SyntheticStatus, TableScroll } from "@/components/ui";
 import { api, ApiError } from "@/lib/api";
 
 interface FactRef {
@@ -105,26 +105,28 @@ export function AssistantPanel({ experimentId, synthetic }: { experimentId: stri
             <p className="mb-2 text-sm font-medium">{q}</p>
             <Cited text={a.text} />
             {a.facts.length > 0 && (
-              <table className="data num mt-3">
-                <thead>
-                  <tr>
-                    <th>Ref</th>
-                    <th>Evidence</th>
-                    <th className="r">Value</th>
-                    <th>Source</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {a.facts.map((f) => (
-                    <tr key={f.id}>
-                      <td>{f.id.slice(1)}</td>
-                      <td className="whitespace-normal">{f.label}</td>
-                      <td className="r whitespace-normal">{f.display}</td>
-                      <td className="text-xs text-ink-3">{f.source}</td>
+              <TableScroll className="mt-3">
+                <table className="data num">
+                  <thead>
+                    <tr>
+                      <th>Ref</th>
+                      <th>Evidence</th>
+                      <th className="r">Value</th>
+                      <th>Source</th>
                     </tr>
-                  ))}
-                </tbody>
-              </table>
+                  </thead>
+                  <tbody>
+                    {a.facts.map((f) => (
+                      <tr key={f.id}>
+                        <td>{f.id.slice(1)}</td>
+                        <td className="whitespace-normal">{f.label}</td>
+                        <td className="r whitespace-normal">{f.display}</td>
+                        <td className="text-xs text-ink-3">{f.source}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </TableScroll>
             )}
             <p className="mt-2 text-xs text-ink-3">
               {a.provider === "deterministic" ? "Assembled from computed facts" : `Phrased by ${a.provider}, every figure verified`}

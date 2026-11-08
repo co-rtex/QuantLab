@@ -586,7 +586,8 @@ def build_integrity_report(ev: dict[str, Any]) -> dict[str, Any]:
                 status,
                 f"Deflated Sharpe ratio {p:.2f} after {dsr['trials']} parameter trials"
                 + (
-                    f" ({_plural(trials, 'experiment')} on this dataset version in the workspace)."
+                    f" ({_plural(trials, 'distinct configuration')} run on this dataset version"
+                    " in the workspace)."
                     if trials
                     else "."
                 )
@@ -606,7 +607,7 @@ def build_integrity_report(ev: dict[str, Any]) -> dict[str, Any]:
                 "unassessed",
                 "The deflated Sharpe ratio was not computed"
                 + (
-                    f"; {_plural(trials, 'experiment')} exist on this dataset version."
+                    f"; {_plural(trials, 'distinct configuration')} run on this dataset version."
                     if trials
                     else "."
                 ),
@@ -701,12 +702,22 @@ def build_integrity_report(ev: dict[str, Any]) -> dict[str, Any]:
             )
         )
     elif all(r.get("fingerprint_match") for r in finished):
+        # Identical outputs are the test. Whether the code was identical too is said only
+        # when both versions were recorded from clean commits (A21).
+        blind = sum(r.get("same_code_version", True) is None for r in finished)
         checks.append(
             Check(
                 "reproducibility",
                 "Reproducibility",
                 "verified",
-                f"{len(finished)} independent re-run(s) produced byte-identical results.",
+                f"{_plural(len(finished), 'independent re-run')} produced byte-identical"
+                " results."
+                + (
+                    f" The code version could not be compared for {blind} of them (not"
+                    " recorded, or built from uncommitted changes)."
+                    if blind
+                    else ""
+                ),
                 {"fingerprint": exp.get("fingerprint")},
             )
         )

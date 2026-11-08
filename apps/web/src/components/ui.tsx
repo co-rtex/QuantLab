@@ -55,6 +55,19 @@ export function Panel({ title, aside, children, className = "" }: { title?: Reac
  * request id changes with every failed attempt, so inside it a polling panel would be
  * read out again on each poll for as long as the outage lasts (#83).
  */
+/** A table that scrolls sideways inside its card instead of widening the page (audit
+ * A6/A8/A14/A24). Focusable, so a keyboard user can scroll it too (axe
+ * scrollable-region-focusable). Positioned, so an absolutely positioned descendant (an
+ * sr-only header cell) is clipped by it too: unpositioned, the members table's hidden
+ * "Actions" header escaped to the body and widened the page by 17 px at 390. */
+export function TableScroll({ children, className = "" }: { children: ReactNode; className?: string }) {
+  return (
+    <div className={`relative overflow-x-auto ${className}`} tabIndex={0}>
+      {children}
+    </div>
+  );
+}
+
 export function ErrorNote({
   error,
   message,

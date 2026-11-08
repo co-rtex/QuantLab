@@ -16,7 +16,6 @@ x-app-env: &app-env
   QUANTLAB_ENVIRONMENT: ${QUANTLAB_ENVIRONMENT:-development}
   QUANTLAB_JWT_SECRET: ${QUANTLAB_JWT_SECRET:-dev-only-insecure-secret-change-me-0123456789}
   QUANTLAB_ANTHROPIC_API_KEY: ${QUANTLAB_ANTHROPIC_API_KEY:-}
-  QUANTLAB_GIT_SHA: ${QUANTLAB_GIT_SHA:-unknown}
   QUANTLAB_OTEL_ENDPOINT: ${QUANTLAB_OTEL_ENDPOINT:-}
   QUANTLAB_METRICS_TOKEN: ${QUANTLAB_METRICS_TOKEN:-}
   # Only the web tier may state the client address (X-Forwarded-For); see ADR-0008.
@@ -55,7 +54,12 @@ services:
       retries: 30
 
   api:
-    build: { context: ., dockerfile: services/api/Dockerfile }
+    build:
+      context: .
+      dockerfile: services/api/Dockerfile
+      # Baked into the image, so a container reports the code it runs, not the shell's
+      # current commit (A21). Unset outside make: "unknown", never compared as equal.
+      args: { QUANTLAB_GIT_SHA: "${QUANTLAB_GIT_SHA:-unknown}" }
     restart: ${QUANTLAB_RESTART_POLICY:-unless-stopped}
     environment:
       <<: *app-env
@@ -86,7 +90,12 @@ services:
     profiles: ["app"]
 
   worker:
-    build: { context: ., dockerfile: services/api/Dockerfile }
+    build:
+      context: .
+      dockerfile: services/api/Dockerfile
+      # Baked into the image, so a container reports the code it runs, not the shell's
+      # current commit (A21). Unset outside make: "unknown", never compared as equal.
+      args: { QUANTLAB_GIT_SHA: "${QUANTLAB_GIT_SHA:-unknown}" }
     restart: ${QUANTLAB_RESTART_POLICY:-unless-stopped}
     environment:
       <<: *app-env
@@ -108,7 +117,12 @@ services:
     profiles: ["app"]
 
   reaper:
-    build: { context: ., dockerfile: services/api/Dockerfile }
+    build:
+      context: .
+      dockerfile: services/api/Dockerfile
+      # Baked into the image, so a container reports the code it runs, not the shell's
+      # current commit (A21). Unset outside make: "unknown", never compared as equal.
+      args: { QUANTLAB_GIT_SHA: "${QUANTLAB_GIT_SHA:-unknown}" }
     restart: ${QUANTLAB_RESTART_POLICY:-unless-stopped}
     environment:
       <<: *app-env

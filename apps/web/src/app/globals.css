@@ -60,6 +60,24 @@ body {
   background: var(--color-surface);
   border: 1px solid var(--color-rule);
   border-radius: var(--radius-panel);
+  /* A panel inside a grid or flex row may be narrower than its widest table: the table
+     scrolls inside it (TableScroll) instead of widening the page (audit 2026-11-07). */
+  min-width: 0;
+}
+
+/* Grid and flex items default to min-width: auto, the min-content width of what they hold,
+   so one wide table widened its whole column and the page ("grid blowout"): the overview
+   was 1,366 px wide at 1,280, and the compare page 1,073 px at 390. Every item of a layout
+   grid in the content area may shrink to its track instead. */
+main .grid > * {
+  min-width: 0;
+}
+
+/* A long unbroken string (an email address, an id) breaks rather than running past the page
+   edge. break-word, not anywhere: it leaves a table's min-content width alone, so tables
+   still scroll in their card instead of wrapping inside numbers. */
+main {
+  overflow-wrap: break-word;
 }
 
 .field {

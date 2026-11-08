@@ -124,7 +124,7 @@ export function PageHeader({ title, lede, actions }: { title: string; lede?: Rea
         <h1 className="font-serif text-2xl font-semibold tracking-tight md:text-[1.75rem]">{title}</h1>
         {lede && <p className="mt-1.5 text-sm leading-relaxed text-ink-2">{lede}</p>}
       </div>
-      {actions && <div className="flex gap-2">{actions}</div>}
+      {actions && <div className="flex flex-wrap gap-2">{actions}</div>}
     </header>
   );
 }
