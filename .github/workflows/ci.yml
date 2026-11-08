@@ -13,10 +13,40 @@ permissions:
   contents: read
 
 jobs:
+  # The Python suite runs as two parallel jobs, and its coverage is combined afterwards.
+  # In one job it took 15 to 30 min on the same code (runner speed varies about 2x), so the
+  # 30-min limit cancelled runs at about 91%, and the dependency audits after it were
+  # skipped. Together the two jobs run every test the single one ran: everything under
+  # tests/ except tests/integration, and tests/integration.
   python:
+    name: python (lint, types, unit)
     runs-on: ubuntu-latest
-    # The suite takes about 10 min with coverage (1500 tests); runners have run it 2x slower
-    # on 2026-11-01 (runs cancelled at 20 min on unrelated PRs), so 30 leaves headroom.
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          version: "0.13.6"
+          enable-cache: true
+      - run: uv sync --frozen
+      - name: Lint
+        run: |
+          uv run ruff check .
+          uv run ruff format --check .
+      - name: Type check
+        run: uv run mypy
+      - name: Unit, golden and other non-integration tests with coverage
+        run: uv run pytest tests --ignore=tests/integration --cov --cov-report= -q
+        env:
+          COVERAGE_FILE: coverage-unit.dat
+      - uses: actions/upload-artifact@v4
+        with:
+          name: coverage-unit
+          path: coverage-unit.dat
+
+  python-integration:
+    name: python (integration)
+    runs-on: ubuntu-latest
     timeout-minutes: 30
     services:
       postgres:
@@ -36,26 +66,60 @@ jobs:
           version: "0.13.6"
           enable-cache: true
       - run: uv sync --frozen
-      - name: Lint
+      - name: Integration tests with coverage
+        run: uv run pytest tests/integration --cov --cov-report= -q
+        env:
+          COVERAGE_FILE: coverage-integration.dat
+      - uses: actions/upload-artifact@v4
+        with:
+          name: coverage-integration
+          path: coverage-integration.dat
+
+  # One report and one coverage.xml for the whole suite, as the single job produced.
+  coverage:
+    needs: [python, python-integration]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          version: "0.13.6"
+          enable-cache: true
+      - run: uv sync --frozen
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: coverage-*
+          merge-multiple: true
+      - name: Combine and report
         run: |
-          uv run ruff check .
-          uv run ruff format --check .
-      - name: Type check
-        run: uv run mypy
-      - name: Tests with coverage
-        run: uv run pytest --cov --cov-report=term-missing:skip-covered --cov-report=xml -q
-      # Runtime dependencies block the build; dev tools only warn. Accepted findings are
-      # passed as --ignore-vuln <ID> and recorded in docs/SECURITY_DEPENDENCIES.md (#137).
+          uv run coverage combine coverage-unit.dat coverage-integration.dat
+          uv run coverage report --skip-covered --show-missing
+          uv run coverage xml
+      - uses: actions/upload-artifact@v4
+        with:
+          name: coverage-xml
+          path: coverage.xml
+
+  # Independent of the tests, so a slow or failed test run never skips them.
+  # Runtime dependencies block the build; dev tools only warn. Accepted findings are
+  # passed as --ignore-vuln <ID> and recorded in docs/SECURITY_DEPENDENCIES.md (#137).
+  audit:
+    name: dependency audit
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          version: "0.13.6"
+          enable-cache: true
       - name: Dependency audit (runtime, blocking)
         run: uvx pip-audit==2.10.1 --strict --progress-spinner off --no-deps --disable-pip -r <(uv export --frozen --all-packages --no-dev --no-hashes --no-emit-workspace)
         shell: bash
       - name: Dependency audit (dev tools, report only)
         run: uvx pip-audit==2.10.1 --progress-spinner off --no-deps --disable-pip -r <(uv export --frozen --all-packages --all-groups --no-hashes --no-emit-workspace) || echo "::warning::pip-audit reported findings in dev tools"
         shell: bash
-      - uses: actions/upload-artifact@v4
-        with:
-          name: coverage-xml
-          path: coverage.xml
 
   web:
     runs-on: ubuntu-latest

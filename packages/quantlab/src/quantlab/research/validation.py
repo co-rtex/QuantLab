@@ -408,11 +408,6 @@ def cost_sensitivity(
     }
 
 
-def _split_factor(splits: pd.DataFrame, day: pd.Timestamp) -> float:
-    """Shares per original share after the splits ex-dated on or before ``day``."""
-    return float(np.prod(splits.loc[splits["ex_date"] <= day, "value"]))
-
-
 def _halted_while_held(
     trades: pd.DataFrame,
     actions: pd.DataFrame,
@@ -425,16 +420,26 @@ def _halted_while_held(
     the full run held them: those the engine's halt rule kept (#247). Uses bars and trades
     dated up to ``cut`` only; a halt that ended counts too. A run reaching ``missing`` only
     after the cut can't change a decision dated up to it, so the kept session doesn't
-    matter. Holdings are the full run's own trades, split-adjusted."""
+    matter. Holdings are the full run's own trades, split-adjusted.
+
+    Vectorized per symbol: a trade's quantity in shares at a halt is ``q * F(halt) / F(day)``
+    with ``F`` the cumulative split factor, found by binary search instead of a product over
+    the splits for every trade. The terms are summed in trade order, as before, so the
+    1e-9 threshold sees the same rounding (``tests/unit/test_leakage_master.py`` checks the
+    result against the earlier per-trade implementation)."""
     if not len(trades):
         return set()
     sessions = calendar[calendar <= cut]
-    at = {s: i for i, s in enumerate(sessions)}
     found: set[str] = set()
+    held_names = set(trades["symbol"])  # a name never traded is never held
     # As the engine's has_bar: a row without a finite close is a session without a bar.
     printed_bars = bars.loc[(bars["date"] <= cut) & np.isfinite(bars["close"].to_numpy(float))]
+    split_rows = actions.loc[actions["kind"] == "split", ["symbol", "ex_date", "value"]]
     for sym, dates in printed_bars.groupby("symbol")["date"]:
-        printed = np.array(sorted(at[x] for x in dates if x in at))
+        if sym not in held_names:
+            continue
+        idx = sessions.get_indexer(pd.DatetimeIndex(dates))
+        printed = np.sort(idx[idx >= 0])
         if not len(printed):
             continue
         # Sessions without a bar after each printed bar, the last run reaching the cut.
@@ -442,14 +447,26 @@ def _halted_while_held(
         halts = sessions[printed[gaps >= missing]]  # the last bar before each long run
         if not len(halts):
             continue
-        t = trades.loc[trades["symbol"] == sym, ["date", "quantity"]]
-        splits = actions.loc[(actions["symbol"] == sym) & (actions["kind"] == "split")]
+        t = trades.loc[trades["symbol"] == sym]
+        day = t["date"].to_numpy("datetime64[ns]")
+        qty = t["quantity"].to_numpy(float)
+        sp = split_rows.loc[split_rows["symbol"] == sym].sort_values("ex_date", kind="stable")
+        ex = sp["ex_date"].to_numpy("datetime64[ns]")
+        cum = np.cumprod(sp["value"].to_numpy(float))
+
+        def factor(when: np.ndarray, ex: np.ndarray = ex, cum: np.ndarray = cum) -> np.ndarray:
+            """Shares per original share after the splits ex-dated on or before ``when``."""
+            k = np.searchsorted(ex, when, side="right")
+            return np.where(k > 0, cum[np.maximum(k - 1, 0)] if len(cum) else 1.0, 1.0)
+
+        f_day = factor(day)
         for last_bar in halts:
-            before = t[t["date"] <= last_bar]
-            held = sum(
-                q * _split_factor(splits, last_bar) / _split_factor(splits, day)
-                for day, q in before.itertuples(index=False)
-            )
+            mark = np.datetime64(last_bar, "ns")
+            before = day <= mark
+            if not before.any():
+                continue
+            f_bar = factor(np.array([mark]))[0]
+            held = np.cumsum(qty[before] * f_bar / f_day[before])[-1]
             if abs(held) > 1e-9:
                 found.add(str(sym))
                 break
