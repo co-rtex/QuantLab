@@ -223,3 +223,18 @@ def test_second_user_workspace_isolation(client, seeded):
         },
     )
     assert r.status_code == 404
+
+
+def test_a_reproduction_of_a_reproduction_keeps_one_suffix(client, seeded):
+    # Audit A12: each generation appended another " (reproduction)".
+    h = seeded["headers"]
+    r = submit(client, seeded)
+    assert run_pending_jobs() == ["completed"]
+    exp_id, name = r.json()["experiment"]["id"], r.json()["experiment"]["name"]
+    for _ in range(2):
+        rep = client.post(f"/api/v1/experiments/{exp_id}/reproduce", headers=h)
+        assert rep.status_code == 202, rep.text
+        assert run_pending_jobs() == ["completed"]
+        child = rep.json()["experiment"]
+        assert child["name"] == f"{name} (reproduction)"
+        exp_id = child["id"]

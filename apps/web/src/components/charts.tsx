@@ -81,6 +81,7 @@ export function EquityChart({
   drawdown,
   benchmarkDrawdown,
   benchmarkLabel = "Benchmark",
+  label = "Strategy (net of costs)",
 }: {
   dates: string[];
   equity: (number | null)[];
@@ -88,6 +89,9 @@ export function EquityChart({
   drawdown: (number | null)[];
   benchmarkDrawdown?: (number | null)[];
   benchmarkLabel?: string;
+  /** The main series' legend: a backtest's is net of modelled costs, a portfolio's is its
+   * own recorded value (audit A16). */
+  label?: string;
 }) {
   const data = rows(dates, { equity, benchmark, drawdown, benchmarkDrawdown });
   const hasBench = !!benchmark?.some((v) => v !== null);
@@ -95,7 +99,7 @@ export function EquityChart({
     <figure aria-label="Portfolio value and drawdown over time">
       <Legend
         items={[
-          { label: "Strategy (net of costs)", color: SERIES[0] },
+          { label, color: SERIES[0] },
           ...(hasBench ? [{ label: benchmarkLabel, color: BENCH, dashed: true }] : []),
         ]}
       />

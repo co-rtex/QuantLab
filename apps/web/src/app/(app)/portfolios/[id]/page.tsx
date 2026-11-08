@@ -109,7 +109,7 @@ export default function PortfolioPage() {
       <div className="grid gap-6 2xl:grid-cols-[3fr_2fr]">
         <Panel title="Growth of 100" aside="Time-weighted, versus benchmark total return">
           {val ? (
-            <EquityChart dates={val.series.dates} equity={val.series.index} benchmark={val.series.benchmark ?? undefined} drawdown={val.series.drawdown} benchmarkLabel={val.portfolio.benchmark ?? "Benchmark"} />
+            <EquityChart dates={val.series.dates} equity={val.series.index} benchmark={val.series.benchmark ?? undefined} drawdown={val.series.drawdown} benchmarkLabel={val.portfolio.benchmark ?? "Benchmark"} label="Portfolio" />
           ) : (
             !v.error && <Skeleton h="h-80" /> // the error is shown above the summary
           )}
@@ -202,7 +202,7 @@ export default function PortfolioPage() {
                 ["One-day VaR, 95%", pct(val.risk.summary.historical_var, 2)],
                 ["Expected shortfall, 95%", pct(val.risk.summary.historical_es, 2)],
                 ["Effective number of holdings", num(val.risk.concentration.effective_n, 1)],
-                ["Largest position", pct(val.risk.concentration.top1, 1)],
+                ["Largest position, of invested capital", pct(val.risk.concentration.top1, 1)],
                 ["Maximum drawdown", pct(val.performance.values.max_drawdown, 1)],
                 ["Beta to benchmark", num(val.performance.values.beta)],
               ].map(([k, x]) => (

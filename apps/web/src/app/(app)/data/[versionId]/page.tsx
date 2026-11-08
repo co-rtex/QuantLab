@@ -83,7 +83,7 @@ export default function VersionPage() {
                 {bars.data.adjusted
                   ? "Total-return adjusted as of the last bar: earlier prices are scaled for later splits and dividends."
                   : "Raw prices as traded. Splits appear as discontinuities."}{" "}
-                Served from cache: {bars.data.cache}.
+                Prices per share, in the dataset&apos;s currency.
               </p>
             </>
           ) : null}

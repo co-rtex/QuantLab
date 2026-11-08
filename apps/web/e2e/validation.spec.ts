@@ -50,6 +50,10 @@ test("results appear when the job finishes before the panel's first poll", async
   await page.goto(`/experiments/${id}`);
   await page.getByRole("button", { name: "Run validation suite" }).click();
   await expect(regimes(page)).toBeVisible({ timeout: 30_000 });
+  // The cost sweep's comparison is a whole-sample total return, labelled as one (audit A9:
+  // it sat beside CAGR as "vs benchmark").
+  await expect(page.getByRole("columnheader", { name: "Excess total return" })).toBeVisible();
+  await expect(page.getByText("over the whole sample against the benchmark, not per year")).toBeVisible();
 });
 
 test("results appear when the first poll after the POST fails once", async ({ page }) => {

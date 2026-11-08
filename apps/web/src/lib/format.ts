@@ -1,14 +1,22 @@
 export const DASH = "—";
 
+/** `v` rounded to `digits` places, with a value that rounds to zero made +0: "-0.00" reads
+ * as a negative result that isn't there (audit A10). */
+function unsignedZero(v: number, digits: number): number {
+  const r = Number(v.toFixed(digits));
+  return r === 0 ? 0 : v;
+}
+
 export function pct(v: number | null | undefined, digits = 1, signed = false): string {
   if (v === null || v === undefined || !Number.isFinite(v)) return DASH;
-  const s = (v * 100).toFixed(digits) + "%";
-  return signed && v > 0 ? "+" + s : s;
+  const x = unsignedZero(v * 100, digits);
+  const s = x.toFixed(digits) + "%";
+  return signed && x > 0 ? "+" + s : s;
 }
 
 export function num(v: number | null | undefined, digits = 2): string {
   if (v === null || v === undefined || !Number.isFinite(v)) return DASH;
-  return v.toLocaleString("en-US", { minimumFractionDigits: digits, maximumFractionDigits: digits });
+  return unsignedZero(v, digits).toLocaleString("en-US", { minimumFractionDigits: digits, maximumFractionDigits: digits });
 }
 
 /** A multiple such as turnover ("3.2×"); undefined renders as a bare dash, not "—×". */
