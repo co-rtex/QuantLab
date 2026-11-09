@@ -1,6 +1,111 @@
-# Release-candidate readiness (updated 2026-11-01)
+# Release-candidate readiness (updated 2026-11-09)
 
-## Since rc.2 (on main, not tagged)
+## Release candidate 3: final private release (2026-11-09, main `33c4133`)
+
+**Release SHA:** `33c413374f4d851f535f1ed56fa3628b5fd14c6a`; tag `v0.1.0-rc.3`.
+* **Versions:** packages and web `0.1.0`, engine **1.8.0**, ML pipeline v3, validation suite
+  v3, Alembic head `aec87540a0ac`.
+* **Scope:** private, self-hosted use on one host, every port bound to 127.0.0.1, trusted
+  users. **Public deployment stays prohibited** (#39, #168).
+
+**Verdict: READY. This is the final release candidate for the private, self-hosted scope.**
+* Every gate item below passed on this exact commit, from a fresh clone.
+* No known defect blocks private use.
+* What remains is either external (below) or classified as a non-blocking limitation.
+
+**Who verified it.** Since 2026-11-07, one session has implemented, reviewed and verified
+(docs/COORDINATION.md). So this is not an independent assessment like rc.1's. Its evidence
+instead rests on:
+* references independent of the code they check: the oracle, LP and closed-form optima;
+* a 36-mutation harness;
+* A/B records;
+* a fresh clone;
+* live failure probes.
+
+**Changes since rc.2:**
+* **Merged after rc.2, before 2026-11-07:** #248, #250/#255, #251, #257, #258 and #264 (the
+  history section below).
+* **Merged 2026-11-07 to 2026-11-09:**
+  * #259 (#247): the look-ahead check uses the master as of each cut.
+  * #262: the kept session; validation suite version 3.
+  * #253: a failed SLSQP solve is accepted only with a Frank-Wolfe optimality
+    certificate; engine 1.8.0, A/B 0 of 1,002 runs changed.
+  * #252: the A/B harness keyed by instrument.
+  * #263: the Playwright worktree guard.
+  * #261 (partial), and the breaker-test flake.
+  * #272: each run records its commit; distinct-configuration trials.
+  * #273: no page scrolls sideways.
+  * #275: honest labels, no negative zero.
+  * #276: parallel CI jobs, audits in their own job; a faster halt scan.
+  * #277: portfolio docs and the demo seed.
+  * #278: a construction run shows its own inputs.
+  * The audit behind several of these is docs/AUDIT_2026-11-07.md.
+
+### Evidence: the gate on `33c4133`
+A fresh `git clone` of the repository, checked out at the release SHA, on its own compose
+project (`quantlab-rc3-clone`, slot 88), under `scripts/fullstack-lock.sh`.
+
+| Step | Result |
+|---|---|
+| `make setup` (uv sync, npm ci) | ok |
+| ruff, ruff format, mypy (strict) | clean |
+| web: eslint, `tsc`, unit tests, production build | clean; unit tests 31/31; build ok |
+| `npm audit --omit=dev --audit-level=low` (runtime) | 0 vulnerabilities |
+| `pip-audit --strict` on the runtime dependencies | no known vulnerabilities |
+| Migrations on a fresh database | base → head `aec87540a0ac` → base (1 table left: the version table) → head; `alembic check`: "No new upgrade operations detected" |
+| `pytest` (unit, golden, integration; Postgres and Redis up) | **1744 passed, 152 skipped, 0 failed** (6:48). The skips are the 151 slow-mode oracle cases (run next) and the opt-in stack test (run below) |
+| `QUANTLAB_ORACLE_SLOW=1` oracle, order-noise and buy-scale tests | **219 passed**, 1 skipped (the opt-in random-seed search) |
+| `make e2e-serial` (full stack; axe WCAG 2.1 AA and layout specs included) | **52/52 passed** (3.1 min) |
+| `tests/stack` (reproduce and validate across an API and worker restart) | 1 passed: every run carries the original fingerprint |
+| `scripts/demo_seed.py` against the stack | every step completed; reproduction fingerprints match; construction on 100 symbols: all four methods solved |
+| Mutation harness (`tests/oracle/mutate.py`, all 36) | **every mutation caught** by at least one suite. The differential misses M33, M34 and M36 by construction (it runs no optimizer or look-ahead check), and the engine's other tests miss the 12 only the differential sees, as TEST_MATRIX says |
+| Crash recovery: SIGKILL to both workers' main processes mid-job (`unless-stopped`) | Docker restarted them; the job **completed on attempt 2**, and its reproduction was **byte-identical** |
+| GitHub CI on `33c4133` | lint/types/unit, integration, coverage, dependency audit, web and docker: all green |
+
+**One probe was corrected during the gate.** The first recovery probe stopped the workers
+with `docker compose kill`. Docker treats that as a manual stop and does not restart the
+container, so the job, correctly re-queued by the reaper, waited with no worker. The
+corrected probe kills each worker's main process, as a crash or an OOM kill does. The job
+the first probe left queued then **completed on attempt 2**, once workers returned.
+
+### Requirements
+As rc.1 below, with one change: the code version is now each image's commit (DEVELOPMENT.md).
+* **Docker VM memory ≥ 5120 MiB** for the default stack, or `QUANTLAB_WORKERS=1` on a
+  smaller VM. This Mac's VM is 3918 MiB; the gate ran there.
+* **Set `QUANTLAB_ENVIRONMENT=production` and the secrets in `.env.example` for any use
+  beyond one trusted local user.** The production guards then refuse:
+  * an insecure cookie;
+  * a weak Redis password;
+  * a missing or placeholder JWT secret;
+  * a missing metrics token.
+
+  The development default is safe only because every port binds to 127.0.0.1.
+
+### Known limitations (none blocks private use)
+* **Externally blocked (the owner's decisions or accounts):**
+  * public exposure (#39, edge verification on an address-preserving host);
+  * account lifecycle (#168);
+  * a licensed market-data vendor and reconciliation (#11, #12);
+  * a hosted LLM evaluation (#15);
+  * external load testing (#20);
+  * Playwright as a required check (#17, branch protection);
+  * any `terraform apply`.
+* **Numerical:** with a singular covariance (lookback shorter than the number of assets),
+  `min_variance` can leave residue weights up to about 1e-6. In a 3e9 account with a
+  minimum commission, that produced a few sub-dollar fills (#254, P3; METHODOLOGY,
+  *Solver residue*).
+* **Tests:** one Redis-outage integration test failed once under a loaded full-suite run.
+  It was not reproduced in 20 runs under 8 CPU burners, and it now reports its state on
+  failure (#261, P3).
+* **CI:** the unit job took 13 to 20 min on the runners seen, against a 30-min limit. If it
+  grows, split it further.
+* **Polish not done:** a long, unsorted allocation table on the construction page, and
+  non-round chart ticks in reports (AUDIT_2026-11-07 A18, A22).
+* **Benchmarks:** the published figures measured `da8767a`. Large and xl profiles, and
+  external load, were not run (#24, #20).
+
+
+## Since rc.2: the changes rc.3 includes (history)
 Merged after `v0.1.0-rc.2`, each with review, a lead trial and green CI. They change
 behaviour that the rc sections below describe:
 * **Optimize runs as a job** (#250, #255; #224). `POST /dataset-versions/{id}/optimizations`
