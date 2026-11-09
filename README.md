@@ -5,6 +5,11 @@ You version historical market data, define a strategy, run an event-driven backt
 background job, and get its performance, risk, statistical validation and an integrity
 report. Every result can be reproduced exactly from its manifest.
 
+**Status:** `v0.1.0-rc.3` is the final release candidate for private, self-hosted use. It
+was verified from a fresh clone, with the evidence in
+[docs/RELEASE_READINESS.md](docs/RELEASE_READINESS.md). Public deployment, licensed market
+data and a hosted LLM are separate future work.
+
 It is research infrastructure, not a trading bot. Results describe the past under stated
 assumptions and are never investment advice. **All bundled data is synthetic**, and is
 labelled synthetic on every screen, report and API response. A backtest on it shows how

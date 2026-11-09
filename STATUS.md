@@ -1,8 +1,36 @@
 # Status (authoritative handoff)
 
-_Last updated: 2026-11-07 (handoff below)_
+_Last updated: 2026-11-09_
 
-## Handoff (2026-11-07): read this first
+## Final state (2026-11-09): complete for the private, self-hosted scope
+**Release:** `v0.1.0-rc.3` on main `33c413374f4d851f535f1ed56fa3628b5fd14c6a`.
+* Versions: engine 1.8.0, ML pipeline v3, validation suite v3, Alembic head `aec87540a0ac`.
+* **Verdict: READY.** The full gate passed from a fresh clone: 1744 tests, slow oracle 219,
+  Playwright 52/52, all 36 mutations caught, migrations round-tripped, audits clean, crash
+  recovery and reproduction verified, CI green. Evidence:
+  [docs/RELEASE_READINESS.md](docs/RELEASE_READINESS.md).
+* **Project complete** as a polished private, self-hosted portfolio project:
+  * every core workflow works end to end;
+  * no known critical or high defect is open;
+  * the financial results are independently validated;
+  * the documentation and the demo are done: README, docs/DEMO.md,
+    docs/ENGINEERING_CASE_STUDY.md, docs/INTERVIEW_GUIDE.md, and `scripts/demo_seed.py`.
+* **Separate future gates, each blocked on an owner decision, account or spend:**
+  * public deployment (#39, #168);
+  * licensed market data (#11, #12);
+  * a hosted LLM evaluation (#15);
+  * external load testing (#20);
+  * Playwright as a required check (#17);
+  * any `terraform apply`.
+* **Open but non-blocking:** #254 (P3, residue weights with a singular covariance) and #261
+  (P3, one test flake not reproduced). Polish not done: AUDIT_2026-11-07 A18 and A22.
+* **Tags** `v0.1.0-rc.1`, `-rc.2` and `-rc.3` exist **locally**. Publishing them is the
+  owner's call: `git push origin v0.1.0-rc.1 v0.1.0-rc.2 v0.1.0-rc.3`.
+* **Resume, should work continue:** `git fetch && gh pr list`. Run `lead-trial` with
+  `QUANTLAB_SLOT=86`. Full suites and stacks go under `scripts/fullstack-lock.sh`; E2E only
+  via `make e2e-serial`; `make down` only, never `down -v`.
+
+## Handoff (2026-11-07, superseded)
 **Operating model.** Since 2026-11-07, one interactive session does the lead's, Agent 2's and
 Agent 3's work: implementation, review, integration and release. The three-agent setup is
 retired; its leases are reclaimed (no worktree had uncommitted work). Reviews in this mode
